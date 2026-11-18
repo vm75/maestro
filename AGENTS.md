@@ -46,6 +46,8 @@ firewall enforcement, DNS providers, or router firmware. Keep real firewall
 tests in isolated network namespaces/VMs and always use lab-only paths.
 
 For a release artifact, use `./scripts/build-release.sh <rust-target>`.
+The `scripts/package-ipk.sh` helper and `scripts/test-package-ipk.sh` smoke test
+build and validate a static-musl AArch64 IPK without an Entware toolchain.
 The repository contains a helper default for `aarch64-unknown-linux-musl`,
 but a target is supported only after testing it on the matching router CPU and
 firmware. Legacy MIPS support is not promised.

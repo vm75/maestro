@@ -6,7 +6,8 @@ Router Hub follows [Semantic Versioning](https://semver.org/). Set the version
 in `Cargo.toml` and commit the matching `Cargo.lock`; Git tags use the
 `vMAJOR.MINOR.PATCH` convention (or a prerelease such as `v0.8.0-rc.1`).
 The [GitHub Releases page](https://github.com/vm75/router-hub/releases) offers
-versioned AArch64 musl installation archives and SHA-256 checksums.
+versioned AArch64 musl tarballs, and for stable tags, `aarch64-3.10`
+Entware IPKs. Each artifact has a SHA-256 checksum file.
 
 Automatic CI runs **only after a pull request is merged into `main`**.
 Ordinary branch pushes, direct pushes to `main`, and PR updates do not trigger
@@ -19,9 +20,14 @@ pre-merge workflow if your branch protection needs one.
 
 Pushing a version tag starts a separate full release: version and ancestry
 validation, Rust formatting, tests, Clippy, stable toolchain compatibility,
-AArch64 musl cross-compilation, packaging, checksum verification, and GitHub
+AArch64 musl cross-compilation, tarball/IPK packaging, checksum verification, and GitHub
 Release publication. Tags must match Cargo's version and point to commits
 already merged into `main`. A prerelease tag publishes a GitHub prerelease.
+IPKs are published only for strict stable `vMAJOR.MINOR.PATCH` tags; prerelease
+tags continue to publish tarballs only. The IPK builder uses the existing
+static musl binary and standard `ar`/`tar` tools. `router-hub upgrade` on a
+live Asuswrt-Merlin router verifies the stable IPK checksum before invoking
+`opkg install`, or prints the manual command if it cannot install.
 No release workflow installs anything onto a router automatically.
 
 CI and release tests install nginx.org stable packages from its signed Ubuntu

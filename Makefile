@@ -1,4 +1,4 @@
-.PHONY: check test test-linux test-nginx run fmt clippy release
+.PHONY: check test test-linux test-nginx test-ipk run fmt clippy release
 check:
 	cargo check --all-targets
 
@@ -7,6 +7,9 @@ test:
 
 test-nginx:
 	python3 -m unittest discover -s config/nginx/tests -p 'test_*.py' -v
+
+test-ipk:
+	bash scripts/test-package-ipk.sh
 
 test-linux:
 	bash scripts/test-linux-integration.sh

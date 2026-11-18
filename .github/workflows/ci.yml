@@ -101,6 +101,9 @@ jobs:
       - name: Run Clippy
         run: cargo +1.85.0 clippy --all-targets --locked -- -D warnings
 
+      - name: Verify Entware IPK structure
+        run: bash scripts/test-package-ipk.sh
+
       - name: Build release binary
         run: cargo +1.85.0 build --release --locked
 

@@ -2,6 +2,18 @@
 
 Router Hub follows [Semantic Versioning](https://semver.org/).
 
+## 0.10.2
+
+### Added
+
+- Publish a verified Entware `aarch64-3.10` IPK alongside stable AArch64
+  tarball releases, with package-managed service lifecycle hooks and shared
+  installation initialization that preserves existing configuration and state.
+- Add router-only `router-hub upgrade` to find the newest stable GitHub
+  release, verify its IPK checksum, stage it under `/tmp`, and run Entware
+  `opkg install` when possible. `--download-only` prints the manual command.
+- Test IPK archive structure in CI and verify checksums during release.
+
 ## 0.10.1
 
 ### Fixed

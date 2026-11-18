@@ -99,6 +99,23 @@ jobs:
           tar -tzf "dist/$package.tar.gz" | grep -Fx "$package/router-hub"
           tar -tzf "dist/$package.tar.gz" | grep -Fx "$package/scripts/install-merlin.sh"
 
+      - name: Create and verify stable Entware IPK
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            bash scripts/package-ipk.sh "$RELEASE_TAG" aarch64-unknown-linux-musl
+            version="${RELEASE_TAG#v}"
+            ipk="router-hub_${version}-1_aarch64-3.10.ipk"
+            (cd dist && sha256sum -c "$ipk.sha256")
+            ar t "dist/$ipk" | grep -Fx 'control.tar.gz'
+            ar p "dist/$ipk" control.tar.gz | tar -xzO ./control | grep -Fx 'Architecture: aarch64-3.10'
+          else
+            echo "IPK publication is limited to stable SemVer releases."
+          fi
+
       - name: Publish GitHub Release
         shell: bash
         env:
@@ -110,5 +127,7 @@ jobs:
           if [[ "$RELEASE_TAG" == *-* ]]; then
             options+=(--prerelease)
           fi
+          shopt -s nullglob
+          assets=(dist/*.tar.gz dist/*.sha256 dist/*.ipk)
           gh release create "$RELEASE_TAG" \
-            dist/*.tar.gz dist/*.sha256 "${options[@]}"
+            "${assets[@]}" "${options[@]}"

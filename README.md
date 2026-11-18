@@ -33,16 +33,23 @@ Router Hub coordinates your installed Entware tools.
 You need **Asuswrt-Merlin**, JFFS custom scripts enabled, **Entware at `/opt`**,
 and a binary matching your router CPU and ABI. Install nginx, dehydrated,
 OpenSSL, and firewall utilities as required by the features you use.
-Releases provide **AArch64 musl** packages; compatibility still needs testing
-on your matching CPU and firmware. Legacy MIPS support is not promised.
+Releases provide **AArch64 musl** tarballs and **aarch64-3.10 Entware IPKs**;
+compatibility still needs testing on matching hardware and firmware. Legacy MIPS
+support is not promised.
 
 1. Back up your configuration and persistent state. For an existing installation,
    read the [migration guide](docs/migration.md) first; existing nginx configuration
    must be ported to the current bundle before deployment.
-2. Download the matching archive and checksum from
+2. For a new install, download the matching `.ipk` and checksum from
+   [GitHub Releases](https://github.com/vm75/router-hub/releases), verify the
+   checksum, then run `/opt/bin/opkg install /tmp/<package>.ipk` as root.
+   The IPK installs Router Hub, initializes configuration, and starts the
+   service; it preserves existing settings on subsequent installs.
+
+   Alternatively, download the matching tarball and checksum from
    [GitHub Releases](https://github.com/vm75/router-hub/releases).
    Verify with `sha256sum -c <archive>.tar.gz.sha256`, then extract the archive.
-3. From the extracted package, run as root on the router:
+3. **For tarball installs only**, from the extracted package run as root on the router:
 
    ```sh
    ./scripts/install-merlin.sh ./router-hub
@@ -50,7 +57,7 @@ on your matching CPU and firmware. Legacy MIPS support is not promised.
 
    The installer creates a token and configuration on first install, preserves
    existing configuration, installs startup hooks, and restarts Router Hub.
-4. Review `/opt/etc/router-hub/router-hub.toml`: set your bind address,
+4. Review `/opt/etc/router-hub/router-hub.toml` after either installation method: set your bind address,
    allowed origins, ASUS page/menu, API URL, and service paths. The shipped
    values are examples. Restart after changes:
 
@@ -61,8 +68,13 @@ on your matching CPU and firmware. Legacy MIPS support is not promised.
 5. Open the configured ASUS menu entry, or
    `http://<router-ip>:3030/#token=<auth-token>` using the token from your TOML.
 
-See [installation](docs/installation.md) for download commands, source builds,
-installer options, and service control.
+On an existing router install, `/opt/bin/router-hub upgrade` checks the latest
+stable GitHub release, verifies its IPK checksum, and attempts `opkg install`.
+Use `--download-only` to stage a verified package under `/tmp` and print a
+manual install command. This command is unavailable in Linux and test modes.
+
+See [installation](docs/installation.md) for verified download commands, source
+builds, installer options, and service control.
 
 ## Try it locally
 
