@@ -3,7 +3,12 @@
 {% import 'settings/location.jinja' as policy with context %}
 {% set match = route.match | default('prefix') %}
 location {% if match == 'exact' %}= {% elif match == 'regex' %}~ ^{% elif match == 'regex_i' %}~* ^{% elif match == 'prefix' %}^~ {% endif %}{{ proxy_mount }}{{ route.path }} {
-    {% if policy.lanonly %}
+    {% if policy.rh_deny %}
+    return 403;
+    {% else %}
+    {% if policy.rh_access_checks is not none %}
+    {{ policy.rh_access_checks }}
+    {% elif policy.lanonly %}
     include snippets/restrict.conf;
     {% endif %}
     {% include 'snippets/proxy-location.conf.jinja' %}
@@ -22,16 +27,19 @@ location {% if match == 'exact' %}= {% elif match == 'regex' %}~ ^{% elif match 
     {% for child in route.children | default([]) %}
     {{ location(child, policy, route_id ~ '_' ~ loop.index0) }}
     {% endfor %}
+    {% endif %}
 }
 {% endmacro %}
 
 {% macro fallbacks(route, parent, route_id) %}
 {% import 'settings/location.jinja' as current with context %}
-{% if current.spa_fallback %}
+{% if current.spa_fallback and not current.rh_deny %}
 {% set route = dict(route, cache_policy='no_cache', spa_fallback='', rewrite_to=current.spa_fallback) %}
 {% import 'settings/location.jinja' as policy with context %}
 location @{{ fallback_prefix }}_{{ route_id }} {
-    {% if policy.lanonly %}
+    {% if policy.rh_access_checks is not none %}
+    {{ policy.rh_access_checks }}
+    {% elif policy.lanonly %}
     include snippets/restrict.conf;
     {% endif %}
     {% include 'snippets/proxy-location.conf.jinja' %}

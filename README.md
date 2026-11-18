@@ -84,7 +84,7 @@ Start with the [example TOML](config/router-hub.example.toml) for paths,
 authentication, commands, and integration settings. Then use the UI to manage
 services, sites, certificates, saved devices, and firewall policy.
 
-- **Nginx:** set listeners and defaults in **Global settings**, then add sites.
+- **Nginx:** configure reusable listeners and source access rules in **Global settings**, then select them on sites. See [ingress and certificate windows](docs/nginx-ingress.md).
   **Setup quick reference** has offline profiles and route examples.
 - **Ban Shield:** evaluate rules with `observe_only` before enabling enforcement;
   tune thresholds and ban durations to suit your network.

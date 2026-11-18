@@ -3,11 +3,14 @@ mod api;
 mod asus_ui;
 mod auth;
 mod ban_attack;
+mod certificate_http;
 mod command;
 mod config;
 mod firewall;
 mod models;
 mod nginx;
+mod nginx_ingress;
+mod nginx_mutation;
 mod nginx_render;
 mod nginx_sites;
 mod state;
@@ -165,10 +168,6 @@ async fn serve(config: AppConfig) -> Result<()> {
     let firewall = FirewallManager::new(config.clone(), stores.clone()).await?;
     let state = AppState::new(config.clone(), stores, firewall.clone());
 
-    if let Err(error) = crate::nginx::reconcile_http_forwarder(&config) {
-        warn!(%error, "unable to reconcile nginx auxiliary configuration");
-    }
-
     if config.asus_ui.enabled && !config.test_mode && config.platform == Platform::Asuswrt {
         if let Err(error) = install_menu_entry(&config) {
             warn!(%error, "unable to update ASUS menu tree; continuing with rendered UI");
@@ -182,9 +181,13 @@ async fn serve(config: AppConfig) -> Result<()> {
     }
 
     firewall.start().await;
-    spawn_firewall_reconcile_signal(firewall.clone());
+    spawn_firewall_reconcile_signal(state.clone());
     spawn_reconfigure_signal();
+    if let Err(error) = crate::certificate_http::recover_startup(&state).await {
+        warn!(%error, "nginx ingress startup reconciliation failed; inspect certificate HTTP access status");
+    }
     state.start_certificate_renewal_loop();
+    crate::certificate_http::start_reconciliation(state.clone());
 
     let adguard_cfg = crate::api::adguard::get_effective_config(&state).await;
     if adguard_cfg.enabled {
@@ -219,7 +222,7 @@ async fn serve(config: AppConfig) -> Result<()> {
         });
     }
 
-    let app = api::app(state)?.layer(TraceLayer::new_for_http());
+    let app = api::app(state.clone())?.layer(TraceLayer::new_for_http());
 
     let bind_ip: IpAddr = config
         .server
@@ -230,14 +233,14 @@ async fn serve(config: AppConfig) -> Result<()> {
     let listener = TcpListener::bind(address).await?;
     info!(%address, version = env!("CARGO_PKG_VERSION"), test_mode = config.test_mode, "router-hub listening");
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(state))
         .await?;
 
     Ok(())
 }
 
 #[cfg(unix)]
-fn spawn_firewall_reconcile_signal(firewall: FirewallManager) {
+fn spawn_firewall_reconcile_signal(state: AppState) {
     tokio::spawn(async move {
         let mut signal =
             match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1()) {
@@ -248,15 +251,18 @@ fn spawn_firewall_reconcile_signal(firewall: FirewallManager) {
                 }
             };
         while signal.recv().await.is_some() {
-            if let Err(error) = firewall.reconcile().await {
+            if let Err(error) = state.firewall.reconcile().await {
                 warn!(%error, "signal-triggered firewall reconciliation failed");
+            }
+            if let Err(error) = crate::certificate_http::reconcile(&state).await {
+                warn!(%error, "signal-triggered HTTP WAN reconciliation failed");
             }
         }
     });
 }
 
 #[cfg(not(unix))]
-fn spawn_firewall_reconcile_signal(_firewall: FirewallManager) {}
+fn spawn_firewall_reconcile_signal(_state: AppState) {}
 
 #[cfg(unix)]
 fn spawn_reconfigure_signal() {
@@ -282,7 +288,7 @@ fn spawn_reconfigure_signal() {
 #[cfg(not(unix))]
 fn spawn_reconfigure_signal() {}
 
-async fn shutdown_signal() {
+async fn shutdown_signal(state: AppState) {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await
@@ -303,5 +309,8 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
+    }
+    if let Err(error) = state.stop_certificates().await {
+        warn!(%error, "certificate HTTP cleanup failed during shutdown");
     }
 }

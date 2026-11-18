@@ -158,6 +158,7 @@ pub fn save(
         }
         sites.sites.insert(key, site);
     }
+    crate::nginx_ingress::validate_tree(&nginx_render::load_global(config)?, &sites)?;
     nginx_render::FileTransaction::apply(
         config,
         [(path(config), toml::to_string_pretty(&sites)?)].into(),
@@ -283,7 +284,7 @@ enabled = true
     }
 
     #[test]
-    fn saving_overlapping_hostname_preserves_both_site_identities() {
+    fn saving_hostname_shaped_keys_preserves_both_site_identities() {
         for existing_kind in [NginxObjectKind::Domain, NginxObjectKind::Subdomain] {
             let temp = tempfile::tempdir().unwrap();
             let mut config = AppConfig::default();
@@ -308,11 +309,14 @@ enabled = true
                 enabled: false,
                 ..domain.clone()
             };
-            let (existing, new_site, new_name) = if existing_kind == NginxObjectKind::Domain {
+            let (existing, mut new_site, new_name) = if existing_kind == NginxObjectKind::Domain {
                 (domain, subdomain, "api")
             } else {
                 (subdomain, domain, "api.example.test")
             };
+            // The key can resemble another object's identity, but two server
+            // blocks must not claim the same hostname on the same listener.
+            new_site.server_name = "other.example.test".into();
             let initial = Sites {
                 sites: [("api.example.test".into(), existing.clone())].into(),
             };

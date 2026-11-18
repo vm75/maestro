@@ -77,7 +77,7 @@ fn shipped_xmlrpc_trap_causes_exactly_one_immediate_ban() {
     let path = dir.path().join("traps.log");
     fs::write(
         &path,
-        b"75.119.132.40 - - [30/Jul/2026:19:00:00 +0000] \"GET /xmlrpc.php HTTP/1.1\" 444 0 \"-\" \"Mozilla/5.0\" trap=\"1\" badbot=\"0\"\n",
+        b"192.0.2.40 - - [30/Jul/2026:19:00:00 +0000] \"GET /xmlrpc.php HTTP/1.1\" 444 0 \"-\" \"Mozilla/5.0\" trap=\"1\" badbot=\"0\"\n",
     )
     .unwrap();
     let config = Config {
@@ -126,10 +126,7 @@ fn shipped_xmlrpc_trap_causes_exactly_one_immediate_ban() {
     let snapshot = engine.handle().snapshot().unwrap();
 
     assert_eq!(snapshot.active_ban_count, 1);
-    assert_eq!(
-        snapshot.ip_counts,
-        vec![("75.119.132.40".parse().unwrap(), 5)]
-    );
+    assert_eq!(snapshot.ip_counts, vec![("192.0.2.40".parse().unwrap(), 5)]);
     engine.shutdown().unwrap();
 }
 

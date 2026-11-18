@@ -110,6 +110,28 @@ pub async fn list_objects(
         let config = state.config.clone();
         async move {
             let upstream = nginx_core::object_upstream(&config, &object)?;
+            if let Some(settings) =
+                nginx_sites::settings(&config, object.kind, &object.domain, &object.name)?
+            {
+                let global = nginx_render::load_global(&config)?;
+                let parent = if object.kind == NginxObjectKind::Subfolder {
+                    nginx_sites::find(
+                        &config,
+                        NginxObjectKind::Domain,
+                        &object.domain,
+                        &object.domain,
+                    )?
+                } else {
+                    None
+                };
+                object.effective_access = Some(crate::nginx_ingress::effective(
+                    &global,
+                    &settings,
+                    parent
+                        .as_ref()
+                        .map(|site| (site.domain.as_str(), &site.settings)),
+                )?);
+            }
             let reachable = match upstream.as_deref() {
                 Some(upstream) => upstream_reachable(upstream).await,
                 None => true,
@@ -195,13 +217,66 @@ pub async fn get_object(
 pub async fn create_object(
     State(state): State<AppState>,
     Path(kind): Path<String>,
+    Json(request): Json<CreateObject>,
+) -> Result<Json<ObjectContent>, ApiError> {
+    let parsed = nginx_core::parse_kind(&kind).map_err(ApiError::bad_request)?;
+    let domain = request.domain.clone();
+    let name = if parsed == NginxObjectKind::Domain {
+        domain.clone()
+    } else {
+        request.name.clone()
+    };
+    let operation = create_object_inner(State(state.clone()), Path(kind), Json(request));
+    crate::nginx_mutation::apply(&state, parsed, &domain, &name, operation).await
+}
+
+pub async fn update_object(
+    State(state): State<AppState>,
+    Path((kind, domain, name)): Path<(String, String, String)>,
+    Json(body): Json<UpdateObject>,
+) -> Result<Json<ObjectContent>, ApiError> {
+    let parsed = nginx_core::parse_kind(&kind).map_err(ApiError::bad_request)?;
+    let operation = update_object_inner(
+        State(state.clone()),
+        Path((kind, domain.clone(), name.clone())),
+        Json(body),
+    );
+    crate::nginx_mutation::apply(&state, parsed, &domain, &name, operation).await
+}
+
+pub async fn delete_object(
+    State(state): State<AppState>,
+    Path((kind, domain, name)): Path<(String, String, String)>,
+) -> Result<Json<ApiMessage>, ApiError> {
+    let parsed = nginx_core::parse_kind(&kind).map_err(ApiError::bad_request)?;
+    let operation = delete_object_inner(
+        State(state.clone()),
+        Path((kind, domain.clone(), name.clone())),
+    );
+    crate::nginx_mutation::apply(&state, parsed, &domain, &name, operation).await
+}
+
+pub async fn object_action(
+    State(state): State<AppState>,
+    Path((kind, domain, name, action)): Path<(String, String, String, String)>,
+) -> Result<Json<NginxObject>, ApiError> {
+    let parsed = nginx_core::parse_kind(&kind).map_err(ApiError::bad_request)?;
+    let operation = object_action_inner(
+        State(state.clone()),
+        Path((kind, domain.clone(), name.clone(), action)),
+    );
+    crate::nginx_mutation::apply(&state, parsed, &domain, &name, operation).await
+}
+
+async fn create_object_inner(
+    State(state): State<AppState>,
+    Path(kind): Path<String>,
     Json(mut request): Json<CreateObject>,
 ) -> Result<Json<ObjectContent>, ApiError> {
     let kind = nginx_core::parse_kind(&kind).map_err(ApiError::bad_request)?;
     if kind == NginxObjectKind::Domain {
         request.name.clone_from(&request.domain);
     }
-    let _guard = state.nginx_lock.lock().await;
     let content = render_object_content(
         &state,
         kind,
@@ -322,12 +397,11 @@ pub async fn create_object(
     }))
 }
 
-pub async fn update_object(
+async fn update_object_inner(
     State(state): State<AppState>,
     Path((kind, domain, name)): Path<(String, String, String)>,
     Json(body): Json<UpdateObject>,
 ) -> Result<Json<ObjectContent>, ApiError> {
-    let _guard = state.nginx_lock.lock().await;
     let kind = nginx_core::parse_kind(&kind).map_err(ApiError::bad_request)?;
     let previous = nginx_core::read_object(&state.config, kind, &domain, &name)
         .map_err(not_found_or_internal)?;
@@ -526,7 +600,7 @@ fn save_site_inputs(
         enabled,
         settings,
     });
-    Ok(nginx_sites::save(&state.config, kind, domain, name, site)?)
+    nginx_sites::save(&state.config, kind, domain, name, site).map_err(ApiError::bad_request)
 }
 
 fn render_object_content(
@@ -570,13 +644,158 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<GlobalSe
     Ok(Json(nginx_render::load_global(&state.config)?))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccessPreview {
+    kind: NginxObjectKind,
+    domain: String,
+    #[serde(default)]
+    settings: Settings,
+    #[serde(default)]
+    global: Option<GlobalSettings>,
+}
+
+pub async fn ingress_usage(
+    State(state): State<AppState>,
+) -> Result<Json<std::collections::BTreeMap<String, Vec<String>>>, ApiError> {
+    fn collect(
+        settings: &Settings,
+        label: &str,
+        usage: &mut std::collections::BTreeMap<String, Vec<String>>,
+    ) {
+        for (field, prefix) in [
+            ("listener_profile", "listener"),
+            ("access_policy", "access"),
+            ("restricted_sessions_policy", "access"),
+        ] {
+            if let Some(name) = settings.get(field).and_then(serde_json::Value::as_str) {
+                let rows = usage.entry(format!("{prefix}:{name}")).or_default();
+                if !rows.iter().any(|row| row == label) {
+                    rows.push(label.into());
+                }
+            }
+        }
+        for key in ["routes", "children"] {
+            if let Some(routes) = settings.get(key).and_then(serde_json::Value::as_array) {
+                for route in routes {
+                    collect(
+                        route.as_object().unwrap(),
+                        &format!("{label} {}", route["path"].as_str().unwrap_or("")),
+                        usage,
+                    );
+                }
+            }
+        }
+    }
+    let global = nginx_render::load_global(&state.config)?;
+    let mut usage = std::collections::BTreeMap::new();
+    collect(&global.site_defaults, "Global defaults", &mut usage);
+    if let Some(http) = &global.http_access {
+        usage
+            .entry(format!("listener:{}", http.listener_profile))
+            .or_insert_with(Vec::new)
+            .push("HTTP certificate validation".into());
+    }
+    let sites = nginx_sites::load(&state.config)?;
+    for (key, site) in &sites.sites {
+        let settings = crate::nginx_ingress::merge(&global, &site.settings);
+        let parent = (site.kind == NginxObjectKind::Subfolder)
+            .then(|| {
+                sites.sites.values().find(|candidate| {
+                    candidate.kind == NginxObjectKind::Domain && candidate.domain == site.domain
+                })
+            })
+            .flatten();
+        let effective = crate::nginx_ingress::effective(
+            &global,
+            &site.settings,
+            parent.map(|parent| (parent.domain.as_str(), &parent.settings)),
+        )?;
+        let mut settings = settings;
+        settings.insert("listener_profile".into(), effective.listener_profile.into());
+        settings.insert("access_policy".into(), effective.access_policy.into());
+        let label = format!("{key}{}", if site.enabled { "" } else { " (disabled)" });
+        collect(&settings, &label, &mut usage);
+        if let Some(parent) = parent {
+            let mut parent_settings = crate::nginx_ingress::merge(&global, &parent.settings);
+            // Domain source restrictions affect the mount; domain-root routes do not.
+            parent_settings.remove("routes");
+            parent_settings.remove("listener_profile");
+            collect(
+                &parent_settings,
+                &format!("{label} (domain restriction)"),
+                &mut usage,
+            );
+        }
+    }
+    Ok(Json(usage))
+}
+
+/// Read-only draft resolution: the renderer and UI share the same policy logic.
+pub async fn preview_access(
+    State(state): State<AppState>,
+    Json(request): Json<AccessPreview>,
+) -> Result<Json<crate::nginx_ingress::EffectiveAccess>, ApiError> {
+    let global = request
+        .global
+        .unwrap_or(nginx_render::load_global(&state.config)?);
+    global.validate().map_err(ApiError::bad_request)?;
+    nginx_render::validate_site(&request.settings).map_err(ApiError::bad_request)?;
+    if request.kind == NginxObjectKind::Subfolder
+        && request.settings.contains_key("listener_profile")
+    {
+        return Err(ApiError::bad_request(
+            "subfolders inherit their domain listener",
+        ));
+    }
+    let parent = if request.kind == NginxObjectKind::Subfolder {
+        nginx_sites::find(
+            &state.config,
+            NginxObjectKind::Domain,
+            &request.domain,
+            &request.domain,
+        )?
+    } else {
+        None
+    };
+    Ok(Json(
+        crate::nginx_ingress::effective(
+            &global,
+            &request.settings,
+            parent
+                .as_ref()
+                .map(|site| (site.domain.as_str(), &site.settings)),
+        )
+        .map_err(ApiError::bad_request)?,
+    ))
+}
+
 pub async fn put_settings(
     State(state): State<AppState>,
     Json(settings): Json<GlobalSettings>,
 ) -> Result<Json<ApiMessage>, ApiError> {
     let _guard = state.nginx_lock.lock().await;
+    let previous = nginx_render::load_global(&state.config)?;
+    // Reference validation below permits deletion of unreferenced entries, but
+    // an old client must not accidentally reset the HTTP lifecycle mode.
+    if settings.http_access.is_none() && previous.http_access.is_some() {
+        return Err(ApiError::conflict(
+            "HTTP access settings are missing; refresh nginx settings before saving",
+        ));
+    }
     let settings = nginx_render::with_path_defaults(settings, &state.config);
     settings.validate().map_err(ApiError::bad_request)?;
+    if state.certificate_busy()
+        && (previous.http_access != settings.http_access
+            || previous.listener_profiles != settings.listener_profiles
+            || ["router_ip", "http_port", "https_port", "acme_challenge_dir"]
+                .iter()
+                .any(|key| previous.shared.get(*key) != settings.shared.get(*key)))
+    {
+        return Err(ApiError::conflict(
+            "a certificate batch is running; HTTP mode, bindings and WAN settings cannot change until cleanup completes",
+        ));
+    }
     let mut files =
         nginx_render::shared_files(&state.config, &settings).map_err(ApiError::bad_request)?;
     let sites = nginx_sites::load(&state.config)?;
@@ -615,10 +834,18 @@ pub async fn put_settings(
             result.stderr
         )));
     }
+    if let Err(error) = crate::certificate_http::change_wan(&state, &previous, &settings).await {
+        transaction.rollback()?;
+        let _ = crate::certificate_http::change_wan(&state, &settings, &previous).await;
+        return Err(ApiError::conflict(format!(
+            "HTTP WAN configuration failed; settings restored: {error:#}"
+        )));
+    }
     if nginx_running(&state).await {
         let result = nginx_reload(&state).await?;
         if !result.success {
             transaction.rollback()?;
+            let _ = crate::certificate_http::change_wan(&state, &settings, &previous).await;
             let _ = nginx_reload(&state).await;
             return Err(ApiError::conflict(format!(
                 "nginx reload failed; previous settings restored: {}",
@@ -627,14 +854,16 @@ pub async fn put_settings(
         }
     }
     transaction.commit();
+    if let Err(error) = crate::certificate_http::configured(&state, &settings) {
+        tracing::warn!(%error, "nginx settings saved but HTTP status update failed");
+    }
     Ok(Json(ApiMessage::new("nginx settings saved")))
 }
 
-pub async fn delete_object(
+async fn delete_object_inner(
     State(state): State<AppState>,
     Path((kind, domain, name)): Path<(String, String, String)>,
 ) -> Result<Json<ApiMessage>, ApiError> {
-    let _guard = state.nginx_lock.lock().await;
     let kind = nginx_core::parse_kind(&kind).map_err(ApiError::bad_request)?;
     nginx_core::read_object(&state.config, kind, &domain, &name).map_err(not_found_or_internal)?;
     let cleanup_objects = nginx_core::list_objects(&state.config, false)?
@@ -668,9 +897,6 @@ pub async fn delete_object(
         .collect::<Result<Vec<_>, _>>()?;
     let enabled_path = nginx_core::enabled_path(&state.config, kind, &domain, &name)?;
     let was_enabled = nginx_core::symlink_exists(&enabled_path);
-    if was_enabled {
-        change_enabled(&state, kind, &domain, &name, false, true, false).await?;
-    }
     let inputs = nginx_sites::save(&state.config, kind, &domain, &name, None)?;
     nginx_core::delete_object(&state.config, kind, &domain, &name)?;
     for (object, names, map_key, upstream) in cleanup_objects {
@@ -686,16 +912,19 @@ pub async fn delete_object(
             upstream.as_deref(),
         )?;
     }
-    nginx_core::reconcile_http_forwarder(&state.config)?;
+    if was_enabled {
+        change_enabled(&state, kind, &domain, &name, false, true, false).await?;
+    } else {
+        nginx_core::reconcile_http_forwarder(&state.config)?;
+    }
     inputs.commit();
     Ok(Json(ApiMessage::new("nginx object deleted")))
 }
 
-pub async fn object_action(
+async fn object_action_inner(
     State(state): State<AppState>,
     Path((kind, domain, name, action)): Path<(String, String, String, String)>,
 ) -> Result<Json<NginxObject>, ApiError> {
-    let _guard = state.nginx_lock.lock().await;
     let kind = nginx_core::parse_kind(&kind).map_err(ApiError::bad_request)?;
     nginx_core::read_object(&state.config, kind, &domain, &name).map_err(not_found_or_internal)?;
     let (enabled, start_global) = match action.as_str() {
@@ -803,7 +1032,7 @@ async fn change_enabled(
                     let _ = client
                         .ensure_rewrite(&full_domain, &adguard_cfg.lan_ip)
                         .await;
-                } else {
+                } else if !nginx_core::has_enabled_managed_hostname(&state.config, &full_domain)? {
                     let _ = client
                         .remove_all_rewrites(&full_domain, &adguard_cfg.lan_ip)
                         .await;
@@ -866,7 +1095,21 @@ pub async fn stop(State(state): State<AppState>) -> Result<Json<CommandResult>, 
     Ok(Json(nginx_stop(&state).await?))
 }
 
-async fn nginx_test(state: &AppState) -> anyhow::Result<CommandResult> {
+pub(crate) async fn nginx_test(state: &AppState) -> anyhow::Result<CommandResult> {
+    let mut result = nginx_syntax_test(state).await?;
+    if result.success {
+        let global = nginx_render::load_global(&state.config)?;
+        if let Err(error) = crate::certificate_http::verify_http_ownership(state, &global).await {
+            result.success = false;
+            result.stderr = format!("HTTP listener isolation failed: {error:#}");
+        }
+    }
+    Ok(result)
+}
+
+/// Certificate cleanup must still remove managed listeners when authored HTTP
+/// conflicts exist; it reports inventory failures after applying that cleanup.
+pub(crate) async fn nginx_syntax_test(state: &AppState) -> anyhow::Result<CommandResult> {
     run_nginx(
         state,
         vec![
@@ -878,7 +1121,7 @@ async fn nginx_test(state: &AppState) -> anyhow::Result<CommandResult> {
     .await
 }
 
-async fn nginx_reload(state: &AppState) -> anyhow::Result<CommandResult> {
+pub(crate) async fn nginx_reload(state: &AppState) -> anyhow::Result<CommandResult> {
     run_nginx(
         state,
         vec![
@@ -902,7 +1145,7 @@ async fn nginx_start(state: &AppState) -> anyhow::Result<CommandResult> {
     .await
 }
 
-async fn nginx_stop(state: &AppState) -> anyhow::Result<CommandResult> {
+pub(crate) async fn nginx_stop(state: &AppState) -> anyhow::Result<CommandResult> {
     run_nginx(
         state,
         vec![
@@ -915,7 +1158,10 @@ async fn nginx_stop(state: &AppState) -> anyhow::Result<CommandResult> {
     .await
 }
 
-async fn run_nginx(state: &AppState, args: Vec<String>) -> anyhow::Result<CommandResult> {
+pub(crate) async fn run_nginx(
+    state: &AppState,
+    args: Vec<String>,
+) -> anyhow::Result<CommandResult> {
     let mut command_args = Vec::new();
     if let Some(prefix) = &state.config.nginx.prefix_path {
         command_args.push("-p".to_string());

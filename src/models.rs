@@ -38,6 +38,8 @@ pub struct NginxObject {
     pub path: String,
     pub managed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_access: Option<crate::nginx_ingress::EffectiveAccess>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
     pub enabled: bool,
     pub running: bool,

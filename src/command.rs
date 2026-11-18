@@ -14,6 +14,25 @@ pub struct CommandRunner {
     test_mode: bool,
 }
 
+#[cfg(unix)]
+struct ProcessGroupGuard(Option<u32>);
+
+#[cfg(unix)]
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0 {
+            // SAFETY: the child created this process group; negative PID targets
+            // its descendants as well, including on future cancellation.
+            if unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) } != 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    tracing::warn!(%pid, %error, "unable to kill cancelled command process group");
+                }
+            }
+        }
+    }
+}
+
 impl CommandRunner {
     pub fn new(test_mode: bool) -> Self {
         Self { test_mode }
@@ -105,25 +124,17 @@ impl CommandRunner {
             .spawn()
             .with_context(|| format!("failed to start {}", program.display()))?;
         #[cfg(unix)]
-        let child_pid = child.id();
+        let mut group = ProcessGroupGuard(child.id());
         let output = match timeout(timeout_duration, child.wait_with_output()).await {
             Ok(result) => result?,
             Err(_) => {
-                #[cfg(unix)]
-                if let Some(pid) = child_pid {
-                    // Negative PID addresses the process group established above.
-                    // This includes a DNS hook's shell, curl, and propagation sleep.
-                    let signal_result = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
-                    if signal_result != 0 {
-                        let error = std::io::Error::last_os_error();
-                        if error.raw_os_error() != Some(libc::ESRCH) {
-                            tracing::warn!(%pid, %error, "unable to kill dehydrated process group");
-                        }
-                    }
-                }
                 bail!("command timed out: {}", program.display());
             }
         };
+        #[cfg(unix)]
+        {
+            group.0 = None;
+        }
 
         Ok(CommandResult {
             success: output.status.success(),

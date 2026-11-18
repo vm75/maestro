@@ -87,6 +87,8 @@ pub fn router() -> Router<AppState> {
             get(nginx::get_settings).put(nginx::put_settings),
         )
         .route("/nginx/status", get(nginx::status))
+        .route("/nginx/access-preview", post(nginx::preview_access))
+        .route("/nginx/ingress-usage", get(nginx::ingress_usage))
         .route("/nginx/test", post(nginx::test))
         .route("/nginx/reload", post(nginx::reload))
         .route("/nginx/start", post(nginx::start))
@@ -119,6 +121,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/certificates/{id}/issue", post(certificates::issue))
         .route("/certificates/{id}/renew", post(certificates::renew))
+        .route(
+            "/certificates/http-access",
+            get(certificates::http_access_status).delete(certificates::close_http_access),
+        )
         .route(
             "/certificates/dehydrated/update",
             post(certificates::update_dehydrated),
@@ -263,6 +269,9 @@ pub struct ApiError {
 }
 
 impl ApiError {
+    pub(crate) fn append_detail(&mut self, detail: &str) {
+        self.message.push_str(detail);
+    }
     pub fn bad_request(error: impl std::fmt::Display) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
@@ -289,6 +298,12 @@ impl ApiError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: error.to_string(),
         }
+    }
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
     }
 }
 

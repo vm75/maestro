@@ -1,6 +1,9 @@
 /target
 /dist/
 /data/
+/.env
+/.env.*
+!/.env.example
 *.swp
 .DS_Store
 router-config/

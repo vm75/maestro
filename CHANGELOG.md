@@ -2,6 +2,30 @@
 
 Router Hub follows [Semantic Versioning](https://semver.org/).
 
+## 0.10.0
+
+### Changed
+
+- Default nginx daemon mode to enabled across platforms and test mode, and warn
+  when disabling it because foreground nginx blocks `init.d` startup scripts.
+
+- Deploy standard renewed certificate output into nginx with validation and
+  rollback, and disable shared TLS session caching to prevent handshake failures
+  after reloads with dynamic certificates.
+
+- Add reusable nginx listener profiles, source access rules, blocked paths and
+  effective-access previews in the offline UI. Retain legacy configuration and
+  transactional rollback across managed inputs and generated output. Reject
+  authored HTTP listener conflicts before adopting renewal-only validation.
+- Add optional HTTP-01 renewal windows shared by scheduled/manual certificate
+  work, with startup recovery and cleanup status. The scoped IPv4 WAN adapter
+  requires target-firmware verification; abrupt process death still requires
+  startup/manual closure of local HTTP listeners.
+- Scope managed upstream lookup to active listener assignments, preserve shared
+  upstreams and split-DNS rewrites during staged site moves, and keep older
+  hostname conflicts editable. Validate generated restricted-session routes,
+  retain unknown-host logging, and recover HTTP access past stale ACME locks.
+
 ## 0.9.0
 
 ### Changed

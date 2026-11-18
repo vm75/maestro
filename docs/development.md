@@ -26,6 +26,23 @@ and does not send Wake-on-LAN packets.
 
 For real services, see the [Linux integration guide](linux.md).
 
+## Sync router data
+
+Copy `.env.example` to `.env` and set `SYNC_DATA_HOST` to your SSH host or
+alias. Set `SYNC_DATA_ROUTER_HOME` to the remote user's home directory if it
+differs from `/opt/home/admin`; this also sets the certificate mirror path.
+The script sources `.env` as trusted Bash assignments. `.env` and its local
+variants are ignored by Git.
+
+```sh
+./scripts/sync-data.sh -t get nginx
+./scripts/sync-data.sh -s user@router-host get nginx
+```
+
+`-s` overrides the configured host. `get` and `put` require a host; help and
+`zip` work without one. Mirrored files and archives stay in ignored `data/` and
+can contain credentials, certificates, and private logs.
+
 ## Checks
 
 ```sh
@@ -46,6 +63,42 @@ The emulated nginx examples are managed inputs in
 `test-fixtures/etc/router-hub/nginx/sites.toml`. Test mode still writes fixture
 files when you save settings; the ASUS page is generated at startup and ignored
 by Git.
+
+## Build cache size
+
+Development and test builds use limited debug information (`debug = 1`) to
+reduce `target/` disk usage. Backtraces retain file and line information, but
+debugger type and variable inspection is limited. Incremental compilation stays
+enabled for faster rebuilds after source changes.
+
+For a debugging session that needs full debug information, run
+`CARGO_PROFILE_DEV_DEBUG=2 cargo build`.
+
+Cargo can retain artifacts from old compiler, dependency, and feature settings.
+With no builds running, remove `target/debug/incremental/` to clear just the
+development and test incremental cache. Run `cargo clean --profile dev` to
+remove development and test artifacts, or `cargo clean` to remove all build
+artifacts. The next build recreates what it needs.
+
+## Ingress and offline UI regression checks
+
+`cargo test --test nginx_ingress_test` exercises managed ingress, temporary
+HTTP-01 sessions, concurrency, failure recovery and real loopback nginx. The
+certificate WAN unit tests use `test-fixtures/bin/netfilter-mock.py`; they never
+execute host firewall tools. These tests do not certify firmware behavior.
+
+For the optional browser workflow check, install Node 22+ and Chromium, build
+with `cargo build`, then run:
+
+```sh
+node scripts/test-nginx-ui.mjs target/debug/router-hub /usr/sbin/chromium
+```
+
+The script starts a temporary test-mode server and checks normal form controls,
+source previews, advanced-route preservation, draft retention, narrow layout,
+keyboard access and offline failures. It uses built-in Node APIs and Chromium's
+debugging protocol without npm packages. Pass `--keep` to retain the lab and its
+mobile screenshot. Browser and live-nginx checks require loopback socket access.
 
 ## Certificate staging tests
 

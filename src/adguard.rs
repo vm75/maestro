@@ -313,8 +313,8 @@ mod tests {
 
     #[test]
     fn underscore_domains_are_rejected_for_reconciliation() {
-        assert!(has_underscore_domain("sutradhar_aalay_top.aalay.top"));
-        assert!(!has_underscore_domain("sutradhar-aalay-top.aalay.top"));
+        assert!(has_underscore_domain("host_with_underscore.example.com"));
+        assert!(!has_underscore_domain("host-with-hyphens.example.com"));
     }
 
     #[tokio::test]

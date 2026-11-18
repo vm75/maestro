@@ -1,5 +1,7 @@
 {# Each location resolves overrides against its effective parent, including false. #}
 {% set lanonly = route.enable_lanonly | default(parent.lanonly) %}
+{% set rh_access_checks = route._rh_access_checks | default(parent.rh_access_checks | default(none)) %}
+{% set rh_deny = route._rh_deny | default(parent.rh_deny | default(false)) %}
 {% set access_log = route.access_log | default(parent.access_log) %}
 {% set large_upload = route.enable_large_upload | default(parent.large_upload) %}
 {% set longlived = route.enable_longlived | default(parent.longlived) %}

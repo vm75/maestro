@@ -40,6 +40,9 @@ async fn setup_test_app() -> (axum::Router, AppState, tempfile::TempDir) {
     config.nginx.log_dir = temp.path().join("logs/nginx");
     config.firewall.log_dirs = vec![temp.path().to_path_buf()];
     config.ensure_directories().unwrap();
+    // Exercise compatibility with an existing pre-ingress installation.
+    std::fs::create_dir_all(&config.nginx.inputs_dir).unwrap();
+    std::fs::write(config.nginx.inputs_dir.join("nginx.toml"), "[global]\n").unwrap();
     std::fs::write(&config.nginx.config_path, "events {} http {}").unwrap();
 
     let stores = Stores::load(&config).await.unwrap();
@@ -638,6 +641,8 @@ async fn test_nginx_jinja_settings_objects_actions_and_logs_api() {
     let globals = json!({"shared":{"http_port":8080,"https_port":8443,"var_dir":state.config.nginx.log_dir.parent().unwrap().parent().unwrap(),"acme_challenge_dir":state.config.certificates.certs_dir.join("acme-challenge")}, "limit_policies":{"assets":{"rate":"100r/s","burst":500,"nodelay":true,"connections":50}}, "site_defaults":{"enable_streaming":true,"enable_lanonly":false,"limit_policy":"assets"}, "allowed_ips":["192.0.2.0/24"], "free_subdomains":["shared.example.test"]});
     let (status, result) = nginx_request(&app, "PUT", "/settings", globals.clone()).await;
     assert_eq!(status, StatusCode::OK, "{result}");
+    let mut globals = globals;
+    globals["shared"]["nginx_daemon"] = json!(true);
     assert_eq!(
         nginx_request(&app, "GET", "/settings", json!(null)).await.1,
         globals
@@ -1313,7 +1318,10 @@ async fn test_nginx_settings_reload_failure_restores_all_files() {
         std::fs::read(&state.config.nginx.config_path).unwrap(),
         previous
     );
-    assert!(!router_hub::nginx_render::global_path(&state.config).exists());
+    assert_eq!(
+        std::fs::read_to_string(router_hub::nginx_render::global_path(&state.config)).unwrap(),
+        "[global]\n"
+    );
     assert!(
         !state
             .config
@@ -1464,13 +1472,54 @@ async fn managed_site_inputs_roll_back_when_nginx_rejects_an_update() {
         "rollback.test",
     )
     .unwrap();
+    let mut global = router_hub::nginx_render::load_global(&state.config).unwrap();
+    global.listener_profiles.insert(
+        "moved".into(),
+        serde_json::from_value(json!({
+            "https":[{"address":"127.0.0.2","port":19443}]
+        }))
+        .unwrap(),
+    );
+    router_hub::nginx_render::FileTransaction::apply(
+        &state.config,
+        router_hub::nginx_render::shared_files(&state.config, &global).unwrap(),
+    )
+    .unwrap()
+    .commit();
+    let enabled = nginx::enabled_path(
+        &state.config,
+        NginxObjectKind::Domain,
+        "rollback.test",
+        "rollback.test",
+    )
+    .unwrap();
+    let enabled_target = std::fs::read_link(&enabled).unwrap();
+    let tracked = [
+        state.config.nginx.domain_upstream_map_path.clone(),
+        state.config.nginx.http_forwarder_path.clone(),
+        state.config.nginx.inputs_dir.join("domains.conf"),
+        state
+            .config
+            .nginx
+            .root_dir
+            .join("conf.d/00-ingress-access.conf"),
+        state
+            .config
+            .nginx
+            .root_dir
+            .join("ban-shield/default-drop.conf"),
+    ];
+    let before = tracked
+        .iter()
+        .map(|path| (path, std::fs::read(path).ok()))
+        .collect::<Vec<_>>();
     let inputs = std::fs::read(nginx_sites::path(&state.config)).unwrap();
     let output = std::fs::read(&path).unwrap();
     let (status, result) = nginx_request(
         &app,
         "PUT",
         "/objects/domain/rollback.test/rollback.test",
-        json!({"settings":{"disable_root":false}}),
+        json!({"settings":{"disable_root":false,"listener_profile":"moved","access_policy":"public"},"upstream":"http://127.0.0.1:19001"}),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{result}");
@@ -1479,6 +1528,15 @@ async fn managed_site_inputs_roll_back_when_nginx_rejects_an_update() {
         std::fs::read(nginx_sites::path(&state.config)).unwrap()
     );
     assert_eq!(output, std::fs::read(path).unwrap());
+    assert_eq!(std::fs::read_link(&enabled).unwrap(), enabled_target);
+    for (path, original) in before {
+        assert_eq!(
+            std::fs::read(path).ok(),
+            original,
+            "rollback of {}",
+            path.display()
+        );
+    }
 }
 
 #[tokio::test]

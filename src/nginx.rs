@@ -237,6 +237,7 @@ fn object_entry(
             .to_string_lossy()
             .to_string(),
         managed: crate::nginx_sites::settings(config, kind, domain, name)?.is_some(),
+        effective_access: None,
         port: site_upstream_with_key(
             config,
             kind,
@@ -511,19 +512,55 @@ pub fn sync_site_upstream(
         };
         (old_server_names.to_vec(), new_keys)
     };
-    let keys: BTreeSet<_> = old_keys.iter().chain(&new_keys).collect();
+    let canonical = |key: &str| match kind {
+        NginxObjectKind::Subfolder => key.to_owned(),
+        _ => key.to_ascii_lowercase(),
+    };
+    let keys: BTreeSet<_> = old_keys
+        .iter()
+        .chain(&new_keys)
+        .map(|key| canonical(key))
+        .collect();
+    let mut replacements = std::collections::BTreeMap::new();
+    if kind != NginxObjectKind::Subfolder {
+        // During a staged cutover both vhosts can own the same map entry.
+        // The prospective sites.toml already reflects the edit or deletion.
+        for (key, site) in crate::nginx_sites::load(config)?.sites {
+            if site.kind != kind || (site.domain == domain && site.object_name(&key)? == name) {
+                continue;
+            }
+            if let Some(upstream) = site.upstream.as_deref() {
+                let names = site
+                    .server_name
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                for host in
+                    normalize_server_names(kind, &site.domain, &site.object_name(&key)?, &names)?
+                {
+                    let host = canonical(&host);
+                    if keys.contains(&host) {
+                        replacements.insert(host, upstream.to_owned());
+                    }
+                }
+            }
+        }
+    }
     let mut content = String::new();
     for line in previous.as_deref().unwrap_or_default().lines() {
         let key = line.split_whitespace().next().unwrap_or_default();
-        if !keys.iter().any(|name| name.as_str() == key) {
+        if !keys.contains(&canonical(key)) {
             content.push_str(line);
             content.push('\n');
         }
     }
     if let Some(upstream) = upstream.filter(|value| !value.trim().is_empty()) {
         for key in new_keys {
-            content.push_str(&format!("{key} {upstream};\n"));
+            replacements.insert(canonical(&key), upstream.to_owned());
         }
+    }
+    for (key, upstream) in replacements {
+        content.push_str(&format!("{key} {upstream};\n"));
     }
     let mut data = std::collections::BTreeMap::new();
     let data_name = format!(
@@ -553,7 +590,10 @@ pub fn sync_site_upstream(
             &config.nginx.subfolder_upstream_map_path,
         ),
     };
-    let rendered = env.get_template(source)?.render(())?;
+    let mut rendered = env.get_template(source)?.render(())?;
+    if kind != NginxObjectKind::Subfolder {
+        rendered = crate::nginx_ingress::scope_upstream_map(&rendered, kind);
+    }
     let files = [
         (path, content.clone()),
         (runtime_data_path, content),
@@ -566,6 +606,37 @@ pub fn sync_site_upstream(
 }
 
 pub fn reconcile_http_forwarder(config: &AppConfig) -> Result<()> {
+    crate::nginx_render::FileTransaction::apply(config, http_forwarder_files(config)?)?.commit();
+    Ok(())
+}
+
+pub(crate) fn has_enabled_managed_hostname(config: &AppConfig, host: &str) -> Result<bool> {
+    for (key, site) in crate::nginx_sites::load(config)?.sites {
+        if site.kind == NginxObjectKind::Subfolder {
+            continue;
+        }
+        let name = site.object_name(&key)?;
+        let names = site
+            .server_name
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if normalize_server_names(site.kind, &site.domain, &name, &names)?
+            .iter()
+            .any(|alias| alias.eq_ignore_ascii_case(host))
+            && symlink_exists(&enabled_path(config, site.kind, &site.domain, &name)?)
+            && (site.kind != NginxObjectKind::Subdomain
+                || symlink_exists(&config.nginx.domains_enabled_dir.join(&site.domain)))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub fn http_forwarder_files(
+    config: &AppConfig,
+) -> Result<std::collections::BTreeMap<PathBuf, String>> {
     let mut names = BTreeSet::new();
     for object in list_objects(config, false)? {
         if !object.enabled {
@@ -631,7 +702,7 @@ pub fn reconcile_http_forwarder(config: &AppConfig) -> Result<()> {
         .into_iter()
         .collect();
     let env = crate::nginx_render::environment(&data)?;
-    let mut context = global.shared;
+    let mut context = global.shared.clone();
     context.entry("acme_challenge_dir").or_insert_with(|| {
         config
             .certificates
@@ -644,7 +715,7 @@ pub fn reconcile_http_forwarder(config: &AppConfig) -> Result<()> {
     let rendered = env
         .get_template("conf.d/05-http-to-https.conf.jinja")?
         .render(minijinja::value::Serde(context))?;
-    let files = [
+    let mut files: std::collections::BTreeMap<std::path::PathBuf, String> = [
         (
             config.nginx.inputs_dir.join("servers.conf"),
             servers.clone(),
@@ -654,8 +725,11 @@ pub fn reconcile_http_forwarder(config: &AppConfig) -> Result<()> {
     ]
     .into_iter()
     .collect();
-    crate::nginx_render::FileTransaction::apply(config, files)?.commit();
-    Ok(())
+    files.extend(crate::nginx_ingress::runtime_files(
+        config,
+        &crate::nginx_render::with_path_defaults(global, config),
+    )?);
+    Ok(files)
 }
 
 fn read_managed_config_file(config: &AppConfig, path: &Path) -> Result<Option<String>> {
@@ -767,11 +841,39 @@ pub fn read_log(config: &AppConfig, path: &str) -> Result<String> {
 }
 
 pub fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
+    let permissions = fs::metadata(path)
+        .ok()
+        .map(|metadata| metadata.permissions());
+    atomic_write_with_permissions(path, content, permissions.as_ref())
+}
+
+pub(crate) fn atomic_write_with_permissions(
+    path: &Path,
+    content: &[u8],
+    permissions: Option<&fs::Permissions>,
+) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let temp = path.with_extension(format!("router-hub.tmp-{}", Uuid::new_v4().simple()));
-    fs::write(&temp, content).with_context(|| format!("failed to write {}", temp.display()))?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(permissions.map_or(0o666, |permissions| permissions.mode()))
+        .open(&temp)
+        .with_context(|| format!("failed to create {}", temp.display()))?;
+    let result = (|| -> std::io::Result<()> {
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions.clone())?;
+        }
+        file.write_all(content)
+    })();
+    if let Err(error) = result {
+        let _ = fs::remove_file(&temp);
+        return Err(error.into());
+    }
     if let Err(error) = fs::rename(&temp, path) {
         let _ = fs::remove_file(&temp);
         return Err(error).with_context(|| format!("failed to replace {}", path.display()));

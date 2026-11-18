@@ -4,10 +4,19 @@
 {% set fallback_prefix = 'rh_site' %}
 server {
     server_name {{ server_name }};
+    {% if _rh_listens is defined %}
+    {{ _rh_listens }}
+    include snippets/tls-policy.conf;
+    {% else %}
     include snippets/ssl.conf;
+    {% endif %}
+    {% if _rh_check_ingress is defined %}if ($rh_wrong_ingress) { return 444; }{% endif %}
+    {% if _rh_host_check is defined %}{{ _rh_host_check }}{% endif %}
     include snippets/security-headers.conf;
     include snippets/acme-challenge.conf;
-    {% if proxy.lanonly %}
+    {% if _rh_access_checks is defined %}
+    {{ _rh_access_checks }}
+    {% elif proxy.lanonly %}
     include snippets/restrict.conf;
     {% endif %}
     {% if proxy.subfolders %}

@@ -3,10 +3,10 @@ test_mode = false
 platform = "asuswrt"
 
 [server]
-bind = "192.168.192.168"
+bind = "192.168.1.1"
 port = 3030
 auth_token = "REPLACE-WITH-AT-LEAST-24-RANDOM-CHARACTERS"
-allowed_origins = ["https://dwar.aalay.top", "http://192.168.192.168:8443", "http://router.asus.com", "http://192.168.1.1"]
+allowed_origins = ["https://router.example.com", "http://192.168.1.1:8443", "http://router.asus.com", "http://192.168.1.1"]
 max_request_bytes = 1048576
 
 [paths]
@@ -43,7 +43,7 @@ menu_tree = "/www/require/modules/menuTree.js"
 menu_index = "menu_Alexa_IFTTT"
 # Empty means http://<current-router-host>:<server.port>.
 # When the ASUS UI is served over HTTPS, use an HTTPS reverse-proxy URL here.
-api_base_url = "https://router-hub.aalay.top"
+api_base_url = "https://router-hub.example.com"
 
 [services]
 init_dir = "/opt/etc/init.d"

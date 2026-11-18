@@ -5,7 +5,8 @@ http2 on;
 include ban-shield/server-guard.conf;
 
 ssl_session_timeout 1d;
-ssl_session_cache shared:MozSSL:10m;  # about 40000 sessions
+# Dynamic certificate paths and rejecting defaults must not share resumed sessions.
+ssl_session_cache off;
 ssl_session_tickets off;
 
 # intermediate configuration

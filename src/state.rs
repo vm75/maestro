@@ -10,7 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use tokio::{fs, sync::Mutex, time::sleep};
-use tracing::{info, warn};
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::{
@@ -34,6 +34,8 @@ pub struct AppState {
     pub stores: Stores,
     pub runner: CommandRunner,
     pub nginx_lock: Arc<Mutex<()>>,
+    pub http_access_lock: Arc<Mutex<()>>,
+    certificate_shutdown: tokio::sync::watch::Sender<bool>,
     pub firewall: FirewallManager,
     pub filtering_timer: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub filtering_paused_until: Arc<Mutex<Option<DateTime<Utc>>>>,
@@ -43,6 +45,24 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub(crate) fn certificates_stopping(&self) -> bool {
+        *self.certificate_shutdown.borrow()
+    }
+    pub async fn stop_certificates(&self) -> Result<()> {
+        self.certificate_shutdown.send_replace(true);
+        let _guard = self.certificate_operation_lock.lock().await;
+        crate::certificate_http::close(self).await
+    }
+    pub fn certificate_busy(&self) -> bool {
+        self.certificate_operation_lock.try_lock().is_err()
+    }
+    pub async fn close_http_access(&self) -> Result<()> {
+        let _guard = self
+            .certificate_operation_lock
+            .try_lock()
+            .context("a certificate batch is running; wait for its cleanup")?;
+        crate::certificate_http::close(self).await
+    }
     pub fn new(config: AppConfig, stores: Stores, firewall: FirewallManager) -> Self {
         let test_mode = config.test_mode;
         Self {
@@ -50,6 +70,8 @@ impl AppState {
             stores,
             runner: CommandRunner::new(test_mode),
             nginx_lock: Arc::new(Mutex::new(())),
+            http_access_lock: Arc::new(Mutex::new(())),
+            certificate_shutdown: tokio::sync::watch::channel(false).0,
             firewall,
             filtering_timer: Arc::new(Mutex::new(None)),
             filtering_paused_until: Arc::new(Mutex::new(None)),
@@ -243,11 +265,6 @@ impl AppState {
     }
 
     pub async fn issue_certificate(&self, id: Uuid, renew: bool) -> Result<CommandResult> {
-        // Both the periodic loop and manual API actions must share this guard.
-        let _guard = self
-            .certificate_operation_lock
-            .try_lock()
-            .context("another certificate operation is already running")?;
         let spec = self
             .stores
             .certificates
@@ -257,7 +274,75 @@ impl AppState {
             .find(|spec| spec.id == id)
             .cloned()
             .context("certificate not found")?;
+        self.certificate_batch(vec![(spec, renew)]).await?.remove(0)
+    }
 
+    /// An owned worker outlives an HTTP client disconnect and always reaches
+    /// cleanup. Scheduled and manual work share one session/operation guard.
+    async fn certificate_batch(
+        &self,
+        jobs: Vec<(CertificateSpec, bool)>,
+    ) -> Result<Vec<Result<CommandResult>>> {
+        let guard = self
+            .certificate_operation_lock
+            .clone()
+            .try_lock_owned()
+            .context("another certificate operation is already running")?;
+        let state = self.clone();
+        tokio::spawn(async move {
+            let _guard = guard;
+            let lock = state.dehydrated_lock_status().await?;
+            if lock.locked || lock.status == DehydratedActivity::Running {
+                bail!("dehydrated is running or a lock is present; no HTTP window was opened");
+            }
+            let mut results: Vec<Option<Result<CommandResult>>> = (0..jobs.len()).map(|_| None).collect();
+            // DNS operations never open a window, even in a mixed batch.
+            for (index, (spec, renew)) in jobs.iter().enumerate().filter(|(_, (spec, _))| matches!(spec.method, CertificateMethod::Dns)) {
+                results[index] = Some(state.issue_certificate_locked(spec, *renew, None).await);
+            }
+            let http: Vec<_> = jobs.iter().filter(|(spec, _)| matches!(spec.method, CertificateMethod::Http)).map(|(spec, _)| spec.clone()).collect();
+            if !http.is_empty() {
+                match crate::certificate_http::begin(&state, &http).await {
+                    Err(error) => {
+                        for (index, (spec, _)) in jobs.iter().enumerate() {
+                            if matches!(spec.method, CertificateMethod::Http) {
+                                results[index] = Some(Err(anyhow::anyhow!("{error:#}")));
+                            }
+                        }
+                    }
+                    Ok(session) => {
+                        for (index, (spec, renew)) in jobs.iter().enumerate().filter(|(_, (spec, _))| matches!(spec.method, CertificateMethod::Http)) {
+                            results[index] = Some(state.issue_certificate_locked(spec, *renew, session.as_ref().map(|s| s.expires_at)).await);
+                        }
+                        if session.is_some() {
+                            if let Err(cleanup) = crate::certificate_http::close(&state).await {
+                                for (index, (spec, _)) in jobs.iter().enumerate() {
+                                    if matches!(spec.method, CertificateMethod::Http) {
+                                        let original = results[index].take().unwrap();
+                                        results[index] = Some(Err(anyhow::anyhow!("certificate result: {}; HTTP cleanup failed: {cleanup:#}", match original {
+                                            Ok(output) => format!("success={}, stderr={}", output.success, output.stderr),
+                                            Err(error) => format!("{error:#}"),
+                                        })));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(results.into_iter().map(|result| result.expect("each job completed")).collect())
+        }).await.context("certificate worker failed")?
+    }
+
+    async fn issue_certificate_locked(
+        &self,
+        spec: &CertificateSpec,
+        renew: bool,
+        deadline: Option<DateTime<Utc>>,
+    ) -> Result<CommandResult> {
+        if *self.certificate_shutdown.borrow() {
+            bail!("certificate service is shutting down");
+        }
         let lock_status = self.dehydrated_lock_status().await?;
         if lock_status.locked || lock_status.status == DehydratedActivity::Running {
             bail!("dehydrated is running or a lock is present; cannot issue or renew");
@@ -274,7 +359,10 @@ impl AppState {
         };
         *self.certificate_operation.lock().await = Some(operation.clone());
 
-        let result = self.run_certificate_operation(&spec, renew).await;
+        let result = match self.run_certificate_operation(spec, renew, deadline).await {
+            Ok(output) if output.success => self.deploy_certificate(spec).await.map(|()| output),
+            result => result,
+        };
         let failure = match &result {
             Ok(output) if output.success => None,
             Ok(output) => Some(if output.stderr.is_empty() {
@@ -307,10 +395,101 @@ impl AppState {
         result
     }
 
+    /// Standard dehydrated output is deployed as a validated nginx transaction.
+    /// Custom hooks that deploy elsewhere retain their existing behavior.
+    async fn deploy_certificate(&self, spec: &CertificateSpec) -> Result<()> {
+        validate_certificate_name(&spec.name)?;
+        let source = self
+            .config
+            .certificates
+            .certs_dir
+            .join("certs")
+            .join(&spec.name);
+        if !source.join("fullchain.pem").exists() {
+            return Ok(());
+        }
+        let certificate = self
+            .runner
+            .run(
+                &self.config.commands.openssl,
+                vec![
+                    "x509".into(),
+                    "-in".into(),
+                    source.join("fullchain.pem").to_string_lossy().into_owned(),
+                    "-pubkey".into(),
+                    "-noout".into(),
+                ],
+                Duration::from_secs(10),
+            )
+            .await?;
+        let key = self
+            .runner
+            .run(
+                &self.config.commands.openssl,
+                vec![
+                    "pkey".into(),
+                    "-in".into(),
+                    source.join("privkey.pem").to_string_lossy().into_owned(),
+                    "-pubout".into(),
+                ],
+                Duration::from_secs(10),
+            )
+            .await?;
+        if !certificate.success || !key.success || certificate.stdout.trim() != key.stdout.trim() {
+            bail!("renewed certificate is invalid or does not match its private key");
+        }
+        let _lock = self.nginx_lock.lock().await;
+        let target = self.config.nginx.root_dir.join("certs").join(&spec.name);
+        let mut files = std::collections::BTreeMap::new();
+        for name in ["privkey.pem", "fullchain.pem", "cert.pem", "chain.pem"] {
+            let path = source.join(name);
+            if matches!(name, "cert.pem" | "chain.pem") && !path.exists() {
+                continue;
+            }
+            files.insert(
+                target.join(name),
+                fs::read_to_string(&path).await.with_context(|| {
+                    format!("unable to read renewed certificate {}", path.display())
+                })?,
+            );
+        }
+        let mut transaction = crate::nginx_render::FileTransaction::apply(&self.config, files)?;
+        let result = async {
+            let test = crate::api::nginx::nginx_test(self).await?;
+            if !test.success {
+                bail!(
+                    "renewed certificate failed nginx validation: {}",
+                    test.stderr
+                );
+            }
+            if crate::api::nginx::is_running(self).await {
+                let reload = crate::api::nginx::nginx_reload(self).await?;
+                if !reload.success {
+                    bail!(
+                        "nginx reload after certificate deployment failed: {}",
+                        reload.stderr
+                    );
+                }
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = result {
+            transaction.rollback()?;
+            if crate::api::nginx::is_running(self).await {
+                let _ = crate::api::nginx::nginx_reload(self).await;
+            }
+            return Err(error);
+        }
+        transaction.commit();
+        Ok(())
+    }
+
     async fn run_certificate_operation(
         &self,
         spec: &CertificateSpec,
         renew: bool,
+        deadline: Option<DateTime<Utc>>,
     ) -> Result<CommandResult> {
         self.write_dehydrated_files(spec).await?;
         let mut args = vec![
@@ -324,13 +503,24 @@ impl AppState {
         if renew {
             args.push("--force".to_string());
         }
-        self.runner
-            .run_process_group(
-                &self.config.commands.dehydrated,
-                args,
-                Duration::from_secs(self.config.certificates.command_timeout_seconds),
-            )
-            .await
+        let mut timeout = Duration::from_secs(self.config.certificates.command_timeout_seconds);
+        if let Some(deadline) = deadline {
+            let remaining = (deadline - Utc::now())
+                .to_std()
+                .context("HTTP validation batch window has expired")?;
+            if remaining.is_zero() {
+                bail!("HTTP validation batch window has expired");
+            }
+            timeout = timeout.min(remaining);
+        }
+        let mut shutdown = self.certificate_shutdown.subscribe();
+        if *shutdown.borrow() {
+            bail!("certificate service is shutting down");
+        }
+        tokio::select! {
+            result = self.runner.run_process_group(&self.config.commands.dehydrated, args, timeout) => result,
+            _ = shutdown.changed() => bail!("certificate operation cancelled for shutdown"),
+        }
     }
 
     pub async fn update_dehydrated(&self) -> Result<DehydratedUpdate> {
@@ -423,19 +613,27 @@ impl AppState {
             return Ok(());
         }
         let specs = self.stores.certificates.read().await.clone();
+        let mut jobs = Vec::new();
         for spec in specs.into_iter().filter(|spec| spec.auto_renew) {
             let status = self.certificate_status(&spec).await;
             if status.renewal_due {
-                info!(certificate = %spec.name, "certificate is due for renewal");
-                match self.issue_certificate(spec.id, status.exists).await {
-                    Ok(result) if !result.success => {
-                        warn!(certificate = %spec.name, stderr = %result.stderr, "certificate renewal failed");
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        warn!(certificate = %spec.name, %error, "certificate renewal failed");
-                    }
+                jobs.push((spec, status.exists));
+            }
+        }
+        if jobs.is_empty() {
+            return Ok(());
+        }
+        let names = jobs
+            .iter()
+            .map(|(spec, _)| spec.name.clone())
+            .collect::<Vec<_>>();
+        for (name, result) in names.into_iter().zip(self.certificate_batch(jobs).await?) {
+            match result {
+                Ok(output) if !output.success => {
+                    warn!(certificate=%name, stderr=%output.stderr, "certificate renewal failed")
                 }
+                Err(error) => warn!(certificate=%name, %error, "certificate renewal failed"),
+                _ => {}
             }
         }
         Ok(())
@@ -558,7 +756,7 @@ fn validate_certificate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_domain(domain: &str) -> Result<()> {
+pub(crate) fn validate_domain(domain: &str) -> Result<()> {
     let hostname = domain.strip_prefix("*.").unwrap_or(domain);
     let wildcard_count = domain.matches('*').count();
     let wildcard_allowed = if domain.starts_with("*.") { 1 } else { 0 };
@@ -656,8 +854,8 @@ mod tests {
     fn renders_multiple_domains_as_one_certificate_entry() {
         let spec = CertificateSpec {
             id: Uuid::new_v4(),
-            name: "aalay_top".into(),
-            domains: vec!["*.aalay.top".into(), "aalay.top".into()],
+            name: "example_com".into(),
+            domains: vec!["*.example.com".into(), "example.com".into()],
             method: CertificateMethod::Dns,
             hook: None,
             hook_env: BTreeMap::new(),
@@ -668,7 +866,7 @@ mod tests {
 
         assert_eq!(
             render_dehydrated_domains(&spec).unwrap(),
-            "\n# aalay.top-start\n*.aalay.top aalay.top > aalay_top\n# aalay.top-end\n"
+            "\n# example.com-start\n*.example.com example.com > example_com\n# example.com-end\n"
         );
     }
 

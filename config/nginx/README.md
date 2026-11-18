@@ -48,6 +48,23 @@ Templates remain embedded in Router Hub's binary. See the
 [upgrade procedure](../../docs/migration.md#nginx-input-relocation-in-09) before
 using 0.9 with an existing installation.
 
+The bundled TLS snippet already uses `http2 on`, which requires nginx 1.25.1+
+with the HTTP/2 module (see [nginx documentation](https://nginx.org/en/docs/http/ngx_http_v2_module.html#http2)).
+Managed rejecting defaults use `ssl_reject_handshake`, introduced in 1.19.4
+([TLS module](https://nginx.org/en/docs/http/ngx_http_ssl_module.html#ssl_reject_handshake)).
+Validate the actual module build with `nginx -t`; these requirements do not
+establish compatibility with a particular router firmware.
+
+## Managed ingress and access
+
+Router Hub adds named listener profiles, reusable source rules, deny routes and
+HTTP-01 renewal windows through its Rust renderer. Configure them with the UI;
+the standalone Python template renderer covers the legacy template context.
+See [configuration and operating limits](../../docs/nginx-ingress.md) and the
+synthetic [global](examples/ingress.toml)/[site](examples/ingress-sites.toml) inputs.
+Generated profile defaults, geo policies and TLS policy snippets are owned output.
+Do not copy generated directives into authored objects as an isolation guarantee.
+
 ## Site options
 
 [settings/proxy.jinja](settings/proxy.jinja) owns proxy defaults. Templates import
@@ -247,6 +264,9 @@ validation or reload restores the previous TOML. Allowlist fragments are
 generated from TOML. Relative fallback certificate directories resolve below the nginx root.
 Runtime options `nginx_daemon`, `nginx_user`,
 and `temp_dir` are validated and rendered by the same policy as listener settings.
+`nginx_daemon` defaults to `true` on Asuswrt-Merlin, Linux, and in test mode.
+Disabling it warns in the UI and runtime logs because foreground nginx prevents
+`init.d` startup scripts from continuing; use `false` only for a foreground supervisor.
 The effective UID determines whether `user` is emitted: non-root omits it; root
 uses the configured worker user, falling back to `nobody` for an empty or missing
 value. This runtime decision is not a configurable privilege override.

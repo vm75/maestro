@@ -1,5 +1,7 @@
 {# Import with context once per site. Defaults apply only to undefined values. #}
 {% set lanonly = enable_lanonly | default(true) %}
+{% set rh_access_checks = _rh_access_checks | default(none) %}
+{% set rh_deny = _rh_deny | default(false) %}
 {% set subfolders = enable_subfolders | default(true) %}
 {% set root_disabled = disable_root | default(true) %}
 {% set large_upload = enable_large_upload | default(false) %}

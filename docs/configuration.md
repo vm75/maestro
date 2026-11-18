@@ -112,6 +112,10 @@ Relative `inputs_dir` values resolve against `router-hub.toml`'s directory.
 Back up both the inputs directory and custom nginx files. For existing installs,
 follow the [0.9 input relocation procedure](migration.md#nginx-input-relocation-in-09).
 
+For named listeners, reusable source access rules, blocked paths and temporary
+HTTP-01 exposure, see [nginx ingress](nginx-ingress.md), including migration and
+WAN adapter limitations.
+
 In Nginx → Global settings, configure listeners, workers, DNS, PWA headers,
 client IP/CIDR allowlists, shared domain suffixes, and site defaults. Settings are
 stored atomically in `<nginx.inputs_dir>/nginx.toml`. Saving renders
@@ -130,7 +134,10 @@ when blank or unset. Only the temporary parent folder is configurable: nginx
 uses `client-body`, `proxy`, `fastcgi`, `uwsgi`, and `scgi` beneath it. Linux mode
 defaults to a `tmp` folder alongside the nginx root (for example, `data/linux/tmp`).
 The temporary parent is created before validation; it must be writable by the
-account running nginx. Set `nginx_daemon = false` when nginx runs under a foreground supervisor.
+account running nginx. `nginx_daemon` defaults to `true` on Asuswrt-Merlin, in
+Linux mode, and in test mode. Setting it to `false` keeps nginx in the foreground
+and prevents `init.d` startup scripts from continuing. The UI and runtime logs
+warn when it is disabled; use `false` only with a foreground supervisor.
 These settings survive regeneration; listener ports remain administrator choices.
 
 Managed sites select the domain, subdomain, or subfolder policy automatically.

@@ -55,6 +55,12 @@ pub struct GlobalSettings {
     pub limit_policies: BTreeMap<String, LimitPolicy>,
     pub allowed_ips: Vec<String>,
     pub free_subdomains: Vec<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub listener_profiles: BTreeMap<String, crate::nginx_ingress::ListenerProfile>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub access_policies: BTreeMap<String, crate::nginx_ingress::AccessPolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_access: Option<crate::nginx_ingress::HttpAccess>,
 }
 
 /// On-disk TOML schema; the HTTP API retains its `shared` field name.
@@ -66,6 +72,10 @@ struct NginxSettings {
     global: Settings,
     site_defaults: Settings,
     limit_policies: BTreeMap<String, LimitPolicy>,
+    listener_profiles: BTreeMap<String, crate::nginx_ingress::ListenerProfile>,
+    access_policies: BTreeMap<String, crate::nginx_ingress::AccessPolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    http_access: Option<crate::nginx_ingress::HttpAccess>,
 }
 
 fn encode_global(settings: &GlobalSettings) -> Result<String> {
@@ -75,6 +85,9 @@ fn encode_global(settings: &GlobalSettings) -> Result<String> {
         global: settings.shared.clone(),
         site_defaults: settings.site_defaults.clone(),
         limit_policies: settings.limit_policies.clone(),
+        listener_profiles: settings.listener_profiles.clone(),
+        access_policies: settings.access_policies.clone(),
+        http_access: settings.http_access.clone(),
     })?)
 }
 
@@ -124,6 +137,17 @@ fn validate_policy(settings: &Settings, route: bool, depth: usize) -> Result<()>
     if depth > 8 {
         bail!("route nesting exceeds 8 levels");
     }
+    if settings.contains_key("access_policy") && settings.contains_key("enable_lanonly") {
+        bail!("choose access_policy or enable_lanonly, not both");
+    }
+    if route
+        && settings.get("access_policy").and_then(Value::as_str) == Some("deny")
+        && settings
+            .keys()
+            .any(|key| !["path", "match", "access_policy"].contains(&key.as_str()))
+    {
+        bail!("deny routes accept only path, match and access_policy");
+    }
     for (key, value) in settings {
         let valid = if BOOL_SETTINGS.contains(&key.as_str()) {
             value.is_boolean()
@@ -133,6 +157,10 @@ fn validate_policy(settings: &Settings, route: bool, depth: usize) -> Result<()>
             quantity(value, "smhdw")
         } else {
             match key.as_str() {
+                "access_policy" => value.as_str().is_some_and(crate::nginx_ingress::name_valid),
+                "listener_profile" | "restricted_sessions_policy" if !route => {
+                    value.as_str().is_some_and(crate::nginx_ingress::name_valid)
+                }
                 "limit_policy" => value.as_str().is_some_and(policy_name),
                 "proxy_transport" => matches!(value.as_str(), Some("websocket" | "http" | "sse")),
                 "cache_policy" => matches!(
@@ -141,7 +169,14 @@ fn validate_policy(settings: &Settings, route: bool, depth: usize) -> Result<()>
                 ),
                 "forwarded_for" => matches!(value.as_str(), Some("replace" | "append")),
                 "spa_fallback" | "rewrite_to" => value.as_str().is_some_and(|s| {
-                    s.is_empty() || (s.starts_with('/') && token(s) && !s.contains(' '))
+                    s.is_empty()
+                        || (s.starts_with('/')
+                            && token(s)
+                            && !s.contains(' ')
+                            && !s.contains("//")
+                            && !s
+                                .split('/')
+                                .any(|segment| segment == "." || segment == ".."))
                 }),
                 "cors_origin" => value.as_str().is_some_and(|s| {
                     s.is_empty()
@@ -198,6 +233,7 @@ fn validate_routes(value: &Value, depth: usize) -> Result<()> {
     if routes.len() > 128 {
         bail!("too many routes");
     }
+    let mut identities = std::collections::BTreeSet::new();
     for route in routes {
         let route = route
             .as_object()
@@ -206,6 +242,15 @@ fn validate_routes(value: &Value, depth: usize) -> Result<()> {
             bail!("route path is required");
         }
         validate_policy(route, true, depth)?;
+        if !identities.insert((
+            route
+                .get("match")
+                .and_then(Value::as_str)
+                .unwrap_or("prefix"),
+            route["path"].as_str().unwrap(),
+        )) {
+            bail!("duplicate route path and match type");
+        }
     }
     Ok(())
 }
@@ -281,6 +326,7 @@ impl GlobalSettings {
                 bail!("invalid free subdomain suffix");
             }
         }
+        crate::nginx_ingress::validate(self)?;
         Ok(())
     }
 }
@@ -385,8 +431,13 @@ pub fn render_site(
         bail!("subfolder must be a literal path segment");
     }
     let mut context = global.shared.clone();
-    context.extend(global.site_defaults.clone());
-    context.extend(settings.clone());
+    let normalized = nginx::normalize_server_names(kind, domain, name, server_names)?;
+    context.extend(crate::nginx_ingress::context(
+        global,
+        settings,
+        kind,
+        &normalized,
+    )?);
     validate_limit_references(&context, &global.limit_policies)?;
     context.insert(
         "limit_policies".into(),
@@ -679,6 +730,12 @@ pub fn with_path_defaults(
     mut settings: GlobalSettings,
     config: &crate::config::AppConfig,
 ) -> GlobalSettings {
+    let daemon = settings.shared.entry("nginx_daemon").or_insert(true.into());
+    if daemon.as_bool() == Some(false) {
+        tracing::warn!(
+            "nginx_daemon is disabled: foreground nginx prevents init.d startup scripts from continuing; enable it unless nginx is managed by a foreground supervisor"
+        );
+    }
     if let Some(var_dir) = config.nginx.log_dir.parent().and_then(|path| path.parent()) {
         settings
             .shared
@@ -737,7 +794,10 @@ pub fn load_global(config: &crate::config::AppConfig) -> Result<GlobalSettings> 
     require_migrated_input(config, "nginx.toml")?;
     let stored: NginxSettings = match std::fs::read_to_string(&path) {
         Ok(content) => toml::from_str(&content)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => NginxSettings::default(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => NginxSettings {
+            http_access: Some(crate::nginx_ingress::HttpAccess::default()),
+            ..Default::default()
+        },
         Err(error) => return Err(error.into()),
     };
     let settings = with_path_defaults(
@@ -747,6 +807,9 @@ pub fn load_global(config: &crate::config::AppConfig) -> Result<GlobalSettings> 
             limit_policies: stored.limit_policies,
             allowed_ips: stored.allowed_ips.unwrap_or_default(),
             free_subdomains: stored.free_subdomains.unwrap_or_default(),
+            listener_profiles: stored.listener_profiles,
+            access_policies: stored.access_policies,
+            http_access: stored.http_access,
         },
         config,
     );
@@ -769,6 +832,7 @@ pub fn shared_files(
 ) -> Result<BTreeMap<std::path::PathBuf, String>> {
     let settings = with_path_defaults(settings.clone(), config);
     settings.validate()?;
+    crate::nginx_ingress::validate_tree(&settings, &crate::nginx_sites::load(config)?)?;
     let mut data = BTreeMap::new();
     for &(name, source) in BUNDLE {
         if name.starts_with("settings/") && !name.ends_with(".jinja") {
@@ -811,9 +875,15 @@ pub fn shared_files(
         let mut content = previous
             .lines()
             .filter(|line| {
-                !keys
-                    .iter()
-                    .any(|key| line.split_whitespace().next() == Some(key.as_str()))
+                !keys.iter().any(|key| {
+                    line.split_whitespace().next().is_some_and(|entry| {
+                        if site.kind == NginxObjectKind::Subfolder {
+                            entry == key
+                        } else {
+                            entry.eq_ignore_ascii_case(key)
+                        }
+                    })
+                })
             })
             .map(|line| format!("{line}\n"))
             .collect::<String>();
@@ -913,17 +983,66 @@ pub fn shared_files(
         }
     }
     files.insert(global_path(config), encode_global(&settings)?);
+    files.extend(crate::nginx_ingress::runtime_files(config, &settings)?);
     Ok(files)
 }
 
 /// Rolls back every file if a write, nginx test, or reload fails.
 /// Callers serialize mutations with AppState::nginx_lock.
 pub struct FileTransaction {
-    previous: Vec<(std::path::PathBuf, Option<Vec<u8>>)>,
+    previous: Vec<(std::path::PathBuf, Option<FileBackup>)>,
     committed: bool,
 }
 
+struct FileBackup {
+    bytes: Vec<u8>,
+    permissions: std::fs::Permissions,
+    inode: u64,
+}
+
+fn backup_file(path: &std::path::Path) -> Result<Option<FileBackup>> {
+    use std::os::unix::fs::MetadataExt;
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let metadata = std::fs::metadata(path)?;
+            Ok(Some(FileBackup {
+                bytes,
+                permissions: metadata.permissions(),
+                inode: metadata.ino(),
+            }))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 impl FileTransaction {
+    /// Capture inputs/output before a multi-step object workflow mutates them.
+    pub(crate) fn capture(
+        config: &crate::config::AppConfig,
+        paths: impl IntoIterator<Item = std::path::PathBuf>,
+    ) -> Result<Self> {
+        let mut previous = Vec::new();
+        for path in paths {
+            ensure_managed_path(config, &path)?;
+            let bytes = backup_file(&path)?;
+            previous.push((path, bytes));
+        }
+        Ok(Self {
+            previous,
+            committed: false,
+        })
+    }
+
+    pub(crate) fn changed(&self) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        self.previous.iter().any(|(path, previous)| {
+            std::fs::read(path).ok().as_ref() != previous.as_ref().map(|backup| &backup.bytes)
+                || std::fs::metadata(path).ok().map(|metadata| metadata.ino())
+                    != previous.as_ref().map(|backup| backup.inode)
+        })
+    }
+
     pub fn apply(
         config: &crate::config::AppConfig,
         files: BTreeMap<std::path::PathBuf, String>,
@@ -943,11 +1062,7 @@ impl FileTransaction {
         // Preflight every path before writing any file.
         for path in files.keys().chain(removals) {
             ensure_managed_path(config, path)?;
-            let previous = match std::fs::read(path) {
-                Ok(bytes) => Some(bytes),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => return Err(error.into()),
-            };
+            let previous = backup_file(path)?;
             transaction.previous.push((path.clone(), previous));
         }
         if let Some(content) = files.get(&global_path(config)) {
@@ -958,11 +1073,33 @@ impl FileTransaction {
                 limit_policies: settings.limit_policies,
                 allowed_ips: settings.allowed_ips.unwrap_or_default(),
                 free_subdomains: settings.free_subdomains.unwrap_or_default(),
+                listener_profiles: settings.listener_profiles,
+                access_policies: settings.access_policies,
+                http_access: settings.http_access,
             }
             .validate()?;
             if let Some(path) = settings.global.get("temp_dir").and_then(Value::as_str) {
                 let path = std::path::Path::new(path);
-                nginx::ensure_no_symlink_ancestors(std::path::Path::new("/"), path)?;
+                if path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+                {
+                    bail!("nginx temp_dir must not contain parent traversal");
+                }
+                // Entware's configured deployment prefix (normally /opt) can itself
+                // resolve through firmware-managed links. As with managed writes,
+                // trust that prefix while rejecting links below it in the temp path.
+                let base = config
+                    .nginx
+                    .root_dir
+                    .ancestors()
+                    .find(|base| path.starts_with(base))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("temp_dir and nginx root require an absolute path")
+                    })?;
+                if let Err(error) = nginx::ensure_no_symlink_ancestors(base, path) {
+                    bail!("invalid nginx temp_dir {}: {error}", path.display());
+                }
                 std::fs::create_dir_all(path)?;
             }
         }
@@ -979,10 +1116,18 @@ impl FileTransaction {
         self.committed = true;
     }
 
+    pub(crate) fn mark_committed(&mut self) {
+        self.committed = true;
+    }
+
     pub fn rollback(&mut self) -> Result<()> {
         for (path, content) in self.previous.iter().rev() {
             match content {
-                Some(bytes) => nginx::atomic_write(path, bytes)?,
+                Some(backup) => nginx::atomic_write_with_permissions(
+                    path,
+                    &backup.bytes,
+                    Some(&backup.permissions),
+                )?,
                 None => match std::fs::remove_file(path) {
                     Ok(()) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1642,6 +1787,56 @@ routes = [{path = "/static/", limit_policy = "assets"}]
         );
     }
     #[test]
+    fn settings_save_accepts_entware_prefix_and_rejects_temp_symlinks() {
+        use std::{fs, os::unix::fs::symlink};
+        let temp = tempfile::tempdir().unwrap();
+        let physical = temp.path().join("usb/entware");
+        fs::create_dir_all(&physical).unwrap();
+        symlink("usb/entware", temp.path().join("mounted-opt")).unwrap();
+        symlink("mounted-opt", temp.path().join("opt")).unwrap();
+        let prefix = temp.path().join("opt");
+        let mut config = crate::config::AppConfig::default();
+        config.nginx.root_dir = prefix.join("etc/nginx");
+        config.nginx.inputs_dir = prefix.join("etc/router-hub/nginx");
+        let temp_dir = prefix.join("var/tmp/nginx");
+        let mut global = GlobalSettings::default();
+        global.shared.insert(
+            "temp_dir".into(),
+            temp_dir.to_string_lossy().into_owned().into(),
+        );
+        let files = [(global_path(&config), encode_global(&global).unwrap())].into();
+        FileTransaction::apply(&config, files).unwrap().commit();
+        assert!(physical.join("var/tmp/nginx").is_dir());
+        let original = fs::read(global_path(&config)).unwrap();
+
+        // Trust the configured installation prefix, not links beneath it.
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        symlink(&outside, prefix.join("var/redirect")).unwrap();
+        symlink(&outside, prefix.join("var/tmp/redirect")).unwrap();
+        symlink(&outside, temp.path().join("external-link")).unwrap();
+        for path in [
+            prefix.join("var/redirect/nginx"),
+            prefix.join("var/tmp/redirect"),
+            temp.path().join("external-link/nginx"),
+            prefix.join("var/../tmp/nginx"),
+        ] {
+            global.shared.insert(
+                "temp_dir".into(),
+                path.to_string_lossy().into_owned().into(),
+            );
+            let files = [(global_path(&config), encode_global(&global).unwrap())].into();
+            assert!(
+                FileTransaction::apply(&config, files).is_err(),
+                "{}",
+                path.display()
+            );
+            assert_eq!(fs::read(global_path(&config)).unwrap(), original);
+        }
+        assert!(!outside.join("nginx").exists());
+    }
+
+    #[test]
     fn file_transaction_restores_bytes_and_rejects_symlinks() {
         use std::fs;
         let temp = tempfile::tempdir().unwrap();
@@ -1750,6 +1945,43 @@ routes = [{path = "/static/", limit_policy = "assets"}]
         fs::remove_file(&input).unwrap();
         std::os::unix::fs::symlink(root.join("outside"), &input).unwrap();
         assert!(load_global(&config).is_err());
+    }
+    #[test]
+    fn nginx_daemon_defaults_on_for_all_platforms_and_test_modes() {
+        let temp = tempfile::tempdir().unwrap();
+        let env = environment(&BTreeMap::new()).unwrap();
+        let template = env.get_template("nginx.conf.jinja").unwrap();
+        assert!(
+            template
+                .render(minijinja::value::Serde(Settings::new()))
+                .unwrap()
+                .contains("daemon on;")
+        );
+        for platform in [
+            crate::config::Platform::Asuswrt,
+            crate::config::Platform::Linux,
+        ] {
+            for test_mode in [false, true] {
+                let mut config = crate::config::AppConfig {
+                    platform,
+                    test_mode,
+                    ..Default::default()
+                };
+                config.nginx.inputs_dir = temp.path().join("inputs");
+                let settings = load_global(&config).unwrap();
+                assert_eq!(settings.shared["nginx_daemon"], true);
+                for daemon in [true, false] {
+                    let mut settings = settings.clone();
+                    settings.shared.insert("nginx_daemon".into(), daemon.into());
+                    let settings = with_path_defaults(settings, &config);
+                    assert_eq!(settings.shared["nginx_daemon"], daemon);
+                    let output = template
+                        .render(minijinja::value::Serde(runtime_context(&settings, false)))
+                        .unwrap();
+                    assert!(output.contains(if daemon { "daemon on;" } else { "daemon off;" }));
+                }
+            }
+        }
     }
     #[test]
     fn worker_user_depends_on_effective_root_privileges() {

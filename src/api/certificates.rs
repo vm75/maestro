@@ -16,16 +16,30 @@ use crate::{
 };
 
 async fn reconcile_http_challenges(state: &AppState) -> Result<(), ApiError> {
-    crate::nginx::reconcile_http_forwarder(&state.config).map_err(ApiError::internal)?;
+    let _guard = state.nginx_lock.lock().await;
+    let mut transaction = crate::nginx_render::FileTransaction::apply(
+        &state.config,
+        crate::nginx::http_forwarder_files(&state.config)?,
+    )?;
+    let test = api::nginx::nginx_test(state).await?;
+    if !test.success {
+        return Err(ApiError::conflict(format!(
+            "nginx rejected certificate routes: {}",
+            test.stderr
+        )));
+    }
     if api::nginx::is_running(state).await {
-        let result = api::nginx::reload(State(state.clone())).await?.0;
+        let result = api::nginx::nginx_reload(state).await?;
         if !result.success {
+            transaction.rollback()?;
+            let _ = api::nginx::nginx_reload(state).await;
             return Err(ApiError::conflict(format!(
                 "nginx reload failed after updating certificate routes: {}",
                 result.stderr
             )));
         }
     }
+    transaction.commit();
     Ok(())
 }
 
@@ -36,6 +50,19 @@ pub async fn list(State(state): State<AppState>) -> Json<Vec<CertificateStatus>>
         statuses.push(state.certificate_status(spec).await);
     }
     Json(statuses)
+}
+
+pub async fn http_access_status(
+    State(state): State<AppState>,
+) -> Result<Json<crate::certificate_http::Status>, ApiError> {
+    Ok(Json(crate::certificate_http::status(&state.config)?))
+}
+
+pub async fn close_http_access(
+    State(state): State<AppState>,
+) -> Result<Json<crate::certificate_http::Status>, ApiError> {
+    state.close_http_access().await?;
+    Ok(Json(crate::certificate_http::status(&state.config)?))
 }
 
 pub async fn create(
@@ -189,6 +216,14 @@ fn validate(spec: &CertificateSpec) -> Result<(), ApiError> {
         ));
     }
     for domain in &spec.domains {
+        crate::state::validate_domain(domain).map_err(ApiError::bad_request)?;
+        if matches!(spec.method, crate::models::CertificateMethod::Http)
+            && (domain.starts_with("*.") || domain.contains('_'))
+        {
+            return Err(ApiError::bad_request(
+                "HTTP-01 requires literal DNS hostnames without wildcards or underscores",
+            ));
+        }
         if domain.is_empty()
             || domain.chars().any(|c| {
                 c.is_whitespace() || matches!(c, '#' | '>' | '\\' | '\'' | '"' | '/' | ':')

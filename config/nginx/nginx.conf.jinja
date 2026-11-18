@@ -37,4 +37,4 @@ http {
     include domains-enabled/*/subdomains-enabled/*.conf;
 }
 
-daemon {{ 'on' if nginx_daemon | default(false) else 'off' }};
+daemon {{ 'on' if nginx_daemon | default(true) else 'off' }};

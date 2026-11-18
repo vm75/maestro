@@ -6,7 +6,14 @@ SCRIPT_DIR="$(CDPATH= cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(CDPATH= cd "$SCRIPT_DIR/.." && pwd)"
 DATA_DIR="$WORKSPACE_DIR/data"
 
-HOST="dwar"
+# Local, trusted Bash assignments; never commit deployment settings.
+if [[ -f "$WORKSPACE_DIR/.env" ]]; then
+    source "$WORKSPACE_DIR/.env"
+fi
+
+HOST="${SYNC_DATA_HOST:-}"
+ROUTER_HOME="${SYNC_DATA_ROUTER_HOME:-/opt/home/admin}"
+ROUTER_HOME="${ROUTER_HOME%/}"
 DRY_RUN=0
 
 usage() {
@@ -19,7 +26,7 @@ Usage:
 
 Options:
   -t          Test mode; pass --dry-run to rsync
-  -s <server>   Remote SSH server (default: dwar)
+  -s <server>   Remote SSH server (default: SYNC_DATA_HOST from .env)
   -h          Show this help
 
 Configured local directories:
@@ -35,7 +42,7 @@ Configured local directories:
   jffs/www
   opt/var/log
   vaultwarden
-  opt/home/shasak/.certs
+  ${ROUTER_HOME#/}/.certs
 
 A directory may also be specified by its final component:
 
@@ -94,7 +101,7 @@ LOCAL_PATHS=(
     "jffs/www"
     "opt/var/log"
     "vaultwarden"
-    "opt/home/shasak/.certs"
+    "${ROUTER_HOME#/}/.certs"
 )
 
 REMOTE_PATHS=(
@@ -109,8 +116,8 @@ REMOTE_PATHS=(
     "/jffs/scripts"
     "/jffs/www"
     "/opt/var/log"
-    "/opt/home/shasak/.local/share/vaultwarden/.env"
-    "/opt/home/shasak/.certs"
+    "$ROUTER_HOME/.local/share/vaultwarden/.env"
+    "$ROUTER_HOME/.certs"
 )
 
 ITEM_TYPES=(
@@ -249,6 +256,8 @@ case "$COMMAND" in
     get|put)
         [[ $# -eq 2 ]] ||
             die "$COMMAND requires exactly one argument: <local-dir|all>"
+
+        [[ -n "$HOST" ]] || die "Set SYNC_DATA_HOST in .env or pass -s <server>"
 
         sync_selection "$COMMAND" "$SELECTION"
         ;;

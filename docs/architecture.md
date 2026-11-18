@@ -30,6 +30,9 @@ ipset/iptables, NVRAM, and optionally an AdGuard Home HTTP API.
 | `src/storage.rs` | Load/save JSON stores with atomic replacement, dehydrated certificate discovery, and policy fallback | configured data paths |
 | `src/command.rs` | External command boundary, timeout handling, test-mode simulation | configured executable paths |
 | `src/nginx_render.rs` | Embedded Jinja policies, validated shared/site settings, shared-tree rendering and rollback | nginx settings TOML and rendered runtime files |
+| `src/nginx_ingress.rs` | Typed listener/source rules, validation, inherited access resolution, geo/default-server output and preview | `nginx_render`, `nginx_sites` |
+| `src/nginx_mutation.rs` | Object mutation snapshot and rollback of inputs, generated outputs, modes and enabled links | `nginx`, `nginx_render` |
+| `src/certificate_http.rs` | Serialized HTTP-01 session transitions, challenge readiness, scoped WAN lease and startup recovery | `state`, `nginx_ingress`, `CommandRunner` |
 | `src/nginx.rs` | Nginx object tree, upstream data fragments, HTTP forwarder, logs, symlinks, atomic writes | configured nginx filesystem |
 | `src/firewall.rs`, `src/ban_attack/` | Rule compilation, log tailing, aggregation, persistence, firewall backend | configured logs and ipset/iptables |
 | `src/asus_ui.rs` | Standalone UI rendering, ASP extraction, extension-page and menu-tree updates | `web/index.html`, ASUS template, configured ASUS paths |
@@ -65,7 +68,9 @@ Nginx site changes also maintain the configured auxiliary includes. Subdomain
 aliases are entries in the hostname upstream map; subfolder names are entries
 in both the request-URI selector and the subfolder upstream map. The HTTP
 forwarder is regenerated from enabled domain and subdomain `server_name`
-values, so it provides a default HTTP-to-HTTPS redirect for every active site.
+values according to each selected profile and the shared HTTP mode. Only
+explicitly eligible profiles contribute redirects; renewal-only mode instead
+emits a temporary challenge-only server from certificate names.
 The shipped domain roots and templates do not declare a second port-80 server.
 Existing upstream data entries not owned by the edited site are retained.
 Configurations are manually ported before deployment; the service has no legacy
@@ -82,7 +87,19 @@ background loops, and serves the Axum router. Authenticated API calls
 then validate input, update the relevant filesystem/store, and invoke external
 commands through the command boundary when needed.
 Startup also reconciles existing site upstream-map entries and regenerates the
-HTTP-to-HTTPS forwarder include before nginx is managed.
+HTTP ingress includes. Startup closes stale renewal-only access before
+certificate work begins. Certificate batches hold one operation guard; HTTP
+transitions lock HTTP state before the nginx mutation lock, releasing the latter
+before ACME waits. Global saves use a nonblocking HTTP transition guard while
+holding nginx state to avoid inverted-lock deadlocks. All rendering consults the
+same persisted active-session intent. Owned certificate tasks survive caller
+disconnect; shutdown notifies their process-group cancellation and awaits closure.
+WAN acceptance has a bounded kernel lease, but local listener closure after
+abrupt death needs startup recovery. Validation-only nginx preflight inventories expanded `nginx -T`
+includes and rejects authored HTTP listeners on challenge ports. Certificate
+closure uses the syntax-only preflight so it still removes managed listeners
+when authored conflicts remain, then reports those conflicts as cleanup errors.
+See [operational limits](nginx-ingress.md).
 
 The firewall loop securely opens exact regular files below configured roots,
 detects rotation using device/inode and byte anchors, applies bounded
@@ -97,7 +114,10 @@ or renews definitions marked for automatic renewal.
 When certs_dir/lock exists, the loop and certificate API skip issue/renew
 operations until an authenticated clear action removes the lock. Issuance writes the matching
 `<name>.cfg` and `<name>.txt` files first, then invokes dehydrated's `--cron`
-command; Router Hub's loop replaces a separate cron installation. An explicit
+command; Router Hub's loop replaces a separate cron installation. Successful
+standard dehydrated output is deployed into nginx's certificate directory under
+the nginx mutation lock. Validation and reload failures restore the previous
+deployed files; custom hooks without standard output retain deployment ownership. An explicit
 management action can atomically replace the dehydrated executable with the
 official GitHub raw script; hook files are left untouched.
 

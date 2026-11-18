@@ -42,6 +42,19 @@ are missing, rather than treating the installation as empty. Back up the new
 input directory and custom nginx files thereafter. To downgrade, restore the
 matching legacy inputs and binary from the pre-upgrade backup.
 
+## Named ingress and renewal-only HTTP
+
+Sites without a listener assignment retain the synthesized `legacy` listener.
+Old `enable_lanonly`/allowlist settings remain supported; do not combine an
+explicit `access_policy` with `enable_lanonly` in the same settings object.
+Existing global inputs without `http_access` keep always-on HTTP behavior.
+Changing to validation-only is explicit and removes ordinary HTTP redirects.
+Back up inputs and custom objects, inventory custom listeners and permanent
+forwarding rules, then configure and verify the desired WAN lifecycle before
+turning on renewal-only mode. New inputs default to renewal-only with no
+automatic WAN adapter configured. See [ingress operations](nginx-ingress.md)
+for source-address caveats, firmware verification and crash-recovery limits.
+
 ## Versions older than 0.7.2
 
 First install and run 0.7.2 using the same configuration and state directory.
