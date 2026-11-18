@@ -11,6 +11,8 @@ Router Hub follows [Semantic Versioning](https://semver.org/).
   `http2 on` directive, which requires nginx 1.25.1+ with HTTP/2 support.
 - Resolve nginx and OpenSSL from PATH in the live ingress test instead of
   assuming the development host's executable locations.
+- Build nginx listener directives and retained map rows without intermediate
+  formatted strings to satisfy the Rust 1.85 Clippy release checks.
 
 ## 0.10.0
 

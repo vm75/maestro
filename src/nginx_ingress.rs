@@ -428,11 +428,12 @@ pub fn context(
     }
     if selected != "legacy" && kind != NginxObjectKind::Subfolder {
         let profile = &global.listener_profiles[&selected];
-        let directives = profile
-            .https
-            .iter()
-            .map(|endpoint| format!("listen {} ssl;\n", endpoint.socket()))
-            .collect::<String>();
+        let mut directives = String::new();
+        for endpoint in &profile.https {
+            directives.push_str("listen ");
+            directives.push_str(&endpoint.socket());
+            directives.push_str(" ssl;\n");
+        }
         context.insert("_rh_listens".into(), directives.into());
     }
     // Validate Host even when TLS selected this server using a different SNI.

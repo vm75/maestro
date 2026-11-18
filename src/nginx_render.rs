@@ -885,8 +885,11 @@ pub fn shared_files(
                     })
                 })
             })
-            .map(|line| format!("{line}\n"))
-            .collect::<String>();
+            .fold(String::new(), |mut content, line| {
+                content.push_str(line);
+                content.push('\n');
+                content
+            });
         if let Some(upstream) = site.upstream.filter(|value| !value.trim().is_empty()) {
             for key in keys {
                 content.push_str(&format!("{key} {upstream};\n"));
