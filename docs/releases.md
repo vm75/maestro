@@ -24,6 +24,9 @@ Release publication. Tags must match Cargo's version and point to commits
 already merged into `main`. A prerelease tag publishes a GitHub prerelease.
 No release workflow installs anything onto a router automatically.
 
+CI and release tests install nginx.org stable packages from its signed Ubuntu
+repository using the shared setup action. The bundled nginx configuration
+requires nginx 1.25.1+ with the HTTP/2 module; the setup checks both before tests.
 
 ## Publish the next release
 
