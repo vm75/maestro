@@ -12,9 +12,9 @@ bash scripts/package-ipk.sh v0.10.2 aarch64-unknown-linux-musl "$TMP/router-hub"
   cd dist
   sha256sum -c "$NAME.sha256"
 )
-test "$(ar t "dist/$NAME" | tr '\n' ' ')" = "debian-binary control.tar.gz data.tar.gz "
-ar p "dist/$NAME" control.tar.gz > "$TMP/control.tar.gz"
-ar p "dist/$NAME" data.tar.gz > "$TMP/data.tar.gz"
+test "$(tar -tzf "dist/$NAME" | tr '\n' ' ')" = "./debian-binary ./control.tar.gz ./data.tar.gz "
+tar -xzOf "dist/$NAME" ./control.tar.gz > "$TMP/control.tar.gz"
+tar -xzOf "dist/$NAME" ./data.tar.gz > "$TMP/data.tar.gz"
 tar -xOzf "$TMP/control.tar.gz" ./control | grep -Fx 'Architecture: aarch64-3.10'
 tar -tzf "$TMP/control.tar.gz" | grep -Fx './postinst'
 tar -tzf "$TMP/control.tar.gz" | grep -Fx './prerm'

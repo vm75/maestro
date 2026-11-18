@@ -64,10 +64,17 @@ The CLI checks GitHub's **latest stable** release and compares it against its
 compiled version. If newer, it downloads the matching AArch64 Entware IPK and
 its SHA-256 checksum, verifies the checksum, then stages the file as
 `/tmp/router-hub_<version>-1_aarch64-3.10.ipk`. When called as root with an
-available compatible `/opt/bin/opkg`, it attempts `opkg install` directly.
+available compatible `/opt/bin/opkg`, it replaces the one-shot upgrade process
+with `opkg install` so the package lifecycle can safely stop the running Router
+Hub daemon.
 Otherwise (including `--download-only`) it prints the exact manual command.
-If opkg fails, it retains the verified package in `/tmp` and prints the retry
-command. Network or checksum errors abort without installing.
+If opkg fails, the verified package remains in `/tmp`; the retry command is
+printed before launching opkg. Network or checksum errors abort without
+installing. During installation, `prerm` stops the running service and `postinst`
+executes `migrate-nginx-inputs`, then `init-nginx`, validates the configuration,
+and restarts the service. A migration or configuration failure stops the install
+hook and leaves the service stopped for administrator review; it never deletes
+existing persistent state or silently claims rollback of the installed binary.
 
 This is a separate CLI process, **not** an authenticated API/UI action.
 `upgrade` is rejected on native Linux and simulated test-mode runs. The

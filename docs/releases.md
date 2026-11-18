@@ -25,7 +25,7 @@ Release publication. Tags must match Cargo's version and point to commits
 already merged into `main`. A prerelease tag publishes a GitHub prerelease.
 IPKs are published only for strict stable `vMAJOR.MINOR.PATCH` tags; prerelease
 tags continue to publish tarballs only. The IPK builder uses the existing
-static musl binary and standard `ar`/`tar` tools. `router-hub upgrade` on a
+static musl binary and gzip-tar IPK archives supported by Entware. `router-hub upgrade` on a
 live Asuswrt-Merlin router verifies the stable IPK checksum before invoking
 `opkg install`, or prints the manual command if it cannot install.
 No release workflow installs anything onto a router automatically.

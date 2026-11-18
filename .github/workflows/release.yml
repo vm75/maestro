@@ -110,8 +110,8 @@ jobs:
             version="${RELEASE_TAG#v}"
             ipk="router-hub_${version}-1_aarch64-3.10.ipk"
             (cd dist && sha256sum -c "$ipk.sha256")
-            ar t "dist/$ipk" | grep -Fx 'control.tar.gz'
-            ar p "dist/$ipk" control.tar.gz | tar -xzO ./control | grep -Fx 'Architecture: aarch64-3.10'
+            tar -tzf "dist/$ipk" | grep -Fx './control.tar.gz'
+            tar -xzOf "dist/$ipk" ./control.tar.gz | tar -xzO ./control | grep -Fx 'Architecture: aarch64-3.10'
           else
             echo "IPK publication is limited to stable SemVer releases."
           fi

@@ -68,7 +68,9 @@ tar -C "$CONTROL" -czf "$META/control.tar.gz" .
 tar -C "$DATA" -czf "$META/data.tar.gz" .
 (
   cd "$META"
-  ar rcs "$REPO_DIR/dist/$NAME" debian-binary control.tar.gz data.tar.gz
+  # Entware's IPK indexer expects a gzip tar outer archive (not Debian ar).
+  tar --numeric-owner --owner=0 --group=0 -czf "$REPO_DIR/dist/$NAME" \
+    ./debian-binary ./control.tar.gz ./data.tar.gz
 )
 (
   cd dist

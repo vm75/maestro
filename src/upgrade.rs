@@ -1,5 +1,11 @@
 //! Router-only, command-line Entware upgrades. No HTTP route exposes this operation.
-use std::{path::{Path, PathBuf}, process::Command as ProcessCommand, time::Duration};
+use std::{
+    io::Write,
+    os::unix::process::CommandExt,
+    path::{Path, PathBuf},
+    process::Command as ProcessCommand,
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
@@ -211,21 +217,13 @@ pub async fn run(download_only: bool) -> Result<()> {
         return Ok(());
     }
 
+    // The prerm hook stops all processes named router-hub. Replace this CLI
+    // process with opkg so it cannot kill the process performing the upgrade.
     println!("Installing {} through Entware...", release.tag_name);
-    match ProcessCommand::new(OPKG).arg("install").arg(&target).status() {
-        Ok(status) if status.success() => {
-            println!("Entware installed {} successfully.", release.tag_name);
-            Ok(())
-        }
-        Ok(status) => {
-            println!("Automatic installation failed (exit status: {status}). Retry manually: {command}");
-            bail!("opkg installation failed; the verified IPK remains in /tmp")
-        }
-        Err(error) => {
-            println!("Unable to launch opkg ({error}). Run manually: {command}");
-            bail!("opkg could not be started; the verified IPK remains in /tmp")
-        }
-    }
+    println!("If installation fails, the verified IPK remains in /tmp. Retry: {command}");
+    std::io::stdout().flush()?;
+    let error = ProcessCommand::new(OPKG).arg("install").arg(&target).exec();
+    bail!("unable to launch opkg ({error}). Run manually: {command}")
 }
 
 #[cfg(test)]

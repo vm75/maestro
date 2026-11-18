@@ -8,7 +8,8 @@ Router Hub follows [Semantic Versioning](https://semver.org/).
 
 - Publish a verified Entware `aarch64-3.10` IPK alongside stable AArch64
   tarball releases, with package-managed service lifecycle hooks and shared
-  installation initialization that preserves existing configuration and state.
+  installation initialization that migrates nginx inputs when required and
+  preserves existing configuration and state.
 - Add router-only `router-hub upgrade` to find the newest stable GitHub
   release, verify its IPK checksum, stage it under `/tmp`, and run Entware
   `opkg install` when possible. `--download-only` prints the manual command.
