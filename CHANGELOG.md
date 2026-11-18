@@ -9,6 +9,8 @@ Router Hub follows [Semantic Versioning](https://semver.org/).
 - Install supported nginx.org stable packages in CI and release jobs before
   integration tests. The runner's distribution nginx rejects the bundled
   `http2 on` directive, which requires nginx 1.25.1+ with HTTP/2 support.
+- Resolve nginx and OpenSSL from PATH in the live ingress test instead of
+  assuming the development host's executable locations.
 
 ## 0.10.0
 
