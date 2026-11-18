@@ -81,11 +81,7 @@ fn checksum_digest(contents: &str, filename: &str) -> Result<String> {
     Ok(digest.to_ascii_lowercase())
 }
 
-async fn request_bytes(
-    client: &reqwest::Client,
-    url: &str,
-    limit: u64,
-) -> Result<Vec<u8>> {
+async fn request_bytes(client: &reqwest::Client, url: &str, limit: u64) -> Result<Vec<u8>> {
     let mut response = client.get(url).send().await?.error_for_status()?;
     if let Some(length) = response.content_length() {
         ensure!(length <= limit, "download is larger than the permitted limit");
@@ -160,10 +156,10 @@ pub async fn run(download_only: bool) -> Result<()> {
         );
     }
     let base = format!("{RELEASE_BASE}/{}/", release.tag_name);
-    let expected_bytes =
-        request_bytes(&client, &format!("{base}{checksum_name}"), MAX_CHECKSUM_BYTES)
-            .await
-            .context("unable to download release checksum")?;
+    let checksum_url = format!("{base}{checksum_name}");
+    let expected_bytes = request_bytes(&client, &checksum_url, MAX_CHECKSUM_BYTES)
+        .await
+        .context("unable to download release checksum")?;
     let checksum = String::from_utf8(expected_bytes).context("non-UTF-8 checksum file")?;
     let expected = checksum_digest(&checksum, &name)?;
 
