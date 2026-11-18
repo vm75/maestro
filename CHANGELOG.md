@@ -13,6 +13,8 @@ Router Hub follows [Semantic Versioning](https://semver.org/).
   assuming the development host's executable locations.
 - Build nginx listener directives and retained map rows without intermediate
   formatted strings to satisfy the Rust 1.85 Clippy release checks.
+- Wait for a complete mock issuer log record before asserting on concurrent
+  certificate renewal, avoiding a race with creation of the empty log file.
 
 ## 0.10.0
 

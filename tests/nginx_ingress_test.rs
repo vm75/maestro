@@ -485,9 +485,18 @@ async fn automatic_http_batch_survives_one_failure_and_preserves_concurrent_sett
     ]);
     state.start_certificate_renewal_loop();
     let log = state.config.paths.data_dir.join("issued.jsonl");
-    wait_until(|| log.exists()).await;
-    let first: Value =
-        serde_json::from_str(fs::read_to_string(&log).unwrap().lines().next().unwrap()).unwrap();
+    let mut first = None;
+    wait_until(|| {
+        first = fs::read_to_string(&log).ok().and_then(|content| {
+            content
+                .lines()
+                .next()
+                .and_then(|line| serde_json::from_str::<Value>(line).ok())
+        });
+        first.is_some()
+    })
+    .await;
+    let first = first.unwrap();
     assert!(
         first["http"]
             .as_str()
