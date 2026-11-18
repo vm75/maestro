@@ -17,6 +17,7 @@ mod state;
 mod storage;
 mod system;
 mod util;
+mod upgrade;
 
 use std::{
     net::{IpAddr, SocketAddr},
@@ -66,6 +67,12 @@ enum Command {
     RenderUi,
     MountUi,
     UnmountUi,
+    /// Download the newest stable Entware IPK and optionally install it (router only).
+    Upgrade {
+        /// Verify and stage the IPK in /tmp without invoking opkg.
+        #[arg(long)]
+        download_only: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -88,6 +95,13 @@ fn main() -> Result<()> {
     config.validate()?;
 
     match cli.command.unwrap_or(Command::Serve) {
+        Command::Upgrade { download_only } => {
+            upgrade::require_router(config.platform, config.test_mode)?;
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(upgrade::run(download_only))
+        }
         Command::CheckConfig => {
             println!("configuration is valid: {}", cli.config.display());
             Ok(())
