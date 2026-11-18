@@ -62,6 +62,9 @@ jobs:
       - name: Check formatting
         run: cargo +1.85.0 fmt --all -- --check
 
+      - name: Set up supported nginx for integration tests
+        uses: ./.github/actions/setup-nginx
+
       - name: Run tests
         run: cargo +1.85.0 test --locked
 

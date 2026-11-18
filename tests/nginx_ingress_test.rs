@@ -485,9 +485,18 @@ async fn automatic_http_batch_survives_one_failure_and_preserves_concurrent_sett
     ]);
     state.start_certificate_renewal_loop();
     let log = state.config.paths.data_dir.join("issued.jsonl");
-    wait_until(|| log.exists()).await;
-    let first: Value =
-        serde_json::from_str(fs::read_to_string(&log).unwrap().lines().next().unwrap()).unwrap();
+    let mut first = None;
+    wait_until(|| {
+        first = fs::read_to_string(&log).ok().and_then(|content| {
+            content
+                .lines()
+                .next()
+                .and_then(|line| serde_json::from_str::<Value>(line).ok())
+        });
+        first.is_some()
+    })
+    .await;
+    let first = first.unwrap();
     assert!(
         first["http"]
             .as_str()
@@ -755,11 +764,17 @@ fn install_site_with_names(
 
 #[tokio::test]
 async fn live_nginx_separates_ingress_and_blocks_paths_before_upstream() {
-    let nginx_bin = PathBuf::from("/usr/sbin/nginx");
-    if !nginx_bin.exists() {
+    let paths = std::env::var_os("PATH").unwrap_or_default();
+    let program = |name: &str| {
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join(name))
+            .find(|path| path.is_file())
+    };
+    let Some(nginx_bin) = program("nginx") else {
         eprintln!("nginx missing: live ingress test skipped");
         return;
-    }
+    };
+    let openssl = program("openssl").expect("live ingress test requires openssl");
     let (_temp, state) = setup().await;
     let config = &state.config;
     let ports = available_ports(4);
@@ -1348,6 +1363,7 @@ async fn live_nginx_separates_ingress_and_blocks_paths_before_upstream() {
     let mut real_config = (**config).clone();
     real_config.test_mode = false;
     real_config.commands.nginx = nginx_bin.clone();
+    real_config.commands.openssl = openssl;
     real_config.nginx.prefix_path = Some(config.nginx.root_dir.clone());
     let deployed = config
         .nginx

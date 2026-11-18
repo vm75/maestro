@@ -2,6 +2,20 @@
 
 Router Hub follows [Semantic Versioning](https://semver.org/).
 
+## 0.10.1
+
+### Fixed
+
+- Install supported nginx.org stable packages in CI and release jobs before
+  integration tests. The runner's distribution nginx rejects the bundled
+  `http2 on` directive, which requires nginx 1.25.1+ with HTTP/2 support.
+- Resolve nginx and OpenSSL from PATH in the live ingress test instead of
+  assuming the development host's executable locations.
+- Build nginx listener directives and retained map rows without intermediate
+  formatted strings to satisfy the Rust 1.85 Clippy release checks.
+- Wait for a complete mock issuer log record before asserting on concurrent
+  certificate renewal, avoiding a race with creation of the empty log file.
+
 ## 0.10.0
 
 ### Changed

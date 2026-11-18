@@ -1,0 +1,30 @@
+name: Set up supported nginx
+description: Install nginx.org stable packages for the bundled HTTP/2 configuration.
+runs:
+  using: composite
+  steps:
+    - name: Install nginx from its signed upstream repository
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends curl ca-certificates gnupg openssl
+        key_file="$RUNNER_TEMP/nginx-signing.key"
+        curl --fail --silent --show-error --location \
+          https://nginx.org/keys/nginx_signing.key --output "$key_file"
+        gpg --show-keys --with-colons "$key_file" |
+          grep -Fx 'fpr:::::::::573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62:'
+        gpg --batch --yes --dearmor --output "$RUNNER_TEMP/nginx-keyring.gpg" "$key_file"
+        sudo install -m 0644 "$RUNNER_TEMP/nginx-keyring.gpg" /usr/share/keyrings/nginx-archive-keyring.gpg
+        . /etc/os-release
+        printf 'deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/ubuntu %s nginx\n' "$VERSION_CODENAME" |
+          sudo tee /etc/apt/sources.list.d/nginx.list
+        printf 'Package: nginx*\nPin: origin nginx.org\nPin-Priority: 900\n' |
+          sudo tee /etc/apt/preferences.d/99nginx
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends nginx
+        sudo systemctl stop nginx
+        nginx -V
+        version=$(nginx -v 2>&1 | sed -n 's|^nginx version: nginx/||p')
+        dpkg --compare-versions "$version" ge 1.25.1
+        nginx -V 2>&1 | grep -F -- --with-http_v2_module
