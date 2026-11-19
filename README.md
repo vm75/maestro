@@ -121,7 +121,7 @@ security, nginx settings, and firewall tuning.
 | [Development](docs/development.md) | Prerequisites, local checks, certificate tests, API overview |
 | [Linux integration](docs/linux.md) | Real-service lab setup and smoke tests |
 | [Architecture](docs/architecture.md) | Components, data flows, persistence, invariants |
-| [CI and releases](docs/releases.md) | Main and opt-in CI, manual PR checks, automatic version tagging, publishing |
+| [CI and releases](docs/releases.md) | Router Hub publishing and manual NGINX IPK build/release workflow |
 | [Nginx bundle](config/nginx/README.md) | Site options, route policies, templates, validation |
 | [Changelog](CHANGELOG.md) | Release history |
 
