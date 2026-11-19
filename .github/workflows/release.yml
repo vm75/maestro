@@ -131,7 +131,10 @@ jobs:
           set -euo pipefail
           options=(--verify-tag --generate-notes --title "$RELEASE_TAG")
           if [[ "$RELEASE_TAG" == *-* ]]; then
-            options+=(--prerelease)
+            options+=(--prerelease --latest=false)
+          else
+            # NGINX releases share this repo but must never displace Router Hub.
+            options+=(--latest=true)
           fi
           shopt -s nullglob
           assets=(dist/*.tar.gz dist/*.sha256 dist/*.ipk)
