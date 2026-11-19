@@ -2,6 +2,7 @@ mod adguard;
 mod api;
 mod asus_ui;
 mod auth;
+mod backup;
 mod ban_attack;
 mod certificate_http;
 mod command;
@@ -13,6 +14,7 @@ mod nginx_ingress;
 mod nginx_mutation;
 mod nginx_render;
 mod nginx_sites;
+mod restore;
 mod state;
 mod storage;
 mod system;
@@ -67,11 +69,27 @@ enum Command {
     RenderUi,
     MountUi,
     UnmountUi,
+    /// Back up the installed binary, configuration, state, nginx and certificates.
+    Backup {
+        /// Override /tmp on routers or the configuration directory on Linux.
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+    },
+    /// Restore a backup archive; stop services before restoring original locations.
+    Restore {
+        archive: PathBuf,
+        /// Restore beneath this existing directory instead of /.
+        #[arg(long, default_value = "/")]
+        root: PathBuf,
+    },
     /// Download the newest stable Entware IPK and optionally install it (router only).
     Upgrade {
         /// Verify and stage the IPK in /tmp without invoking opkg.
         #[arg(long)]
         download_only: bool,
+        /// Skip creating the pre-upgrade backup.
+        #[arg(long)]
+        no_backup: bool,
     },
 }
 
@@ -85,6 +103,10 @@ fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    // Recovery must remain available when the installed configuration is corrupt.
+    if let Some(Command::Restore { archive, root }) = &cli.command {
+        return restore::run(archive, root, cli.test_mode);
+    }
     let mut config = AppConfig::load(&cli.config)?;
     if cli.linux_mode {
         config.platform = Platform::Linux;
@@ -95,12 +117,20 @@ fn main() -> Result<()> {
     config.validate()?;
 
     match cli.command.unwrap_or(Command::Serve) {
-        Command::Upgrade { download_only } => {
+        Command::Restore { .. } => unreachable!("restore is handled before configuration loading"),
+        Command::Backup { output_dir } => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(backup::run(&config, &cli.config, output_dir.as_deref())),
+        Command::Upgrade {
+            download_only,
+            no_backup,
+        } => {
             upgrade::require_router(config.platform, config.test_mode)?;
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?
-                .block_on(upgrade::run(download_only))
+                .block_on(upgrade::run(&config, &cli.config, download_only, no_backup))
         }
         Command::CheckConfig => {
             println!("configuration is valid: {}", cli.config.display());
@@ -326,5 +356,56 @@ async fn shutdown_signal(state: AppState) {
     }
     if let Err(error) = state.stop_certificates().await {
         warn!(%error, "certificate HTTP cleanup failed during shutdown");
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn backup_and_upgrade_flags() {
+        let cli = Cli::try_parse_from(["router-hub", "upgrade"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Upgrade {
+                no_backup: false,
+                ..
+            })
+        ));
+        let cli = Cli::try_parse_from(["router-hub", "upgrade", "--no-backup", "--download-only"])
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Upgrade {
+                no_backup: true,
+                download_only: true
+            })
+        ));
+        let cli = Cli::try_parse_from([
+            "router-hub",
+            "--config",
+            "/lab/router-hub.toml",
+            "--linux-mode",
+            "backup",
+            "--output-dir",
+            "/lab/backups",
+        ])
+        .unwrap();
+        assert!(cli.linux_mode);
+        assert!(
+            matches!(cli.command, Some(Command::Backup { output_dir: Some(path) }) if path == PathBuf::from("/lab/backups"))
+        );
+        let cli = Cli::try_parse_from([
+            "router-hub",
+            "restore",
+            "/tmp/backup.tar.gz",
+            "--root",
+            "/tmp/recovery",
+        ])
+        .unwrap();
+        assert!(
+            matches!(cli.command, Some(Command::Restore { archive, root }) if archive == PathBuf::from("/tmp/backup.tar.gz") && root == PathBuf::from("/tmp/recovery"))
+        );
     }
 }

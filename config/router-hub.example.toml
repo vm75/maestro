@@ -14,10 +14,13 @@ data_dir = "/opt/etc/router-hub"
 runtime_dir = "/opt/var/run/router-hub"
 hosts_add = "/jffs/configs/hosts.add"
 dnsmasq_conf_add = "/jffs/configs/dnsmasq.conf.add"
+# Included in router backups; ignored on native Linux.
+jffs_scripts_dir = "/jffs/scripts"
 # Set to the path of your wg-quick configuration file. The interface name (e.g. wgs1) is derived from the filename.
 wireguard_conf = "/opt/etc/wireguard/wgs1.conf"
 
 [commands]
+tar = "/bin/tar"
 mount = "/bin/mount"
 umount = "/bin/umount"
 nginx = "/opt/sbin/nginx"

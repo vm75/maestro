@@ -7,9 +7,10 @@ reference. The main sections are:
 
 - `[server]` — bind address, port, bearer token, CORS origins, and request
   limits;
-- `[paths]` — persistent data, runtime, and configurable `hosts.add` path;
+- `[paths]` — persistent data, runtime, configurable `hosts.add` path, and
+  `jffs_scripts_dir` for router backups;
 - `[commands]` — absolute paths to nginx, Entware utilities, firewall tools,
-  dehydrated, OpenSSL, NVRAM, and network commands;
+  dehydrated, OpenSSL, NVRAM, network commands, and `tar` for backups;
 - `[asus_ui]` — extension-page rendering and ASUS menu integration;
 - `[services]` — Entware init directory, log roots, and timeouts;
 - `[nginx]` — nginx root/configuration, managed object trees, generated

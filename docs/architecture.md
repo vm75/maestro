@@ -29,6 +29,9 @@ ipset/iptables, NVRAM, and optionally an AdGuard Home HTTP API.
 | `src/state.rs` | Shared runtime state, dehydrated configuration, renewal loop, and tool updater | `storage`, `firewall`, dehydrated/OpenSSL through `CommandRunner`, GitHub HTTPS download |
 | `src/storage.rs` | Load/save JSON stores with atomic replacement, dehydrated certificate discovery, and policy fallback | configured data paths |
 | `src/command.rs` | External command boundary, timeout handling, test-mode simulation | configured executable paths |
+| `src/backup.rs` | Private CLI tar.gz backups, configured input selection, platform-specific destination, atomic publication without replacement | `config`, `CommandRunner`, configured tar |
+| `src/restore.rs` | Configuration-independent CLI recovery, complete archive staging and validation, descriptor-relative writes without following symlink parents, atomic file replacement | tar/gzip readers, rustix filesystem descriptors |
+| `src/upgrade.rs` | Router-only release verification, mandatory pre-install backup unless skipped, Entware process replacement | GitHub HTTPS, `backup`, opkg |
 | `src/nginx_render.rs` | Embedded Jinja policies, validated shared/site settings, shared-tree rendering and rollback | nginx settings TOML and rendered runtime files |
 | `src/nginx_ingress.rs` | Typed listener/source rules, validation, inherited access resolution, geo/default-server output and preview | `nginx_render`, `nginx_sites` |
 | `src/nginx_mutation.rs` | Object mutation snapshot and rollback of inputs, generated outputs, modes and enabled links | `nginx`, `nginx_render` |

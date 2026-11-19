@@ -93,6 +93,7 @@ impl AppConfig {
         self.paths.log_file = fixture_root.join("var/log/router-hub.log");
         self.paths.hosts_add = fixture_root.join("router/hosts.add");
         self.paths.dnsmasq_conf_add = fixture_root.join("router/dnsmasq.add");
+        self.paths.jffs_scripts_dir = fixture_root.join("router/scripts");
         self.paths.wireguard_conf = fixture_root.join("etc/wireguard/wg0.conf");
         self.paths.proc_stat = fixture_root.join("proc/stat");
         self.paths.proc_meminfo = fixture_root.join("proc/meminfo");
@@ -149,6 +150,7 @@ impl AppConfig {
             &mut self.paths.log_file,
             &mut self.paths.hosts_add,
             &mut self.paths.dnsmasq_conf_add,
+            &mut self.paths.jffs_scripts_dir,
             &mut self.paths.wireguard_conf,
             &mut self.paths.proc_stat,
             &mut self.paths.proc_meminfo,
@@ -156,6 +158,7 @@ impl AppConfig {
             &mut self.paths.proc_uptime,
             &mut self.paths.proc_loadavg,
             &mut self.commands.mount,
+            &mut self.commands.tar,
             &mut self.commands.umount,
             &mut self.commands.nginx,
             &mut self.commands.service,
@@ -393,6 +396,7 @@ pub struct PathsConfig {
     pub log_file: PathBuf,
     pub hosts_add: PathBuf,
     pub dnsmasq_conf_add: PathBuf,
+    pub jffs_scripts_dir: PathBuf,
     pub wireguard_conf: PathBuf,
     pub proc_stat: PathBuf,
     pub proc_meminfo: PathBuf,
@@ -409,6 +413,7 @@ impl Default for PathsConfig {
             log_file: "/opt/var/log/router-hub.log".into(),
             hosts_add: "/jffs/configs/hosts.add".into(),
             dnsmasq_conf_add: "/jffs/configs/dnsmasq.conf.add".into(),
+            jffs_scripts_dir: "/jffs/scripts".into(),
             wireguard_conf: "/opt/etc/wireguard/wg0.conf".into(),
             proc_stat: "/proc/stat".into(),
             proc_meminfo: "/proc/meminfo".into(),
@@ -422,6 +427,7 @@ impl Default for PathsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CommandsConfig {
+    pub tar: PathBuf,
     pub mount: PathBuf,
     pub umount: PathBuf,
     pub nginx: PathBuf,
@@ -442,6 +448,7 @@ pub struct CommandsConfig {
 impl Default for CommandsConfig {
     fn default() -> Self {
         Self {
+            tar: "/bin/tar".into(),
             mount: "/bin/mount".into(),
             umount: "/bin/umount".into(),
             nginx: "/opt/sbin/nginx".into(),

@@ -2,6 +2,21 @@
 
 Router Hub follows [Semantic Versioning](https://semver.org/).
 
+## 0.10.3
+
+### Added
+
+- Add `router-hub restore <archive>` with an optional `--root` inspection tree,
+  archive validation before destination writes, and atomic file replacement.
+  Recovery works with missing or invalid configuration; `--test-mode` validates
+  without restoring files.
+- Add `router-hub backup` to archive configuration, persistent state, nginx,
+  certificates, the installed executable and router hooks. Router backups go to
+  `/tmp`; Linux backups go alongside the selected configuration file.
+- Create a backup before upgrading to a newer release, including download-only
+  upgrades. `--no-backup` skips the backup; a backup failure otherwise aborts
+  installation.
+
 ## 0.10.2
 
 ### Added

@@ -52,12 +52,106 @@ binary and init script. Existing `/opt/etc/router-hub` settings, certificate
 files and persistent state are left intact. Removing the IPK also intentionally
 leaves administrator-created configuration, data and JFFS hooks in place.
 
+### Backups
+
+Create a backup from the installed binary:
+
+```sh
+/opt/bin/router-hub backup
+```
+
+On routers this writes `/tmp/router-hub-backup-YYYYMMDD-HHMMSS.tar.gz` using
+local time. Copy it off the router before rebooting, since `/tmp` is temporary.
+On native Linux (`platform = "linux"` or `--linux-mode`), the archive is saved
+alongside the configuration file selected by `--config`:
+
+```sh
+router-hub --config /etc/router-hub/router-hub.toml --linux-mode backup
+# Optional existing destination directory on either platform:
+router-hub --config /etc/router-hub/router-hub.toml --linux-mode backup --output-dir /srv/backups
+```
+
+The archive includes the configuration directory, running executable, configured
+persistent state, nginx root and separately configured nginx inputs/includes,
+certificate store, dehydrated executable, and existing `S99router-hub` init script.
+Router backups also include `paths.jffs_scripts_dir` (default `/jffs/scripts`),
+`paths.hosts_add` and `paths.dnsmasq_conf_add`. Missing optional inputs are skipped;
+an existing configuration file is required. Configured root symlink targets are
+included, while symlinks inside archived directories are preserved without following
+them. Archives use paths relative to `/` for manual extraction and restore.
+
+The command uses `commands.tar` (default `/bin/tar`) with gzip support and a
+five-minute timeout. Archives have mode `0600` because they contain tokens and
+private keys. Failed archives are removed, existing archives are never overwritten,
+and prior `router-hub-backup-*.tar.gz` archives are excluded to prevent recursive
+backups. A second backup in the same second fails rather than replacing the first.
+Test mode only prints the planned destination and does not create an archive.
+
+Backups read files without stopping services or freezing writes. Avoid editing
+settings or renewing certificates during a backup; stop Router Hub before a manual
+backup when a consistent cross-file snapshot is required. Review and restore the
+needed files from an extracted archive or use the restore command below while
+services are stopped.
+
+### Restore a backup
+
+Use a trusted backup from the same installation. Stop Router Hub and any other
+services whose configuration or certificates will be restored. On a router:
+
+```sh
+/opt/etc/init.d/S99router-hub stop
+/opt/bin/router-hub restore /tmp/router-hub-backup-YYYYMMDD-HHMMSS.tar.gz
+# After a successful restore, validate before starting the service:
+/opt/bin/router-hub --config /opt/etc/router-hub/router-hub.toml check-config
+/opt/etc/init.d/S99router-hub start
+```
+
+Replace the archive name with your actual backup. Restore does not load the
+current configuration, so it also works when that file is missing or invalid.
+It does not stop or start services itself. An explicit `--test-mode` validates
+the archive and destination without restoring files; configuration-file
+`test_mode` settings do not apply to this recovery command.
+
+To restore into a separate tree for inspection first, create a private destination
+and use `--root` on either platform:
+
+```sh
+mkdir -m 700 /tmp/router-hub-recovery
+router-hub restore /tmp/router-hub-backup-YYYYMMDD-HHMMSS.tar.gz --root /tmp/router-hub-recovery
+```
+
+Paths in the archive are relative to `/`; for example `etc/router-hub/router-hub.toml`
+is restored beneath `/tmp/router-hub-recovery/etc/router-hub/router-hub.toml` in this
+example. The default root is `/`, restoring original locations. Symbolic links
+retain their archived targets, including absolute targets; inspection-tree links
+can therefore still point outside that tree. Restore never writes through those
+links. Existing symlink parents and file/directory type conflicts are rejected.
+
+The entire archive is staged privately and checked before destination writes.
+Traversal and absolute entry names, duplicate paths, device/special entries,
+and writes beneath archived symlinks are rejected. Archives are limited to
+100,000 entries and 2 GiB uncompressed, including headers and padding. Staging
+uses the system temporary directory (`TMPDIR`, or `/tmp`). Ensure that temporary
+storage and destination storage have space for the restored files.
+
+Restore replaces archived files individually using atomic renames and restores
+directory and file permission bits without setuid/setgid bits; directory sticky
+bits are preserved. Files belong
+to the restoring user; archived owner IDs and timestamps are not applied. Hard links
+are restored as independent files with the same contents. Extra destination files
+are left in place. Restore is not a transaction across the whole tree: an I/O
+failure during application can leave earlier files restored. Keep services stopped
+and review the error before retrying. Restoring an executable can roll back its
+version; package-manager records are not rolled back by the command.
+
 ### Router-only upgrade command
 
 ```sh
 /opt/bin/router-hub upgrade
 # Download and verify without attempting opkg installation:
 /opt/bin/router-hub upgrade --download-only
+# Explicitly skip the pre-upgrade backup:
+/opt/bin/router-hub upgrade --no-backup
 ```
 
 The CLI checks GitHub's **latest stable** release and compares it against its
@@ -67,7 +161,15 @@ its SHA-256 checksum, verifies the checksum, then stages the file as
 available compatible `/opt/bin/opkg`, it replaces the one-shot upgrade process
 with `opkg install` so the package lifecycle can safely stop the running Router
 Hub daemon.
-Otherwise (including `--download-only`) it prints the exact manual command.
+
+After verifying a newer IPK and before installing it or printing the manual
+installation command, `upgrade` creates the same backup as `backup`. This also
+applies to `--download-only`. A backup failure aborts the upgrade before installation;
+use `--no-backup` to explicitly skip it. No backup is made when already up to date
+or when release download/verification fails.
+
+When automatic installation is unavailable (including `--download-only`),
+it prints the exact manual command.
 If opkg fails, the verified package remains in `/tmp`; the retry command is
 printed before launching opkg. Network or checksum errors abort without
 installing. During installation, `prerm` stops the running service and `postinst`

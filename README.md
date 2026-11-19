@@ -70,8 +70,14 @@ support is not promised.
 
 On an existing router install, `/opt/bin/router-hub upgrade` checks the latest
 stable GitHub release, verifies its IPK checksum, and attempts `opkg install`.
+It creates a backup first; use `--no-backup` to skip it.
 Use `--download-only` to stage a verified package under `/tmp` and print a
-manual install command. This command is unavailable in Linux and test modes.
+manual install command. Upgrade is unavailable in Linux and test modes.
+
+Create a backup separately with `router-hub backup`; see
+[backup instructions](docs/installation.md#backups). Use
+`router-hub restore <archive>` while services are stopped to recover a backup;
+`--root <directory>` restores into a separate tree for inspection.
 
 See [installation](docs/installation.md) for verified download commands, source
 builds, installer options, and service control.

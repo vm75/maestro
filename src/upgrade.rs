@@ -13,7 +13,10 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
-use crate::config::Platform;
+use crate::{
+    backup,
+    config::{AppConfig, Platform},
+};
 
 const RELEASE_API: &str = "https://api.github.com/repos/vm75/router-hub/releases/latest";
 const RELEASE_BASE: &str = "https://github.com/vm75/router-hub/releases/download";
@@ -126,7 +129,12 @@ fn check_opkg_architecture() -> Result<bool> {
     Ok(true)
 }
 
-pub async fn run(download_only: bool) -> Result<()> {
+pub async fn run(
+    config: &AppConfig,
+    config_path: &Path,
+    download_only: bool,
+    no_backup: bool,
+) -> Result<()> {
     // The runtime guard is also enforced by the CLI before starting this operation.
     let opkg_available = check_opkg_architecture()?;
     let client = reqwest::Client::builder()
@@ -220,6 +228,8 @@ pub async fn run(download_only: bool) -> Result<()> {
         target.display()
     );
 
+    prepare_backup(config, config_path, no_backup).await?;
+
     let command = format!("{OPKG} install {}", target.display());
     if download_only || !opkg_available || unsafe { libc::geteuid() } != 0 {
         println!("To install, run as root: {command}");
@@ -235,9 +245,41 @@ pub async fn run(download_only: bool) -> Result<()> {
     bail!("unable to launch opkg ({error}). Run manually: {command}")
 }
 
+async fn prepare_backup(config: &AppConfig, config_path: &Path, no_backup: bool) -> Result<()> {
+    if !no_backup {
+        backup::run(config, config_path, None).await.context(
+            "pre-upgrade backup failed; no installation was attempted (use --no-backup to skip)",
+        )?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn upgrade_backs_up_by_default_and_skip_bypasses_backup_failures() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("config");
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("router-hub.toml");
+        let mut config = AppConfig::default();
+        config.apply_test_mode(&path).unwrap();
+        config.test_mode = false;
+        config.platform = Platform::Linux;
+        // Missing configuration must block upgrading unless explicitly skipped.
+        let error = prepare_backup(&config, &path, false).await.unwrap_err();
+        assert!(error.to_string().contains("no installation was attempted"));
+        prepare_backup(&config, &path, true).await.unwrap();
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+
+        std::fs::write(&path, "configuration").unwrap();
+        prepare_backup(&config, &path, true).await.unwrap();
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        prepare_backup(&config, &path, false).await.unwrap();
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 2);
+    }
 
     #[test]
     fn stable_tags_and_version_ordering() {
