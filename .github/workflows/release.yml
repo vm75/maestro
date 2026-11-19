@@ -34,6 +34,9 @@ jobs:
       - name: Install Rust 1.85
         run: rustup toolchain install 1.85.0 --profile minimal --component rustfmt,clippy
 
+      - name: Cache Cargo dependencies and build artifacts
+        uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3 # v2.7.7
+
       - name: Validate SemVer tag, Cargo version, and main ancestry
         shell: bash
         env:
@@ -77,7 +80,10 @@ jobs:
           cargo +stable check --locked --all-targets
 
       - name: Install cross compiler
-        run: cargo +1.85.0 install cross --version 0.2.5 --locked
+        run: |
+          mkdir -p ~/.cargo/bin
+          curl -fsSL https://github.com/cross-rs/cross/releases/download/v0.2.5/cross-x86_64-unknown-linux-musl.tar.gz \
+            | tar -xz -C ~/.cargo/bin
 
       - name: Build AArch64 musl release
         run: |

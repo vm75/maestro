@@ -78,6 +78,9 @@ jobs:
       - name: Install baseline Rust
         run: rustup toolchain install 1.85.0 --profile minimal --component rustfmt,clippy
 
+      - name: Cache Cargo dependencies and build artifacts
+        uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3 # v2.7.7
+
       - name: Check formatting
         run: cargo +1.85.0 fmt --all -- --check
 
@@ -113,6 +116,9 @@ jobs:
 
       - name: Install stable Rust
         run: rustup toolchain install stable --profile minimal
+
+      - name: Cache Cargo dependencies and build artifacts
+        uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3 # v2.7.7
 
       - name: Check all targets on stable Rust
         run: cargo +stable check --locked --all-targets
