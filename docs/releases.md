@@ -80,6 +80,41 @@ CI and release tests install nginx.org stable packages from its signed Ubuntu
 repository using the shared setup action. The bundled nginx configuration
 requires nginx 1.25.1+ with the HTTP/2 module; the setup checks both before tests.
 
+## Manual NGINX Entware builds and releases
+
+NGINX builds use a **separate, manual-only** workflow in this repository:
+[Build Nginx](../.github/workflows/build-nginx.yml). It never runs on a push,
+pull request, version tag, or schedule, and it does not install anything on
+the router.
+
+After this workflow file is merged to `main` (GitHub requires a workflow to
+exist on the default branch for manual dispatch), open **Actions → Build Nginx
+→ Run workflow**. Select the version channel: `stable` (default), `mainline`,
+or `exact` with an `X.Y.Z` version. Leave the version field blank when using
+stable/mainline. The selected branch supplies the build script.
+
+Each successful build uploads a uniquely named, downloadable **Actions
+artifact** (retained for 90 days, subject to repository policy) containing the
+four matching NGINX IPKs, binary, dynamic modules, checksums, and build info.
+The workflow verifies the existing builder's checksums and package versions
+before uploading.
+
+By default, the workflow **also creates a separate NGINX GitHub Release** with
+the same files. Disable `publish_release` at dispatch to test artifact
+creation without publishing a release. Each release has a unique tag such as
+`nginx-v1.30.6-run123456789-a1`; repeated builds of the same NGINX version
+never overwrite one another. These `nginx-v*` tags cannot trigger the Router
+Hub `v*` release workflow. The NGINX release is explicitly marked
+`--latest=false`, while stable Router Hub releases are explicitly marked
+Latest, preserving the `releases/latest` endpoint used by `router-hub
+upgrade`.
+
+The builder requires substantial disk space, compiles the Entware AArch64
+cross-toolchain from source on a fresh runner, and may take a long time on the
+first attempt. A successful GitHub build is **not** a router runtime test:
+back up the current installation, install NGINX with matching modules, and
+verify configuration and startup on the router before switching traffic.
+
 ## Publish the next release
 
 1. Update `Cargo.toml` using Semantic Versioning, refresh `Cargo.lock`,
