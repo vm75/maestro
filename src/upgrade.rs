@@ -61,7 +61,10 @@ fn stable_version(tag: &str) -> Option<[u64; 3]> {
 }
 
 fn ipk_name(tag: &str) -> Result<String> {
-    ensure!(stable_version(tag).is_some(), "invalid stable release tag: {tag}");
+    ensure!(
+        stable_version(tag).is_some(),
+        "invalid stable release tag: {tag}"
+    );
     Ok(format!("router-hub_{}-1_{ARCH}.ipk", &tag[1..]))
 }
 
@@ -77,14 +80,20 @@ fn checksum_digest(contents: &str, filename: &str) -> Result<String> {
         digest.len() == 64 && digest.bytes().all(|c| c.is_ascii_hexdigit()),
         "invalid SHA-256 digest"
     );
-    ensure!(file.trim_start_matches('*') == filename, "checksum filename mismatch");
+    ensure!(
+        file.trim_start_matches('*') == filename,
+        "checksum filename mismatch"
+    );
     Ok(digest.to_ascii_lowercase())
 }
 
 async fn request_bytes(client: &reqwest::Client, url: &str, limit: u64) -> Result<Vec<u8>> {
     let mut response = client.get(url).send().await?.error_for_status()?;
     if let Some(length) = response.content_length() {
-        ensure!(length <= limit, "download is larger than the permitted limit");
+        ensure!(
+            length <= limit,
+            "download is larger than the permitted limit"
+        );
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await? {
@@ -205,7 +214,11 @@ pub async fn run(download_only: bool) -> Result<()> {
         let _ = tokio::fs::remove_file(&temporary).await;
     }
     result?;
-    println!("Verified {} and saved it to {}", release.tag_name, target.display());
+    println!(
+        "Verified {} and saved it to {}",
+        release.tag_name,
+        target.display()
+    );
 
     let command = format!("{OPKG} install {}", target.display());
     if download_only || !opkg_available || unsafe { libc::geteuid() } != 0 {
@@ -233,14 +246,20 @@ mod tests {
         for invalid in ["v0.10.2-rc.1", "0.10.2", "v1.02.3", "v0.10", "v1.2.3/evil"] {
             assert_eq!(stable_version(invalid), None, "{invalid}");
         }
-        assert_eq!(ipk_name("v0.10.2").unwrap(), "router-hub_0.10.2-1_aarch64-3.10.ipk");
+        assert_eq!(
+            ipk_name("v0.10.2").unwrap(),
+            "router-hub_0.10.2-1_aarch64-3.10.ipk"
+        );
     }
 
     #[test]
     fn checksum_validation() {
         let hex = "a".repeat(64);
         let name = "router-hub_0.10.2-1_aarch64-3.10.ipk";
-        assert_eq!(checksum_digest(&format!("{hex}  {name}\n"), name).unwrap(), hex);
+        assert_eq!(
+            checksum_digest(&format!("{hex}  {name}\n"), name).unwrap(),
+            hex
+        );
         assert!(checksum_digest(&format!("{hex}  other.ipk\n"), name).is_err());
         assert!(checksum_digest("bad  other.ipk\n", name).is_err());
         assert!(checksum_digest(&format!("{hex}  {name}\nextra\n"), name).is_err());
