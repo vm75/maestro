@@ -1,6 +1,6 @@
 name: Release
 
-# No releases from branch pushes or pull requests: only explicit version tags.
+# Both main CI's App-created tags and manually pushed version tags publish here.
 on:
   push:
     tags:

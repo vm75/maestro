@@ -6,6 +6,10 @@ Router Hub follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Run CI on main updates and opt-in `ci/**` branches, retain manual PR checks,
+  and automatically tag new stable versions after successful main CI using a
+  repository-scoped GitHub App token to start the existing release workflow.
+
 - Add `router-hub restore <archive>` with an optional `--root` inspection tree,
   archive validation before destination writes, and atomic file replacement.
   Recovery works with missing or invalid configuration; `--test-mode` validates
@@ -16,6 +20,11 @@ Router Hub follows [Semantic Versioning](https://semver.org/).
 - Create a backup before upgrading to a newer release, including download-only
   upgrades. `--no-backup` skips the backup; a backup failure otherwise aborts
   installation.
+
+### Fixed
+
+- Use HTTP/1.1 for nginx-builder downloads of release metadata, source archives,
+  signatures and signing keys from nginx.org.
 
 ## 0.10.2
 

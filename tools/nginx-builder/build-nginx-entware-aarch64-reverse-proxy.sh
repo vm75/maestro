@@ -162,7 +162,7 @@ mkdir -p -- "$DOWNLOAD_DIR"
 if [[ -z $VERSION ]]; then
   log "Discovering latest $CHANNEL NGINX release from nginx.org"
   html_file="$DOWNLOAD_DIR/download.html"
-  curl --fail --silent --show-error --location --retry 3 --connect-timeout 20 \
+  curl --http1.1 --fail --silent --show-error --location --retry 3 --connect-timeout 20 \
        'https://nginx.org/en/download.html' -o "$html_file"
   VERSION=$(python3 - "$CHANNEL" "$html_file" <<'PY'
 import re, sys
@@ -187,7 +187,7 @@ for extension in '' .asc; do
   path="$TARBALL$extension"
   if [[ ! -s $path ]]; then
     log "Downloading $(basename "$path")"
-    curl --fail --silent --show-error --location --retry 3 --connect-timeout 20 \
+    curl --http1.1 --fail --silent --show-error --location --retry 3 --connect-timeout 20 \
          "https://nginx.org/download/nginx-$VERSION.tar.gz$extension" -o "$path.partial"
     mv -f -- "$path.partial" "$path"
   fi
@@ -204,7 +204,7 @@ declare -A nginx_keys=(
 )
 for key in arut pluknet sb thresh; do
   keyfile="$GPG_HOME/$key.key"
-  curl --fail --silent --show-error --location --retry 3 --connect-timeout 20 \
+  curl --http1.1 --fail --silent --show-error --location --retry 3 --connect-timeout 20 \
        "https://nginx.org/keys/$key.key" -o "$keyfile"
   actual=$(GNUPGHOME="$GPG_HOME" gpg --batch --show-keys --with-colons "$keyfile" \
     | awk -F: '$1=="pub" {want=1; next} want && $1=="fpr" {print $10; exit}')

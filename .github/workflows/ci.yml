@@ -1,37 +1,29 @@
 name: CI
 
-# CI runs automatically only for merged PRs into main.
-# Open PRs can be tested explicitly through Run workflow with a PR number.
+# Main updates and opt-in branches run automatically; other PRs are manual.
 on:
-  pull_request:
+  push:
     branches:
       - main
-    types:
-      - closed
+      - 'ci/**'
   workflow_dispatch:
     inputs:
       pr_number:
-        description: "Open pull request number targeting main"
-        required: true
+        description: "Open PR targeting main (0 checks the selected branch)"
+        required: false
         type: number
+        default: 0
 
 permissions:
   contents: read
   pull-requests: read
-
-concurrency:
-  group: ci-${{ github.event.pull_request.number || inputs.pr_number }}
-  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   source:
-    name: Select PR merge revision
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    name: Select revision
     runs-on: ubuntu-24.04
     outputs:
       ref: ${{ steps.select.outputs.ref }}
@@ -43,11 +35,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_EVENT: ${{ github.event_name }}
           PR_NUMBER: ${{ inputs.pr_number }}
-          MERGED_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          EVENT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
-          if [[ "$RUN_EVENT" == "workflow_dispatch" ]]; then
+          ref="$EVENT_SHA"
+          if [[ "$RUN_EVENT" == "workflow_dispatch" && -n "$PR_NUMBER" && "$PR_NUMBER" != 0 ]]; then
             if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
               echo "Provide a valid PR number." >&2
               exit 1
@@ -62,15 +55,11 @@ jobs:
             fi
 
             # Test the proposed merge result, including changes from main.
-            ref="refs/pull/$PR_NUMBER/merge"
+            ref=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/pull/$PR_NUMBER/merge" --jq '.sha')
             echo "Checking proposed merge of PR #$PR_NUMBER into main"
-          else
-            ref="$MERGED_SHA"
-            if [[ -z "$ref" ]]; then
-              echo "Merged PR has no merge commit SHA." >&2
-              exit 1
-            fi
           fi
+
+          [[ "$ref" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid checkout SHA." >&2; exit 1; }
 
           printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
 
@@ -80,7 +69,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      - name: Check out PR merge revision
+      - name: Check out selected revision
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.source.outputs.ref }}
@@ -104,6 +93,9 @@ jobs:
       - name: Verify Entware IPK structure
         run: bash scripts/test-package-ipk.sh
 
+      - name: Test automatic release policy
+        run: python3 -m unittest discover -s scripts/tests -p 'test_auto_release.py' -v
+
       - name: Build release binary
         run: cargo +1.85.0 build --release --locked
 
@@ -113,7 +105,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Check out PR merge revision
+      - name: Check out selected revision
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.source.outputs.ref }}
@@ -124,3 +116,55 @@ jobs:
 
       - name: Check all targets on stable Rust
         run: cargo +stable check --locked --all-targets
+
+  tag:
+    name: Tag new stable version
+    needs: [source, full, stable]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    concurrency:
+      group: automatic-release-tag
+      cancel-in-progress: false
+    steps:
+      - name: Check out tested commit and release tags
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Determine whether this version needs a tag
+        id: plan
+        env:
+          EXPECTED_SHA: ${{ needs.source.outputs.ref }}
+        run: python3 scripts/auto-release.py plan
+
+      - name: Check release App configuration
+        if: steps.plan.outputs.needed == 'true'
+        env:
+          APP_CLIENT_ID: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$APP_CLIENT_ID" || -z "$APP_PRIVATE_KEY" ]]; then
+            echo "::error::Configure RELEASE_APP_CLIENT_ID (Actions variable) and RELEASE_APP_PRIVATE_KEY (Actions secret); see docs/releases.md."
+            exit 1
+          fi
+
+      - name: Create repository-scoped release token
+        if: steps.plan.outputs.needed == 'true'
+        id: app
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Push annotated release tag to start the Release workflow
+        if: steps.plan.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          EXPECTED_SHA: ${{ needs.source.outputs.ref }}
+        run: |
+          gh auth setup-git --hostname github.com
+          python3 scripts/auto-release.py tag

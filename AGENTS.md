@@ -54,12 +54,13 @@ firmware. Legacy MIPS support is not promised.
 
 ## Release workflow
 
-CI runs automatically only after a PR is merged into main. CI can also be
-started manually for an open PR by number via workflow_dispatch (against the
-proposed merge ref). No CI is triggered by PR updates or branch pushes.
-Publishing is separate: push an annotated `vX.Y.Z` tag from main, matching
-`Cargo.toml` and `Cargo.lock`, to run full release checks and publish a
-versioned AArch64 musl installation archive plus SHA-256 checksum.
+CI runs on every push to main and opt-in `ci/**` branches. Other PRs are
+manual: workflow_dispatch accepts an open PR number to check its proposed merge,
+or no number to check the selected branch. Successful push CI on current main
+automatically tags a new stable version matching `Cargo.toml` and `Cargo.lock`.
+Tagging requires the release GitHub App credentials documented in `docs/releases.md`.
+Annotated version tags trigger the separate full release checks and publication
+of AArch64 musl archives/IPKs with SHA-256 checksums. Manual tags remain supported.
 Do not commit `dist/` output or retag published versions; never deploy to
 production routers automatically.
 
