@@ -109,16 +109,16 @@ RELEASE_SELECTION=$CHANNEL
 
 # Dependency installation: query package manager first; use sudo only if missing.
 if [[ ! -r /etc/os-release ]]; then die '/etc/os-release is required'; fi
-# shellcheck disable=SC1091
-source /etc/os-release
-if [[ ${ID:-} == arch || " ${ID_LIKE:-} " == *" arch "* ]]; then
+OS_ID=$(. /etc/os-release && printf '%s' "${ID:-}")
+OS_ID_LIKE=$(. /etc/os-release && printf '%s' "${ID_LIKE:-}")
+if [[ $OS_ID == arch || " $OS_ID_LIKE " == *" arch "* ]]; then
   PKG_MGR=pacman
   PKGS=(base-devel git curl wget ca-certificates gnupg python python-setuptools
         perl rsync subversion unzip zip file gawk gettext flex bison cpio bc
         ncurses openssl zlib libxslt pkgconf time patch diffutils which
         tar xz zstd elfutils cmake ninja swig autoconf automake libtool texinfo)
   query_pkg() { pacman -Qq "$1" >/dev/null 2>&1; }
-elif [[ ${ID:-} == ubuntu || ${ID:-} == debian || " ${ID_LIKE:-} " == *" debian "* ]]; then
+elif [[ $OS_ID == ubuntu || $OS_ID == debian || " $OS_ID_LIKE " == *" debian "* ]]; then
   PKG_MGR=apt
   PKGS=(build-essential git curl wget ca-certificates gnupg python3 python3-setuptools
         perl rsync subversion unzip zip file gawk gettext flex bison cpio bc
@@ -127,7 +127,7 @@ elif [[ ${ID:-} == ubuntu || ${ID:-} == debian || " ${ID_LIKE:-} " == *" debian 
         autoconf automake libtool libtool-bin texinfo)
   query_pkg() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -qx 'install ok installed'; }
 else
-  die "Unsupported distribution (${ID:-unknown}); use Debian, Ubuntu, or Arch"
+  die "Unsupported distribution (${OS_ID:-unknown}); use Debian, Ubuntu, or Arch"
 fi
 
 missing=()
