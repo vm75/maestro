@@ -37,7 +37,7 @@ tools/nginx-builder/build-nginx-entware-aarch64-reverse-proxy.sh --mainline
 tools/nginx-builder/build-nginx-entware-aarch64-reverse-proxy.sh --version 1.28.0
 ```
 
-Other options: `--channel stable|mainline`, `--jobs N`, `--workdir DIR`, `--output DIR`, `--no-update`, `--no-install-deps`, `--help`.
+Other options: `--channel stable|mainline`, `--jobs N`, `--workdir DIR`, `--output DIR`, `--no-update`, `--no-install-deps`, `--toolchain-only`, `--help`.
 
 The persistent cache defaults to `~/.cache/nginx-entware-aarch64/` (or `$XDG_CACHE_HOME/nginx-entware-aarch64/`). Subsequent builds reuse the toolchain and downloaded sources.
 
@@ -46,6 +46,26 @@ The persistent cache defaults to `~/.cache/nginx-entware-aarch64/` (or `$XDG_CAC
 - **Included:** HTTPS/TLS, HTTP/2, HTTP/3/QUIC, HTTP proxy, WebSockets/SSE, gRPC, FastCGI, uwsgi, SCGI, Memcached, TCP/UDP stream, real-IP handling, rewrites, caching, gzip, rate/connection limits, and authentication. Dynamic modules: **Brotli**, **stream**, **headers-more**.
 - **Excluded:** native WebDAV, FLV, SSI, autoindex, tracking/legacy modules, njs, GeoIP2, NAXSI, Lua, RTMP, and MPEG-TS.
 - **Hardening:** PIE, strong stack protection, `_FORTIFY_SOURCE=2`, full RELRO, and format-security checks. Targets Entware AArch64 / glibc 2.27. HTTP/3 and stream listeners remain inactive until configured.
+
+## Manual GitHub Actions build
+
+Once the [Build Nginx workflow](../../.github/workflows/build-nginx.yml) is
+present on the repository default branch, select **Actions → Build Nginx →
+Run workflow** and choose the latest stable version (default), mainline, or an
+explicit version. Only manual runs are supported; there is no push, tag,
+schedule, or PR trigger.
+
+Each successful run uploads a separate downloadable Actions artifact with the
+same output described below. By default it also publishes a GitHub Release
+under a unique `nginx-v*` tag, marked **not Latest** so it cannot replace the
+latest Router Hub release. Uncheck `publish_release` for an artifact-only
+trial.
+
+### Pre-built Toolchain Container (GHCR)
+
+Building the Entware toolchain from source takes ~1–1.5 hours. To speed this up, a pre-built container image (`ghcr.io/<repository>/entware-aarch64-builder:latest`) can be built once using the **Build Toolchain Image** workflow ([.github/workflows/build-toolchain-image.yml](../../.github/workflows/build-toolchain-image.yml)).
+
+When present on GHCR, the NGINX builder automatically pulls the container in ~30 seconds and compiles NGINX and its modules in **~2–3 minutes**. If the image is not found, the workflow gracefully falls back to compiling the toolchain on the host using all available runner cores.
 
 ## Output and deployment
 

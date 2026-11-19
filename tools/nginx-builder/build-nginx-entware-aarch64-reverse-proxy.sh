@@ -17,6 +17,7 @@ if [[ -z ${JOBS:-} ]]; then
 fi
 AUTO_DEPS=1
 UPDATE_REPOS=1
+TOOLCHAIN_ONLY=0
 RECIPE_BACKUP=
 RECIPE_FILE=
 GPG_HOME=
@@ -38,7 +39,8 @@ Options:
   --output DIR                Destination for binary, IPK and metadata
   --jobs N                    Concurrent build jobs (default: $JOBS)
   --no-install-deps           Do not install missing host packages
-  --no-update                Do not git-pull Entware/build feeds (still fetch release)
+  --no-update                 Do not git-pull Entware/build feeds (still fetch release)
+  --toolchain-only            Build cross-toolchain and target environment only
   -h, --help                  Show help
 
 Output directory: nginx-X.Y.Z-aarch64-k3.10/
@@ -88,6 +90,7 @@ while (($#)); do
     --jobs) [[ $# -ge 2 ]] || die '--jobs needs a value'; JOBS=$2; shift 2 ;;
     --no-install-deps) AUTO_DEPS=0; shift ;;
     --no-update) UPDATE_REPOS=0; shift ;;
+    --toolchain-only) TOOLCHAIN_ONLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown option: $1 (see --help)" ;;
   esac
@@ -458,6 +461,12 @@ log "Building Entware cross-toolchain, NGINX, Brotli, stream and headers-more wi
 (cd "$ENTWARE" && make -j"$JOBS" target/compile V=s \
   HOST_CFLAGS="-O2 -std=gnu17 -I$ENTWARE/staging_dir/host/include" \
   HOST_CXXFLAGS="-O2 -I$ENTWARE/staging_dir/host/include")
+
+if (( TOOLCHAIN_ONLY )); then
+  log "Entware cross-toolchain and target environment built successfully at $WORKDIR"
+  exit 0
+fi
+
 # Do not reuse a package compilation for a previous NGINX release.
 (cd "$ENTWARE" && make package/nginx/clean)
 (cd "$ENTWARE" && make -j"$JOBS" package/nginx/compile V=s)

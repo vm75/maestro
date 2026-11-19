@@ -64,6 +64,12 @@ of AArch64 musl archives/IPKs with SHA-256 checksums. Manual tags remain support
 Do not commit `dist/` output or retag published versions; never deploy to
 production routers automatically.
 
+The standalone Entware NGINX builder has a **manual-only** GitHub Actions
+workflow (`.github/workflows/build-nginx.yml`). Its uniquely tagged
+`nginx-v*` GitHub Releases must always be created with `--latest=false`;
+stable Router Hub releases remain Latest for the router-only upgrade command.
+Do not introduce automatic NGINX build triggers or router deployment.
+
 ## Engineering constraints
 
 - Follow KISS and YAGNI. Make the smallest change that satisfies the concrete request.
