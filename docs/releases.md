@@ -108,9 +108,12 @@ Hub `v*` release workflow. The NGINX release is explicitly marked
 `--latest=false`, leaving the existing Router Hub release workflow and its
 `releases/latest` endpoint (used by `router-hub upgrade`) untouched.
 
-The builder requires substantial disk space, compiles the Entware AArch64
-cross-toolchain from source on a fresh runner, and may take a long time on the
-first attempt. A successful GitHub build is **not** a router runtime test:
+The builder requires substantial disk space when compiled on a fresh runner.
+If the pre-built Entware toolchain container image is available on GitHub
+Container Registry (built via `.github/workflows/build-toolchain-image.yml`),
+the workflow pulls it and completes NGINX compilation in ~2–3 minutes. If the
+image is absent, it compiles the toolchain from source on the host using all
+available CPU cores. A successful GitHub build is **not** a router runtime test:
 back up the current installation, install NGINX with matching modules, and
 verify configuration and startup on the router before switching traffic.
 

@@ -77,11 +77,32 @@ jobs:
               exit 1
               ;;
           esac
-          bash tools/nginx-builder/build-nginx-entware-aarch64-reverse-proxy.sh \
-            "${args[@]}" \
-            --jobs 2 \
-            --workdir "$RUNNER_TEMP/nginx-entware" \
-            --output "$NGINX_OUTPUT"
+          mkdir -p "$NGINX_OUTPUT"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/entware-aarch64-builder:latest"
+
+          if docker pull "$IMAGE" 2>/dev/null; then
+            echo "Pre-built Entware toolchain image found ($IMAGE)."
+            echo "Running fast NGINX build in container..."
+            docker run --rm \
+              --user builder \
+              -v "$GITHUB_WORKSPACE:/workspace" \
+              -w /workspace \
+              "$IMAGE" \
+              bash tools/nginx-builder/build-nginx-entware-aarch64-reverse-proxy.sh \
+                "${args[@]}" \
+                --jobs "$(nproc)" \
+                --no-update \
+                --workdir /opt/nginx-entware \
+                --output /workspace/dist/nginx
+          else
+            echo "Pre-built toolchain image $IMAGE not found."
+            echo "Building toolchain and NGINX on host using $(nproc) jobs..."
+            bash tools/nginx-builder/build-nginx-entware-aarch64-reverse-proxy.sh \
+              "${args[@]}" \
+              --jobs "$(nproc)" \
+              --workdir "$RUNNER_TEMP/nginx-entware" \
+              --output "$NGINX_OUTPUT"
+          fi
 
       - name: Verify deliverables
         id: verify

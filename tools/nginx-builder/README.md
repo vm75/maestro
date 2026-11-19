@@ -37,7 +37,7 @@ tools/nginx-builder/build-nginx-entware-aarch64-reverse-proxy.sh --mainline
 tools/nginx-builder/build-nginx-entware-aarch64-reverse-proxy.sh --version 1.28.0
 ```
 
-Other options: `--channel stable|mainline`, `--jobs N`, `--workdir DIR`, `--output DIR`, `--no-update`, `--no-install-deps`, `--help`.
+Other options: `--channel stable|mainline`, `--jobs N`, `--workdir DIR`, `--output DIR`, `--no-update`, `--no-install-deps`, `--toolchain-only`, `--help`.
 
 The persistent cache defaults to `~/.cache/nginx-entware-aarch64/` (or `$XDG_CACHE_HOME/nginx-entware-aarch64/`). Subsequent builds reuse the toolchain and downloaded sources.
 
@@ -59,8 +59,13 @@ Each successful run uploads a separate downloadable Actions artifact with the
 same output described below. By default it also publishes a GitHub Release
 under a unique `nginx-v*` tag, marked **not Latest** so it cannot replace the
 latest Router Hub release. Uncheck `publish_release` for an artifact-only
-trial. The hosted runner uses a disposable build directory and may need
-significant time and disk space to compile Entware on its first run.
+trial.
+
+### Pre-built Toolchain Container (GHCR)
+
+Building the Entware toolchain from source takes ~1–1.5 hours. To speed this up, a pre-built container image (`ghcr.io/<repository>/entware-aarch64-builder:latest`) can be built once using the **Build Toolchain Image** workflow ([.github/workflows/build-toolchain-image.yml](../../.github/workflows/build-toolchain-image.yml)).
+
+When present on GHCR, the NGINX builder automatically pulls the container in ~30 seconds and compiles NGINX and its modules in **~2–3 minutes**. If the image is not found, the workflow gracefully falls back to compiling the toolchain on the host using all available runner cores.
 
 ## Output and deployment
 
