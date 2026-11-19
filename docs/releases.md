@@ -105,9 +105,8 @@ creation without publishing a release. Each release has a unique tag such as
 `nginx-v1.30.6-run123456789-a1`; repeated builds of the same NGINX version
 never overwrite one another. These `nginx-v*` tags cannot trigger the Router
 Hub `v*` release workflow. The NGINX release is explicitly marked
-`--latest=false`, while stable Router Hub releases are explicitly marked
-Latest, preserving the `releases/latest` endpoint used by `router-hub
-upgrade`.
+`--latest=false`, leaving the existing Router Hub release workflow and its
+`releases/latest` endpoint (used by `router-hub upgrade`) untouched.
 
 The builder requires substantial disk space, compiles the Entware AArch64
 cross-toolchain from source on a fresh runner, and may take a long time on the
