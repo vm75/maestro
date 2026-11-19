@@ -47,6 +47,21 @@ The persistent cache defaults to `~/.cache/nginx-entware-aarch64/` (or `$XDG_CAC
 - **Excluded:** native WebDAV, FLV, SSI, autoindex, tracking/legacy modules, njs, GeoIP2, NAXSI, Lua, RTMP, and MPEG-TS.
 - **Hardening:** PIE, strong stack protection, `_FORTIFY_SOURCE=2`, full RELRO, and format-security checks. Targets Entware AArch64 / glibc 2.27. HTTP/3 and stream listeners remain inactive until configured.
 
+## Manual GitHub Actions build
+
+Once the [Build Nginx workflow](../../.github/workflows/build-nginx.yml) is
+present on the repository default branch, select **Actions → Build Nginx →
+Run workflow** and choose the latest stable version (default), mainline, or an
+explicit version. Only manual runs are supported; there is no push, tag,
+schedule, or PR trigger.
+
+Each successful run uploads a separate downloadable Actions artifact with the
+same output described below. By default it also publishes a GitHub Release
+under a unique `nginx-v*` tag, marked **not Latest** so it cannot replace the
+latest Router Hub release. Uncheck `publish_release` for an artifact-only
+trial. The hosted runner uses a disposable build directory and may need
+significant time and disk space to compile Entware on its first run.
+
 ## Output and deployment
 
 Default output: `~/.cache/nginx-entware-aarch64/out/nginx-<version>-aarch64-k3.10/`
