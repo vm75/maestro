@@ -16,8 +16,8 @@ mod nginx_sites;
 mod state;
 mod storage;
 mod system;
-mod util;
 mod upgrade;
+mod util;
 
 use std::{
     net::{IpAddr, SocketAddr},
