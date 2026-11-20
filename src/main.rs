@@ -10,6 +10,7 @@ mod config;
 mod core;
 mod firewall;
 mod models;
+mod modules;
 mod nginx;
 mod nginx_ingress;
 mod nginx_mutation;

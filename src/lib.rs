@@ -9,6 +9,7 @@ pub mod config;
 pub mod core;
 pub mod firewall;
 pub mod models;
+pub mod modules;
 pub mod nginx;
 pub mod nginx_ingress;
 mod nginx_mutation;
