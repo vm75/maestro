@@ -1534,6 +1534,23 @@
         display: none
       }
     }
+
+    /* Grouped navigation: one tab per feature area, with accessible section entries. */
+    .rh-group { float: left; position: relative; }
+    .rh-group > .rh-tab { float: none; margin-left: 0; }
+    .rh-group-menu { display: none; position: absolute; top: 100%; left: 0; z-index: 50;
+      min-width: 170px; padding: 5px; background: #23333a; border: 1px solid var(--asus-border);
+      box-shadow: var(--shadow); }
+    .rh-group:hover .rh-group-menu, .rh-group:focus-within .rh-group-menu { display: block; }
+    .rh-group-menu [data-view] { display: block; width: 100%; padding: 8px 10px;
+      color: #fff; background: transparent; border: none; text-align: left; cursor: pointer; }
+    .rh-group-menu [data-view]:hover, .rh-group-menu .tabClicked { background: #4D595D; }
+    #rh-sidebar .rh-group { float: none; width: 100%; }
+    #rh-sidebar .rh-group-menu { display: block; position: static; background: transparent;
+      box-shadow: none; border: 0; padding: 0 0 5px 15px; }
+    #rh-sidebar .rh-group > .rh-tab { width: 100%; }
+    .metric[data-dashboard-widget] { cursor: pointer; }
+    .metric[data-widget-state="unavailable"] .value { color: var(--amber); font-size: 18px; }
   </style>
 </head>
 
@@ -2238,6 +2255,81 @@
     function stopAdguardPolling() { clearInterval(adguardPollingTimer); adguardPollingTimer = undefined; }
     function startAdguardPolling() { stopAdguardPolling(); adguardPollingTimer = setInterval(() => { if (state.view === 'adguard') loadAdguardStatusOnly(); }, 15000); }
     const titles = { dashboard: ['Dashboard', 'Router status at a glance'], services: ['Services', 'Manage services'], nginx: ['Nginx', 'Virtual hosts, subdomains and subfolders'], certificates: ['Certificates', "Let's Encrypt issuance and renewal"], wol: ['Wake-on-LAN', 'Maintain and wake LAN machines'], firewall: ['Ban Shield', 'Lightweight hybrid-DFA intrusion blocking'], adguard: ['AdGuard Home', 'Manage AdGuard Home integration'], wireguard: ['WireGuard', 'Manage WireGuard VPN Interface and Peers'] };
+
+    // This manifest mirrors GET /api/modules, so offline navigation still works
+    // when the API is initially unreachable or an older backend is being upgraded.
+    const RH_FALLBACK_MODULES = [{"id":"services","availability":"ready","ui":[{"tab":"services","tab_label":"Services","tab_order":10,"section":"services","section_label":"Services","section_order":10,"dashboard_widgets":["services"]}]},{"id":"nginx","availability":"ready","ui":[{"tab":"web","tab_label":"Web","tab_order":20,"section":"nginx","section_label":"Nginx","section_order":10,"dashboard_widgets":["nginx"]}]},{"id":"certificates","availability":"ready","ui":[{"tab":"web","tab_label":"Web","tab_order":20,"section":"certificates","section_label":"Certificates","section_order":20,"dashboard_widgets":["certificates"]}]},{"id":"ban_shield","availability":"ready","ui":[{"tab":"security","tab_label":"Security","tab_order":30,"section":"firewall","section_label":"Ban Shield","section_order":10,"dashboard_widgets":["active_bans"]}]},{"id":"wol","availability":"ready","ui":[{"tab":"network","tab_label":"Network","tab_order":40,"section":"wol","section_label":"Wake-on-LAN","section_order":10,"dashboard_widgets":[]}]},{"id":"adguard","availability":"ready","ui":[{"tab":"network","tab_label":"Network","tab_order":40,"section":"adguard","section_label":"AdGuard Home","section_order":20,"dashboard_widgets":[]}]},{"id":"wireguard","availability":"ready","ui":[{"tab":"network","tab_label":"Network","tab_order":40,"section":"wireguard","section_label":"WireGuard","section_order":30,"dashboard_widgets":[]}]}];
+    let rhModuleCatalog = RH_FALLBACK_MODULES;
+    function rhGroupFor(view) {
+      if (view === 'dashboard') return 'dashboard';
+      for (const module of rhModuleCatalog) {
+        for (const section of module.ui || []) if (section.section === view) return section.tab;
+      }
+      return view;
+    }
+    function rhNavigationGroups() {
+      const groups = new Map([['dashboard', { id: 'dashboard', label: 'Dashboard', order: 0,
+        sections: [{ id: 'dashboard', label: 'Dashboard', order: 0 }] }]]);
+      for (const module of rhModuleCatalog) {
+        if (module.availability === 'unsupported') continue;
+        for (const section of module.ui || []) {
+          if (!groups.has(section.tab)) groups.set(section.tab, {
+            id: section.tab, label: section.tab_label, order: section.tab_order, sections: []
+          });
+          const group = groups.get(section.tab);
+          if (!group.sections.some(item => item.id === section.section)) group.sections.push({
+            id: section.section, label: section.section_label, order: section.section_order
+          });
+        }
+      }
+      for (const group of groups.values()) group.sections.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+      return [...groups.values()].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+    }
+    function rhNavigationMarkup(groups, sidebar) {
+      return groups.map(group => {
+        const first = group.sections[0], subnav = group.sections.length > 1;
+        const title = esc(group.label) + (subnav && !sidebar ? ' ▾' : '');
+        const primary = '<div class="rh-tab tab" role="tab" tabindex="0" data-group="' +
+          esc(group.id) + '" data-view="' + esc(first.id) + '"' +
+          (sidebar ? ' data-sidebar' : '') + '>' + title + '</div>';
+        const sections = subnav ? '<div class="rh-group-menu" role="group" aria-label="' +
+          esc(group.label) + ' sections">' + group.sections.map(section =>
+            '<button type="button" data-view="' + esc(section.id) + '"' +
+            (sidebar ? ' data-sidebar' : '') + '>' + esc(section.label) + '</button>').join('') + '</div>' : '';
+        return '<div class="rh-group">' + primary + sections + '</div>';
+      }).join('');
+    }
+    function rhComposeNavigation() {
+      const groups = rhNavigationGroups();
+      const nav = document.getElementById('rh-nav'), sidebar = document.getElementById('rh-sidebar');
+      if (nav) nav.innerHTML = rhNavigationMarkup(groups, false);
+      if (sidebar) sidebar.innerHTML = rhNavigationMarkup(groups, true);
+      RH_TAB_MARKUP = nav ? nav.innerHTML : '';
+      RH_TAB_COUNT = groups.length;
+      const asusTabs = document.getElementById('tabMenu');
+      if (asusTabs) rhInstallAsusTabs(asusTabs);
+      rhApplyView();
+      rhSyncSidebarActive(state.view);
+    }
+    async function rhLoadModules() {
+      try {
+        const response = await api('/modules');
+        if (!Array.isArray(response.modules)) return;
+        rhModuleCatalog = response.modules;
+        if (!rhNavigationGroups().some(g => g.sections.some(s => s.id === state.view))) {
+          state.view = 'dashboard';
+        }
+        rhComposeNavigation();
+        if (state.view === 'dashboard') loadDashboard();
+      } catch (_) {
+        // Keep existing offline navigation when discovery is unavailable.
+      }
+    }
+    function rhSelectView(view) {
+      const tab = (document.getElementById('tabMenu') || document.getElementById('rh-nav'))
+        ?.querySelector('[data-view="' + view + '"]');
+      if (tab) tab.click();
+    }
     const requestedTab = new URLSearchParams(location.search).get('tab');
     if (requestedTab && Object.prototype.hasOwnProperty.call(titles, requestedTab)) state.view = requestedTab;
     function esc(v = '') { return String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) }
@@ -2262,15 +2354,15 @@
     // Tab navigation: hook into ASUS initial() when embedded, else run immediately.
     // ASUS renders the menu twice while its asynchronous menuTree module loads, so
     // keep canonical markup and restore our tabs if the firmware replaces them.
-    const RH_TAB_MARKUP = document.getElementById('rh-nav')?.innerHTML || '';
-    const RH_TAB_COUNT = Object.keys(titles).length;
+    let RH_TAB_MARKUP = document.getElementById('rh-nav')?.innerHTML || '';
+    let RH_TAB_COUNT = Object.keys(titles).length;
     let rhTabObserver;
     function rhInstallAsusTabs(asusTabs) {
       asusTabs.innerHTML = RH_TAB_MARKUP;
       asusTabs.classList.add('rh-tabs');
       asusTabs.querySelectorAll('[data-view]').forEach(tab => {
-        tab.classList.toggle('tabClicked', tab.dataset.view === state.view);
-        tab.classList.toggle('tab', tab.dataset.view !== state.view);
+        tab.classList.toggle('tabClicked', (tab.dataset.view === state.view || (tab.classList.contains('rh-tab') && tab.dataset.group === rhGroupFor(state.view))));
+        tab.classList.toggle('tab', !(tab.dataset.view === state.view || (tab.classList.contains('rh-tab') && tab.dataset.group === rhGroupFor(state.view))));
       });
     }
     function rhApplyView() {
@@ -2278,7 +2370,7 @@
       document.getElementById('page-title').textContent = titles[state.view][0];
       document.getElementById('page-subtitle').textContent = titles[state.view][1];
       document.querySelectorAll('[data-view]').forEach(tab => {
-        const selected = tab.dataset.view === state.view;
+        const selected = tab.dataset.view === state.view || (tab.classList.contains('rh-tab') && tab.dataset.group === rhGroupFor(state.view));
         tab.classList.toggle('tabClicked', selected);
         tab.classList.toggle('tab', !selected);
       });
@@ -2296,8 +2388,8 @@
       const sidebar = document.getElementById('rh-sidebar');
       if (!sidebar) return;
       sidebar.querySelectorAll('[data-view]').forEach(x => {
-        x.classList.toggle('tabClicked', x.dataset.view === view);
-        x.classList.toggle('tab', x.dataset.view !== view);
+        x.classList.toggle('tabClicked', (x.dataset.view === view || (x.classList.contains('rh-tab') && x.dataset.group === rhGroupFor(view))));
+        x.classList.toggle('tab', !(x.dataset.view === view || (x.classList.contains('rh-tab') && x.dataset.group === rhGroupFor(view))));
       });
       const label = document.getElementById('rh-sidebar-label');
       const activeTab = sidebar.querySelector(`[data-view="${view}"]`);
@@ -2336,8 +2428,8 @@
           if (btn) { btn.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); }
           // Sync horizontal nav active state too
           navRoot.querySelectorAll('[data-view]').forEach(x => {
-            x.classList.toggle('tabClicked', x.dataset.view === tab.dataset.view);
-            x.classList.toggle('tab', x.dataset.view !== tab.dataset.view);
+            x.classList.toggle('tabClicked', (x.dataset.view === tab.dataset.view || (x.classList.contains('rh-tab') && x.dataset.group === rhGroupFor(tab.dataset.view))));
+            x.classList.toggle('tab', !(x.dataset.view === tab.dataset.view || (x.classList.contains('rh-tab') && x.dataset.group === rhGroupFor(tab.dataset.view))));
           });
           document.querySelectorAll('.view').forEach(x => x.classList.remove('active'));
           const previousView = state.view;
@@ -2383,6 +2475,7 @@
       rhApplyView();
       rhSyncSidebarActive(state.view);
     }
+    rhComposeNavigation();
     // Install before the ASUS window load handler so the observer sees both menu
     // renders. Keep the initial() hook as a fallback even if ASUS setup throws.
     if (typeof initial === 'function') {
@@ -2395,19 +2488,61 @@
       rhSetupTabs();
     }
 
+
     async function loadDashboard() {
+      const grid = document.getElementById('dashboard-grid');
+      const widgets = [...new Set(rhModuleCatalog
+        .filter(m => m.availability !== 'unsupported' && m.availability !== 'disabled')
+        .flatMap(m => (m.ui || []).flatMap(section => section.dashboard_widgets || [])))];
+      const owners = { services: 'services', nginx: 'nginx', certificates: 'certificates', active_bans: 'firewall' };
+      const loaders = {
+        services: async () => { const items = await api('/services'); return ['Services',
+          items.filter(s => s.running).length + '/' + items.length, 'running']; },
+        nginx: async () => { const [server, items] = await Promise.all([api('/nginx/status'), api('/nginx/objects')]);
+          return ['Nginx objects', items.length, server.running ? 'nginx online' : 'nginx offline']; },
+        certificates: async () => { const items = await api('/certificates');
+          const due = items.filter(item => item.renewal_due).length;
+          return ['Certificates', items.length, due ? due + ' need attention' : 'renewals healthy']; },
+        active_bans: async () => { const status = await api('/firewall?include_bans=false');
+          const summary = status.snapshot || {};
+          return ['Active bans', summary.active_ban_count ?? 0,
+            (summary.banned_subnets || []).length + ' subnet · ' + (summary.banned_ips || []).length + ' IP']; }
+      };
+      grid.innerHTML = widgets.map(id => '<div class="card metric" data-dashboard-widget="' +
+        esc(id) + '" data-widget-state="loading"><div class="label">' + esc(id) +
+        '</div><div class="value">Loading…</div></div>').join('');
+      await Promise.all(widgets.map(async id => {
+        const card = [...grid.querySelectorAll('[data-dashboard-widget]')].find(el => el.dataset.dashboardWidget === id);
+        if (!card) return;
+        try {
+          if (!loaders[id]) throw new Error('Widget not available');
+          const [label, value, detail] = await loaders[id]();
+          card.innerHTML = '<div class="label">' + esc(label) + '</div><div class="value">' +
+            esc(value) + '</div><div class="sub">' + esc(detail) + '</div>';
+          card.dataset.widgetState = 'ready';
+          if (owners[id]) {
+            card.setAttribute('role', 'button');
+            card.setAttribute('tabindex', '0');
+            card.onclick = () => rhSelectView(owners[id]);
+            card.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); rhSelectView(owners[id]); } };
+          }
+        } catch (error) {
+          card.dataset.widgetState = 'unavailable';
+          card.innerHTML = '<div class="label">' + esc(id) +
+            '</div><div class="value">Unavailable</div><div class="sub">' + esc(error.message) + '</div>';
+        }
+      }));
       try {
-        const d = await api('/dashboard');
-        const metrics = [['Services', `${d.services_running}/${d.services_total}`, 'running'], ['Nginx objects', d.nginx_objects, d.nginx_running ? 'nginx online' : 'nginx offline'], ['Certificates', d.certificates, d.certificates_due ? `${d.certificates_due} need attention` : 'renewals healthy'], ['Active bans', d.active_bans, `${d.active_subnet_bans} subnet · ${d.active_ip_bans} IP`]];
-        document.getElementById('dashboard-grid').innerHTML = metrics.map(x => `<div class="card metric"><div class="label">${x[0]}</div><div class="value">${x[1]}</div><div class="sub">${x[2]}</div></div>`).join('');
+        const info = await api('/runtime');
         const versionEl = document.getElementById('rh-version');
-        if (versionEl) versionEl.textContent = `v${d.version}`;
+        if (versionEl) versionEl.textContent = 'v' + info.version;
         const modeEl = document.getElementById('rh-mode');
         if (modeEl) {
-          modeEl.textContent = d.test_mode ? 'x64 test mode' : 'Asuswrt-Merlin mode';
+          modeEl.textContent = info.test_mode ? 'x64 test mode' :
+            info.platform === 'linux' ? 'Linux mode' : 'Asuswrt-Merlin mode';
           modeEl.style.display = 'inline-flex';
         }
-      } catch (e) { toast(e.message, true) }
+      } catch (_) { /* Widget failures do not block the dashboard shell. */ }
     }
 
     async function loadServices() { try { const rows = await api('/services'); document.getElementById('services-body').innerHTML = rows.length ? rows.map(s => { const name = s.name.replace(/^[SK]\d{2}/, ''); const serviceStatus = s.enabled ? status(s.running) : '<span class="status off">Disabled</span>'; const isRouterHub = s.name.endsWith('router-hub'); const logs = `<button class="btn small action" onclick="serviceLogs('${encodeURIComponent(s.name)}')">Logs</button>`; const refresh = `<button class="btn small primary" onclick="serviceAction('${encodeURIComponent(s.name)}','refresh')">Refresh</button>`; const controls = isRouterHub ? `${logs}${refresh}` : s.enabled ? `${logs}${refresh}<button class="btn small" onclick="serviceAction('${encodeURIComponent(s.name)}','${s.running ? 'stop' : 'start'}')">${s.running ? 'Stop' : 'Start'}</button><button class="btn small" onclick="serviceAction('${encodeURIComponent(s.name)}','restart')">Restart</button><button class="btn small danger" onclick="serviceAction('${encodeURIComponent(s.name)}','disable')">Disable</button>` : `${logs}<button class="btn small" onclick="serviceAction('${encodeURIComponent(s.name)}','enable')">Enable</button>`; return `<tr><td style="vertical-align:middle"><strong>${esc(name)}</strong></td><td style="vertical-align:middle">${serviceStatus}</td><td style="vertical-align:middle"><div class="row-actions">${controls}</div></td></tr>` }).join('') : emptyRow(3) } catch (e) { toast(e.message, true) } }
@@ -3542,6 +3677,7 @@
     setInterval(pollSystemUsage, 1000);
 
     refreshCurrent();
+    rhLoadModules();
   </script>
 </body>
 
