@@ -1,4 +1,3 @@
-mod adguard;
 mod api;
 #[path = "platforms/asus_ui.rs"]
 mod asus_ui;
@@ -9,15 +8,12 @@ mod certificate_http;
 mod command;
 mod config;
 mod core;
-mod firewall;
 mod models;
 mod platforms;
 mod modules;
-mod nginx;
 mod nginx_ingress;
 mod nginx_mutation;
 mod nginx_render;
-mod nginx_sites;
 #[path = "platforms/nginx_upgrade.rs"]
 mod nginx_upgrade;
 mod restore;
@@ -607,3 +603,6 @@ mod cli_tests {
         ));
     }
 }
+
+// Stable crate-root aliases while domain sources move beneath modules/.
+use modules::{adguard, firewall, nginx, nginx_sites};
