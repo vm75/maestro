@@ -7,7 +7,7 @@ Router Hub follows [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Add router-only `upgrade-nginx` with stable/mainline/exact release selection,
-  signed HTTPS downloads, SHA-256 verification of matching Entware IPKs, and
+  HTTPS downloads, SHA-256 verification of matching Entware IPKs, and
   explicit opt-in downgrades.
 - Preserve pre-install NGINX binaries, modules, module directives and init script
   for emergency recovery. Activate new NGINX masters with SIGUSR2 and gracefully
