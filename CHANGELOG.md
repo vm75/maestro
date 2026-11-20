@@ -2,6 +2,27 @@
 
 Router Hub follows [Semantic Versioning](https://semver.org/).
 
+## 0.10.4
+
+### Added
+
+- Add router-only `upgrade-nginx` with stable/mainline/exact release selection,
+  signed HTTPS downloads, SHA-256 verification of matching Entware IPKs, and
+  explicit opt-in downgrades.
+- Preserve pre-install NGINX binaries, modules, module directives and init script
+  for emergency recovery. Activate new NGINX masters with SIGUSR2 and gracefully
+  retire the old master with SIGQUIT, rather than an abrupt init.d restart.
+
+### Fixed
+
+- Detect custom NGINX release rebuilds by executable/module checksums rather
+  than version alone, paginate release discovery, and reject ambiguous release
+  tags, unsafe filenames, and invalid package asset sizes.
+- Serialize upgrades, isolate downloaded packages in non-overwriting private
+  directories, check temporary disk space, and report opkg/activation failures
+  instead of reporting success. Restore prior files on pre-activation failures
+  and document limits of package-manager rollback.
+
 ## 0.10.3
 
 ### Added
