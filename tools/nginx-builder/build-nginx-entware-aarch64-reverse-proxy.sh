@@ -4,6 +4,7 @@
 # Uses Entware's glibc 2.27 / Linux 3.10-targeted cross-toolchain and nginx-ssl recipe.
 # Does NOT install anything on the router.
 set -Eeuo pipefail
+unset CDPATH || true
 
 PROGRAM=${0##*/}
 CHANNEL=stable
@@ -52,7 +53,7 @@ NOTES:
   * Requires substantial disk space (10+ GiB recommended), RAM, and internet.
   * Requires a source release signed by one of the four pinned nginx.org keys.
   * Entware recipes may need adjustments for brand-new NGINX versions.
-  * Hardened reverse-proxy profile: PIE, SSP, full RELRO.
+  * Hardened reverse-proxy profile: PIE, SSP, FORTIFY=2, full RELRO.
   * Fixed, broad reverse-proxy profile: HTTP/3, HTTP/2, gRPC, CGI gateways,
     Memcached proxy, TCP/UDP stream, Brotli, headers-more, request limits.
   * Excludes native WebDAV, FLV, SSI, autoindex, tracking/legacy modules,
@@ -161,13 +162,17 @@ ENTWARE="$WORKDIR/Entware"
 DOWNLOAD_DIR="$WORKDIR/source"
 mkdir -p -- "$DOWNLOAD_DIR"
 
-# Extract a release version from the current official HTML page (not a mirror).
-if [[ -z $VERSION ]]; then
-  log "Discovering latest $CHANNEL NGINX release from nginx.org"
-  html_file="$DOWNLOAD_DIR/download.html"
-  curl --http1.1 --fail --silent --show-error --location --retry 3 --connect-timeout 20 \
-       'https://nginx.org/en/download.html' -o "$html_file"
-  VERSION=$(python3 - "$CHANNEL" "$html_file" <<'PY'
+ENTWARE_REV=${ENTWARE_REV:-8c851f3c5e8ecf4dbadee96bd425345b424af1c2}
+ENTWARE_PACKAGES_REV=${ENTWARE_PACKAGES_REV:-f2728214b8a3109e89dcfa188a3cedcf4edf2e57}
+
+discover_and_fetch_nginx() {
+  # Extract a release version from the current official HTML page (not a mirror).
+  if [[ -z $VERSION ]]; then
+    log "Discovering latest $CHANNEL NGINX release from nginx.org"
+    local html_file="$DOWNLOAD_DIR/download.html"
+    curl --http1.1 --fail --silent --show-error --location --retry 3 --connect-timeout 20 \
+         'https://nginx.org/en/download.html' -o "$html_file"
+    VERSION=$(python3 - "$CHANNEL" "$html_file" <<'PY'
 import re, sys
 channel, filename = sys.argv[1:]
 page = open(filename, encoding='utf-8').read()
@@ -179,46 +184,48 @@ if not m:
     sys.exit(f'Cannot identify latest {channel} version on nginx.org download page')
 print(m.group(1))
 PY
-  )
-fi
-log "Selected NGINX $VERSION ($RELEASE_SELECTION)"
-
-# Verify authentic nginx.org sources before touching build recipes.
-TARBALL="$DOWNLOAD_DIR/nginx-$VERSION.tar.gz"
-ASC="$TARBALL.asc"
-for extension in '' .asc; do
-  path="$TARBALL$extension"
-  if [[ ! -s $path ]]; then
-    log "Downloading $(basename "$path")"
-    curl --http1.1 --fail --silent --show-error --location --retry 3 --connect-timeout 20 \
-         "https://nginx.org/download/nginx-$VERSION.tar.gz$extension" -o "$path.partial"
-    mv -f -- "$path.partial" "$path"
+    )
   fi
-done
+  log "Selected NGINX $VERSION ($RELEASE_SELECTION)"
 
-GPG_HOME=$(mktemp -d)
-chmod 0700 "$GPG_HOME"
-# Source-signing keys; fingerprints are pinned independently of fetched key files.
-declare -A nginx_keys=(
-  [arut]=43387825DDB1BB97EC36BA5D007C8D7C15D87369
-  [pluknet]=D6786CE303D9A9022998DC6CC8464D549AF75C0A
-  [sb]=7338973069ED3F443F4D37DFA64FD5B17ADB39A8
-  [thresh]=13C82A63B603576156E30A4EA0EA981B66B0D967
-)
-for key in arut pluknet sb thresh; do
-  keyfile="$GPG_HOME/$key.key"
-  curl --http1.1 --fail --silent --show-error --location --retry 3 --connect-timeout 20 \
-       "https://nginx.org/keys/$key.key" -o "$keyfile"
-  actual=$(GNUPGHOME="$GPG_HOME" gpg --batch --show-keys --with-colons "$keyfile" \
-    | awk -F: '$1=="pub" {want=1; next} want && $1=="fpr" {print $10; exit}')
-  [[ $actual == "${nginx_keys[$key]}" ]] || die "Unexpected NGINX signing key fingerprint for $key: $actual"
-  GNUPGHOME="$GPG_HOME" gpg --batch --quiet --import "$keyfile"
-done
-log 'Verifying NGINX source release signature'
-GNUPGHOME="$GPG_HOME" gpg --batch --verify "$ASC" "$TARBALL" \
-  || die 'NGINX source signature verification failed'
-SOURCE_SHA256=$(sha256sum "$TARBALL" | awk '{print $1}')
-log "Verified nginx-$VERSION.tar.gz: $SOURCE_SHA256"
+  # Verify authentic nginx.org sources before touching build recipes.
+  TARBALL="$DOWNLOAD_DIR/nginx-$VERSION.tar.gz"
+  ASC="$TARBALL.asc"
+  for extension in '' .asc; do
+    local path="$TARBALL$extension"
+    if [[ ! -s $path ]]; then
+      log "Downloading $(basename "$path")"
+      curl --http1.1 --fail --silent --show-error --location --retry 3 --connect-timeout 20 \
+           "https://nginx.org/download/nginx-$VERSION.tar.gz$extension" -o "$path.partial"
+      mv -f -- "$path.partial" "$path"
+    fi
+  done
+
+  GPG_HOME=$(mktemp -d)
+  chmod 0700 "$GPG_HOME"
+  # Source-signing keys; fingerprints are pinned independently of fetched key files.
+  declare -A nginx_keys=(
+    [arut]=43387825DDB1BB97EC36BA5D007C8D7C15D87369
+    [pluknet]=D6786CE303D9A9022998DC6CC8464D549AF75C0A
+    [sb]=7338973069ED3F443F4D37DFA64FD5B17ADB39A8
+    [thresh]=13C82A63B603576156E30A4EA0EA981B66B0D967
+  )
+  for key in arut pluknet sb thresh; do
+    local keyfile="$GPG_HOME/$key.key"
+    curl --http1.1 --fail --silent --show-error --location --retry 3 --connect-timeout 20 \
+         "https://nginx.org/keys/$key.key" -o "$keyfile"
+    local actual
+    actual=$(GNUPGHOME="$GPG_HOME" gpg --batch --show-keys --with-colons "$keyfile" \
+      | awk -F: '$1=="pub" {want=1; next} want && $1=="fpr" {print $10; exit}')
+    [[ $actual == "${nginx_keys[$key]}" ]] || die "Unexpected NGINX signing key fingerprint for $key: $actual"
+    GNUPGHOME="$GPG_HOME" gpg --batch --quiet --import "$keyfile"
+  done
+  log 'Verifying NGINX source release signature'
+  GNUPGHOME="$GPG_HOME" gpg --batch --verify "$ASC" "$TARBALL" \
+    || die 'NGINX source signature verification failed'
+  SOURCE_SHA256=$(sha256sum "$TARBALL" | awk '{print $1}')
+  log "Verified nginx-$VERSION.tar.gz: $SOURCE_SHA256"
+}
 
 # Preserve Entware's complete feed list: packages includes Rust and Go feed files
 # even when only NGINX is being built. Repair the single-feed config written by
@@ -228,11 +235,14 @@ sync_feeds_conf() {
   upstream_feeds=$(git -C "$ENTWARE" show HEAD:feeds.conf) \
     || die 'Cannot read upstream Entware feeds.conf'
   legacy_feed='src-git packages https://github.com/Entware/entware-packages.git'
+  if [[ -n ${ENTWARE_PACKAGES_REV:-} ]]; then
+    upstream_feeds=$(sed -E "s#^(src-git packages https://github.com/Entware/entware-packages.git).*#\1^${ENTWARE_PACKAGES_REV}#" <<< "$upstream_feeds")
+  fi
   if [[ -e $ENTWARE/feeds.conf ]]; then
     local current_feeds
     current_feeds=$(cat "$ENTWARE/feeds.conf")
     if [[ $current_feeds != "$upstream_feeds" && $current_feeds != "$legacy_feed" ]]; then
-      die "Unexpected custom feeds.conf in $ENTWARE; use a dedicated --workdir"
+      log 'Synchronizing feeds.conf with configured feed revisions'
     fi
   fi
   printf '%s\n' "$upstream_feeds" > "$ENTWARE/feeds.conf"
@@ -243,11 +253,20 @@ if [[ ! -d $ENTWARE/.git ]]; then
   [[ ! -e $ENTWARE ]] || die "$ENTWARE exists but is not an Entware git checkout"
   log 'Cloning Entware build system'
   git clone https://github.com/Entware/Entware.git "$ENTWARE"
+  if [[ -n ${ENTWARE_REV:-} ]]; then
+    log "Checking out validated Entware revision $ENTWARE_REV"
+    git -C "$ENTWARE" checkout -q "$ENTWARE_REV"
+  fi
 else
   sync_feeds_conf
   if (( UPDATE_REPOS )); then
-    log 'Updating Entware build system (fast-forward only)'
-    git -C "$ENTWARE" pull --ff-only
+    if [[ -z ${ENTWARE_REV:-} ]]; then
+      log 'Updating Entware build system (fast-forward only)'
+      git -C "$ENTWARE" pull --ff-only
+    else
+      log "Ensuring Entware is at validated revision $ENTWARE_REV"
+      git -C "$ENTWARE" checkout -q "$ENTWARE_REV"
+    fi
   fi
 fi
 [[ -f $ENTWARE/configs/aarch64-3.10.config ]] || die 'Entware aarch64-3.10 target config not found'
@@ -268,6 +287,57 @@ else
 fi
 # Re-index after ALL feeds exist, resolving cross-feed includes during scanning.
 (cd "$ENTWARE" && make package/symlinks-install)
+
+toolchain_ready() {
+  local stamp
+  for stamp in "$ENTWARE"/staging_dir/toolchain-*/stamp/.gcc_final_installed; do
+    if [[ -f $stamp ]]; then return 0; fi
+  done
+  return 1
+}
+
+TARGET_CONFIG="$ENTWARE/configs/aarch64-3.10.config"
+BASE_HASH=$(sha256sum "$TARGET_CONFIG" | awk '{print $1}')
+CONFIG_MARKER="$ENTWARE/.nginx-aarch64-target-config-sha256"
+
+# Phase 1: Toolchain bootstrap using Entware's stock validated target configuration.
+if ! toolchain_ready; then
+  log 'Cross-toolchain not found; preparing bootstrap configuration'
+  cp -f -- "$TARGET_CONFIG" "$ENTWARE/.config"
+  # Target config defines the validated bootstrap configuration:
+  # CONFIG_PKG_CC_STACKPROTECTOR_NONE=y, CONFIG_PKG_FORTIFY_SOURCE_NONE=y,
+  # CONFIG_PKG_RELRO_NONE=y, CONFIG_PKG_ASLR_PIE_NONE=y.
+  # Package-level hardening flags must NOT leak into toolchain bootstrap;
+  # glibc 2.27 loader fails linking rtld with duplicate symbols when stack-protector is enabled globally.
+  (cd "$ENTWARE" && make defconfig)
+  printf '%s\n' "$BASE_HASH" > "$CONFIG_MARKER"
+
+  log "Building Entware cross-toolchain with $JOBS jobs (first run can be lengthy)"
+  (cd "$ENTWARE" && make -j"$JOBS" tools/install)
+  # Linux 3.10 host helpers use identifiers such as constexpr which became C23
+  # keywords. Limit GNU C17 to the header bootstrap; retain Entware's cross compiler
+  # and normal host flags for the remaining toolchain and packages.
+  (cd "$ENTWARE" && make -j"$JOBS" toolchain/kernel-headers/compile V=s \
+    HOST_CFLAGS="-O2 -std=gnu17 -I$ENTWARE/staging_dir/host/include" \
+    HOST_CXXFLAGS="-O2 -I$ENTWARE/staging_dir/host/include")
+  (cd "$ENTWARE" && make -j"$JOBS" toolchain/install V=s MAKEINFO=true ac_cv_prog_MAKEINFO=true)
+  # target/compile prepares a separate Linux source tree and rebuilds the same
+  # legacy host helpers, so it needs the compatibility flags too.
+  (cd "$ENTWARE" && make -j"$JOBS" target/compile V=s \
+    HOST_CFLAGS="-O2 -std=gnu17 -I$ENTWARE/staging_dir/host/include" \
+    HOST_CXXFLAGS="-O2 -I$ENTWARE/staging_dir/host/include")
+else
+  log 'Entware cross-toolchain already built and ready'
+fi
+
+if (( TOOLCHAIN_ONLY )); then
+  log "Entware cross-toolchain and target environment built successfully at $WORKDIR"
+  exit 0
+fi
+
+# Phase 2: Package build with full hardening profile.
+discover_and_fetch_nginx
+
 RECIPE_FILE="$ENTWARE/feeds/packages/net/nginx/Makefile"
 [[ -f $RECIPE_FILE ]] || die "Entware nginx recipe not found: $RECIPE_FILE"
 [[ -e $ENTWARE/package/feeds/packages/nginx/Makefile ]] || die 'Entware nginx feed symlink is missing'
@@ -310,9 +380,6 @@ cp -f -- "$TARBALL" "$ENTWARE/dl/nginx-$VERSION.tar.gz"
 # Fixed, broad reverse-proxy profile; not per-build feature switches.
 # Apply this on EVERY run, including cached builds, so former minimal profiles
 # cannot silently persist.
-TARGET_CONFIG="$ENTWARE/configs/aarch64-3.10.config"
-BASE_HASH=$(sha256sum "$TARGET_CONFIG" | awk '{print $1}')
-CONFIG_MARKER="$ENTWARE/.nginx-aarch64-target-config-sha256"
 if [[ ! -f "$ENTWARE/.config" || ! -f $CONFIG_MARKER || $(cat "$CONFIG_MARKER") != "$BASE_HASH" ]]; then
   if [[ -f $ENTWARE/.config && ! -f $CONFIG_MARKER ]]; then
     die 'Existing .config was not created by this script. Use a dedicated --workdir.'
@@ -333,7 +400,7 @@ content = path.read_text()
 choices = {
     'PKG_ASLR_PIE': 'REGULAR',
     'PKG_CC_STACKPROTECTOR': 'STRONG',
-    'PKG_FORTIFY_SOURCE': 'NONE',
+    'PKG_FORTIFY_SOURCE': '2',
     'PKG_RELRO': 'FULL',
 }
 settings = {
@@ -426,7 +493,7 @@ expect_kconfig() {
   fi
 }
 for name in PKG_ASLR_PIE_REGULAR PKG_CC_STACKPROTECTOR_STRONG \
-  PKG_FORTIFY_SOURCE_NONE PKG_RELRO_FULL PKG_CHECK_FORMAT_SECURITY \
+  PKG_FORTIFY_SOURCE_2 PKG_RELRO_FULL PKG_CHECK_FORMAT_SECURITY \
   NGINX_HTTP_V2 NGINX_HTTP_QUIC NGINX_HTTP_REAL_IP NGINX_HTTP_AUTH_REQUEST \
   NGINX_HTTP_ACCESS NGINX_HTTP_AUTH_BASIC NGINX_HTTP_PROXY \
   NGINX_HTTP_REWRITE NGINX_HTTP_MAP NGINX_HTTP_LIMIT_REQ NGINX_HTTP_LIMIT_CONN \
@@ -435,7 +502,7 @@ for name in PKG_ASLR_PIE_REGULAR PKG_CC_STACKPROTECTOR_STRONG \
   NGINX_HTTP_SCGI NGINX_HTTP_MEMCACHED NGINX_STREAM_REAL_IP NGINX_PCRE; do
   expect_kconfig "$name" y
 done
-for name in PKG_FORTIFY_SOURCE_1 PKG_FORTIFY_SOURCE_2 PKG_FORTIFY_SOURCE_3 \
+for name in PKG_FORTIFY_SOURCE_NONE PKG_FORTIFY_SOURCE_1 PKG_FORTIFY_SOURCE_3 \
   NGINX_DAV NGINX_FLV NGINX_HTTP_SSI NGINX_HTTP_USERID \
   NGINX_HTTP_AUTOINDEX NGINX_HTTP_EMPTY_GIF NGINX_HTTP_BROWSER \
   PACKAGE_nginx-full PACKAGE_nginx-mod-geoip2 PACKAGE_nginx-mod-lua \
@@ -448,26 +515,7 @@ for name in nginx-ssl nginx-mod-brotli nginx-mod-stream nginx-mod-headers-more; 
   expect_kconfig "PACKAGE_$name" m
 done
 
-log "Building Entware cross-toolchain, NGINX, Brotli, stream and headers-more with $JOBS jobs (first run can be lengthy)"
-(cd "$ENTWARE" && make -j"$JOBS" tools/install)
-# Linux 3.10 host helpers use identifiers such as constexpr which became C23
-# keywords. Limit GNU C17 to the header bootstrap; retain Entware's cross compiler
-# and normal host flags for the remaining toolchain and packages.
-(cd "$ENTWARE" && make -j"$JOBS" toolchain/kernel-headers/compile V=s \
-  HOST_CFLAGS="-O2 -std=gnu17 -I$ENTWARE/staging_dir/host/include" \
-  HOST_CXXFLAGS="-O2 -I$ENTWARE/staging_dir/host/include")
-(cd "$ENTWARE" && make -j"$JOBS" toolchain/install V=s MAKEINFO=true ac_cv_prog_MAKEINFO=true)
-# target/compile prepares a separate Linux source tree and rebuilds the same
-# legacy host helpers, so it needs the compatibility flags too.
-(cd "$ENTWARE" && make -j"$JOBS" target/compile V=s \
-  HOST_CFLAGS="-O2 -std=gnu17 -I$ENTWARE/staging_dir/host/include" \
-  HOST_CXXFLAGS="-O2 -I$ENTWARE/staging_dir/host/include")
-
-if (( TOOLCHAIN_ONLY )); then
-  log "Entware cross-toolchain and target environment built successfully at $WORKDIR"
-  exit 0
-fi
-
+log "Compiling NGINX, Brotli, stream and headers-more with $JOBS jobs"
 # Do not reuse a package compilation for a previous NGINX release.
 (cd "$ENTWARE" && make package/nginx/clean)
 (cd "$ENTWARE" && make -j"$JOBS" package/nginx/compile V=s)
@@ -593,12 +641,12 @@ PY
     printf 'target=aarch64-k3.10\n'
     printf 'nginx_source_sha256=%s\n' "$SOURCE_SHA256"
     printf 'profile=router-hub-reverse-proxy-hardened-v2-broad-upstream\n'
-    printf 'hardening=PIE+SSP_STRONG+FULL_RELRO+FORMAT_SECURITY\n'
+    printf 'hardening=PIE+SSP_STRONG+FORTIFY2+FULL_RELRO+FORMAT_SECURITY\n'
     printf 'enabled_upstreams=HTTP,HTTPS,GRPC,FASTCGI,UWSGI,SCGI,MEMCACHED,TCP,UDP\n'
     printf 'enabled_features=HTTP2,HTTP3,REAL_IP,ACCESS,AUTH_REQUEST,RATE_LIMIT,CONN_LIMIT,GZIP,BROTLI,HEADERS_MORE\n'
     printf 'disabled_modules=DAV,FLV,SSI,USERID,AUTOINDEX,EMPTY_GIF,BROWSER,NJS,GEOIP2,NAXSI,LUA,RTMP,TS,DAV_EXT\n'
     printf '\nSelected configuration:\n'
-    grep -E '^(CONFIG_PKG_(ASLR_PIE_REGULAR|CC_STACKPROTECTOR_STRONG|FORTIFY_SOURCE_NONE|RELRO_FULL|CHECK_FORMAT_SECURITY)=y|CONFIG_NGINX_HTTP_(V2|REAL_IP|QUIC|AUTH_REQUEST|FASTCGI|UWSGI|SCGI|MEMCACHED)=y|CONFIG_PACKAGE_nginx-(ssl|mod-(brotli|stream|headers-more))=m)' "$ENTWARE/.config"
+    grep -E '^(CONFIG_PKG_(ASLR_PIE_REGULAR|CC_STACKPROTECTOR_STRONG|FORTIFY_SOURCE_2|RELRO_FULL|CHECK_FORMAT_SECURITY)=y|CONFIG_NGINX_HTTP_(V2|REAL_IP|QUIC|AUTH_REQUEST|FASTCGI|UWSGI|SCGI|MEMCACHED)=y|CONFIG_PACKAGE_nginx-(ssl|mod-(brotli|stream|headers-more))=m)' "$ENTWARE/.config"
     printf 'entware_commit=%s\n' "$(git -C "$ENTWARE" rev-parse HEAD)"
     printf 'entware_packages_commit=%s\n' "$(git -C "$ENTWARE/feeds/packages" rev-parse HEAD)"
     printf '\nELF interpreter:\n'

@@ -3,6 +3,12 @@ name: Build Toolchain Image
 # Deliberately manual-only: rebuild the Entware toolchain container image on demand.
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish (default: latest)"
+        required: false
+        default: latest
+        type: string
 
 permissions:
   contents: read
@@ -37,7 +43,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/entware-aarch64-builder:latest"
+          TAG="${{ inputs.tag || 'latest' }}"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/entware-aarch64-builder:${TAG}"
+          LATEST_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/entware-aarch64-builder:latest"
           echo "Building $IMAGE using $(nproc) jobs..."
           docker build \
             --build-arg JOBS=$(nproc) \
@@ -45,4 +53,8 @@ jobs:
             -f tools/nginx-builder/Dockerfile .
           echo "Pushing $IMAGE to GHCR..."
           docker push "$IMAGE"
+          if [[ "$TAG" != "latest" ]]; then
+            docker tag "$IMAGE" "$LATEST_IMAGE"
+            docker push "$LATEST_IMAGE"
+          fi
           echo "Successfully published $IMAGE"
