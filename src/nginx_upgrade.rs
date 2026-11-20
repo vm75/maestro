@@ -1057,15 +1057,22 @@ pub async fn run(
         return Err(recover_failure(config, &snapshot, error, was_running).await);
     }
 
-    match installed_matches_release(&config.commands.nginx, &checksum_map, Path::new(MODULES_DIR)) {
+    match installed_matches_release(
+        &config.commands.nginx,
+        &checksum_map,
+        Path::new(MODULES_DIR),
+    ) {
         Ok(true) => {}
         Ok(false) => {
             return Err(recover_failure(
                 config,
                 &snapshot,
-                anyhow!("installed NGINX executable/modules do not match verified release checksums"),
+                anyhow!(
+                    "installed NGINX executable/modules do not match verified release checksums"
+                ),
                 was_running,
-            ).await);
+            )
+            .await);
         }
         Err(error) => return Err(recover_failure(config, &snapshot, error, was_running).await),
     }
