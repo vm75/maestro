@@ -196,6 +196,7 @@ jobs:
         run: |
           set -uo pipefail
           log="$RUNNER_TEMP/nginx-validation.log"
+          cargo +1.85.0 fmt --all
           cargo +1.85.0 fmt --all -- --check >"$log" 2>&1
           fmt_status=$?
           cargo +1.85.0 check --locked --all-targets >>"$log" 2>&1
@@ -216,7 +217,7 @@ jobs:
           } > .ci-nginx-validation.txt
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .ci-nginx-validation.txt
+          git add .ci-nginx-validation.txt src/nginx_upgrade.rs src/main.rs
           git commit -m 'ci: temporary NGINX validation results'
           git push origin HEAD:refs/heads/ci/upgrade-nginx
           if (( fmt_status || check_status || test_status || clippy_status )); then exit 1; fi
