@@ -99,10 +99,10 @@ enum Command {
         #[arg(long, value_enum, default_value_t = nginx_upgrade::NginxChannel::Stable)]
         channel: nginx_upgrade::NginxChannel,
         /// Target a specific release tag (e.g. nginx-v1.30.7-run44684227015-a1).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "version")]
         tag: Option<String>,
         /// Target a specific NGINX version (e.g. 1.30.7).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "tag")]
         version: Option<String>,
         /// Verify and stage the IPK bundle in /tmp without invoking opkg.
         #[arg(long)]
@@ -116,6 +116,9 @@ enum Command {
         /// Check for available updates without downloading or installing.
         #[arg(long)]
         check: bool,
+        /// Permit switching from a newer version to an older stable/mainline release.
+        #[arg(long)]
+        allow_downgrade: bool,
     },
 }
 
@@ -166,6 +169,7 @@ fn main() -> Result<()> {
             no_backup,
             force,
             check,
+            allow_downgrade,
         } => {
             nginx_upgrade::require_router(config.platform, config.test_mode)?;
             tokio::runtime::Builder::new_current_thread()
@@ -182,6 +186,7 @@ fn main() -> Result<()> {
                         no_backup,
                         force,
                         check,
+                        allow_downgrade,
                     },
                 ))
         }
@@ -475,6 +480,7 @@ mod cli_tests {
                 no_backup: false,
                 force: false,
                 check: false,
+                allow_downgrade: false,
             })
         ));
 
@@ -499,6 +505,7 @@ mod cli_tests {
                 no_backup: true,
                 force: true,
                 check: false,
+                allow_downgrade: false,
             })
         ));
 
@@ -521,6 +528,7 @@ mod cli_tests {
                 no_backup: false,
                 force: false,
                 check: true,
+                allow_downgrade: false,
             }) if t == "nginx-v1.30.7-run44684227015-a1"
         ));
 
@@ -537,7 +545,16 @@ mod cli_tests {
                 no_backup: false,
                 force: false,
                 check: false,
+                allow_downgrade: false,
             }) if v == "1.30.7"
         ));
+        assert!(Cli::try_parse_from([
+            "router-hub", "upgrade-nginx", "--tag", "nginx-v1.30.7",
+            "--version", "1.30.7"
+        ]).is_err());
+        let cli = Cli::try_parse_from([
+            "router-hub", "upgrade-nginx", "--channel", "stable", "--allow-downgrade"
+        ]).unwrap();
+        assert!(matches!(cli.command, Some(Command::UpgradeNginx { allow_downgrade: true, .. })));
     }
 }
