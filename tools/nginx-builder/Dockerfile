@@ -3,13 +3,20 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install host compilation packages required by the Entware buildroot
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential git curl wget ca-certificates gnupg python3 python3-setuptools \
-    perl rsync subversion unzip zip file gawk gettext flex bison cpio bc \
-    libncurses-dev libssl-dev zlib1g-dev libelf-dev libxslt1-dev \
-    pkg-config time patch diffutils util-linux xz-utils zstd cmake ninja-build swig \
-    autoconf automake libtool libtool-bin texinfo sudo \
-    && rm -rf /var/lib/apt/lists/*
+RUN for attempt in 1 2 3; do \
+        apt-get update -o Acquire::Retries=3 && break || { \
+            if [ "$attempt" -eq 3 ]; then exit 1; fi; \
+            echo "apt-get update failed (attempt $attempt/3); retrying in 5s..."; \
+            sleep 5; \
+        }; \
+    done && \
+    apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
+        build-essential git curl wget ca-certificates gnupg python3 python3-setuptools \
+        perl rsync subversion unzip zip file gawk gettext flex bison cpio bc \
+        libncurses-dev libssl-dev zlib1g-dev libelf-dev libxslt1-dev \
+        pkg-config time patch diffutils util-linux xz-utils zstd cmake ninja-build swig \
+        autoconf automake libtool libtool-bin texinfo sudo \
+        && rm -rf /var/lib/apt/lists/*
 
 # Entware buildroot forbids building as root.
 # Create a builder user with UID 1001 (matching GitHub Actions runner).

@@ -144,12 +144,23 @@ test_asset_validation() {
   fi
 }
 
+# Test 7: Dockerfile apt retry resilience
+test_dockerfile_retries() {
+  local dockerfile="$SCRIPT_DIR/Dockerfile"
+  if grep -q 'Acquire::Retries' "$dockerfile" && grep -q 'for attempt in' "$dockerfile"; then
+    passed "Dockerfile apt-get includes retry logic and Acquire::Retries"
+  else
+    failed "Dockerfile" "Missing apt-get retry logic"
+  fi
+}
+
 test_syntax
 test_release_notes_heredoc
 test_docker_pull_error_handling
 test_two_phase_hardening
 test_reproducibility_pins
 test_asset_validation
+test_dockerfile_retries
 
 if (( FAILED == 0 )); then
   echo "=== All NGINX builder regression tests PASSED ==="
