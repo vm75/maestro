@@ -669,7 +669,6 @@ impl RollbackSnapshot {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NginxMasterIdentity {
     pid: i32,
@@ -687,13 +686,16 @@ fn parse_proc_start_ticks(stat: &str) -> Option<u64> {
     if matches!(state, "Z" | "X" | "x") {
         return None;
     }
-    fields.nth(18)?.parse::<u64>().ok().filter(|ticks| *ticks > 0)
+    fields
+        .nth(18)?
+        .parse::<u64>()
+        .ok()
+        .filter(|ticks| *ticks > 0)
 }
 
 fn is_nginx_master_title(cmdline: &[u8]) -> bool {
     let title = cmdline.split(|byte| *byte == 0).next().unwrap_or(&[]);
-    title == b"nginx: master process"
-        || title.starts_with(b"nginx: master process ")
+    title == b"nginx: master process" || title.starts_with(b"nginx: master process ")
 }
 
 /// Read the identity from procfs, independently of the PID file. Comparing
@@ -813,10 +815,9 @@ async fn wait_for_new_master(
     for _ in 0..100 {
         // A partial PID file during master startup is transient; never signal
         // it. Only a fully verified new master can advance this operation.
-        if let Ok(Some(candidate)) = nginx_master_from_pid_file(
-            &config.nginx.pid_path,
-            &config.commands.nginx,
-        ) {
+        if let Ok(Some(candidate)) =
+            nginx_master_from_pid_file(&config.nginx.pid_path, &config.commands.nginx)
+        {
             if candidate.pid != old_master.pid
                 && process_uses_binary(candidate.pid, &config.commands.nginx).unwrap_or(false)
             {
@@ -870,7 +871,8 @@ async fn reload_nginx(config: &AppConfig) -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     ensure!(
-        nginx_master_from_pid_file(&config.nginx.pid_path, &config.commands.nginx)? == Some(expected),
+        nginx_master_from_pid_file(&config.nginx.pid_path, &config.commands.nginx)?
+            == Some(expected),
         "NGINX master identity changed after reload"
     );
     Ok(())
@@ -1575,16 +1577,16 @@ ad87cc6f9b5b693e0c4bc2e6feda0915dce461e4a780d0d2e207730df826c50f  nginx-mod-brot
     fn fake_stat(pid: i32, start: u64, state: &str) -> String {
         let mut fields = vec!["0".to_string(); 19];
         fields[18] = start.to_string();
-        format!("{pid} (nginx master with spaces) {state} {}\\n", fields.join(" "))
+        format!("{pid} (nginx master with spaces) {state} {}\n", fields.join(" "))
     }
 
     fn create_fake_master(proc_root: &Path, pid: i32, binary: &Path, start: u64) {
         let process = proc_root.join(pid.to_string());
         fs::create_dir_all(&process).unwrap();
-        fs::write(process.join("comm"), "nginx\\n").unwrap();
+        fs::write(process.join("comm"), "nginx\n").unwrap();
         fs::write(
             process.join("cmdline"),
-            b"nginx: master process /opt/sbin/nginx\\0",
+            b"nginx: master process /opt/sbin/nginx\0",
         )
         .unwrap();
         fs::write(process.join("stat"), fake_stat(pid, start, "S")).unwrap();
@@ -1628,14 +1630,14 @@ ad87cc6f9b5b693e0c4bc2e6feda0915dce461e4a780d0d2e207730df826c50f  nginx-mod-brot
         assert_ne!(reused, original);
 
         fs::write(process.join("stat"), fake_stat(pid, 12345, "S")).unwrap();
-        fs::write(process.join("cmdline"), b"nginx: worker process\\0").unwrap();
+        fs::write(process.join("cmdline"), b"nginx: worker process\0").unwrap();
         assert!(nginx_master_identity_at(&proc_root, pid, &binary).is_err());
 
-        fs::write(process.join("cmdline"), b"nginx: master process nginx\\0").unwrap();
-        fs::write(process.join("comm"), "bash\\n").unwrap();
+        fs::write(process.join("cmdline"), b"nginx: master process nginx\0").unwrap();
+        fs::write(process.join("comm"), "bash\n").unwrap();
         assert!(nginx_master_identity_at(&proc_root, pid, &binary).is_err());
 
-        fs::write(process.join("comm"), "nginx\\n").unwrap();
+        fs::write(process.join("comm"), "nginx\n").unwrap();
         fs::remove_file(process.join("exe")).unwrap();
         symlink(&other_binary, process.join("exe")).unwrap();
         assert!(nginx_master_identity_at(&proc_root, pid, &binary).is_err());
@@ -1648,12 +1650,12 @@ ad87cc6f9b5b693e0c4bc2e6feda0915dce461e4a780d0d2e207730df826c50f  nginx-mod-brot
 
     #[test]
     fn parse_master_title_and_stat_require_valid_fields() {
-        assert!(is_nginx_master_title(b"nginx: master process /opt/sbin/nginx\\0"));
-        assert!(is_nginx_master_title(b"nginx: master process\\0"));
+        assert!(is_nginx_master_title(b"nginx: master process /opt/sbin/nginx\0"));
+        assert!(is_nginx_master_title(b"nginx: master process\0"));
         for invalid in [
-            &b"nginx: worker process\\0"[..],
-            &b"/opt/sbin/nginx -s reload\\0"[..],
-            &b"nginx: master process-wrapper\\0"[..],
+            &b"nginx: worker process\0"[..],
+            &b"/opt/sbin/nginx -s reload\0"[..],
+            &b"nginx: master process-wrapper\0"[..],
             &b""[..],
         ] {
             assert!(!is_nginx_master_title(invalid));
