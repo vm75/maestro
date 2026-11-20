@@ -11,7 +11,7 @@ custom nginx objects remain authored configuration files.
 
 ## Repository map
 
-- `src/main.rs`, `src/config.rs`, `src/state.rs` — startup, configuration, and shared runtime state.
+- `src/main.rs`, `src/config.rs`, `src/state.rs`, `src/upgrade.rs`, `src/nginx_upgrade.rs` — startup, configuration, shared runtime state, and router-only upgrade commands.
 - `src/api/` — authenticated HTTP API handlers and route map.
 - `src/nginx.rs`, `src/nginx_render.rs`, `src/nginx_sites.rs` — nginx filesystem workflows, Jinja rendering, and settings.
 - `src/firewall.rs`, `src/ban_attack/` — firewall management and log-driven bans.

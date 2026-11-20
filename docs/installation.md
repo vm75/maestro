@@ -183,6 +183,87 @@ This is a separate CLI process, **not** an authenticated API/UI action.
 upgrade requires a published stable IPK; prerelease tags and older tarball-only
 releases cannot be installed through this command.
 
+### Router-only NGINX upgrade command
+
+```sh
+/opt/bin/router-hub upgrade-nginx
+/opt/bin/router-hub upgrade-nginx --channel mainline
+/opt/bin/router-hub upgrade-nginx --check
+/opt/bin/router-hub upgrade-nginx --download-only
+/opt/bin/router-hub upgrade-nginx --no-backup
+/opt/bin/router-hub upgrade-nginx --version 1.30.7
+/opt/bin/router-hub upgrade-nginx --tag nginx-v1.30.7-run44684227015-a1
+/opt/bin/router-hub upgrade-nginx --force
+# Explicitly allow moving from newer mainline to older stable:
+/opt/bin/router-hub upgrade-nginx --channel stable --allow-downgrade
+```
+
+The CLI discovers manually published `nginx-v*` GitHub releases, selecting
+the latest stable (even minor) or mainline (odd minor) version unless you
+pin `--tag` or `--version`. Tag and version cannot be combined. Release
+discovery reads up to ten pages of GitHub Releases; older releases beyond that
+limit require `--tag`. A checksum comparison against the installed NGINX binary
+**and all four module binaries** detects same-version rebuilds, not just
+version increases. `--check` fetches only release metadata and checksums.
+
+The downloader verifies `SHA256SUMS` and all four matching Entware IPKs:
+`nginx-ssl`, `nginx-mod-brotli`, `nginx-mod-stream`, and
+`nginx-mod-headers-more`. It verifies the old NGINX configuration, checks
+available temporary space, stages the bundle in a unique private directory,
+and takes a full Router Hub backup by default (including `--download-only`).
+Use `--no-backup` only when you have a current external backup.
+
+A live router upgrade also saves the previous executable, module directory,
+module load directives and `S80nginx` in a **separate private rollback
+snapshot** under `/tmp/.nginx-rollback-*`. These files are important because
+Router Hub's normal backup does not include NGINX package binaries. Both
+the staged IPKs and rollback snapshot remain in temporary storage after the
+command; copy them off the router before rebooting if needed.
+
+When running as root, it invokes a bounded `opkg install` for the full
+bundle and validates the replacement NGINX configuration. Same-version
+rebuilds use `--force-reinstall`; selecting an older version explicitly
+requires `--allow-downgrade`, which passes `--force-downgrade` to opkg.
+If NGINX was running before installation, the command requests the supported
+NGINX **live binary upgrade** with SIGUSR2, waits for a different master PID
+running the new executable, and gracefully retires the old master with
+SIGQUIT. A configuration reload (SIGHUP) by itself cannot activate the
+replacement master binary. NGINX is left stopped if it was already stopped.
+
+When opkg returns a definite failure or post-install verification fails,
+Router Hub attempts to restore the previous NGINX binary, modules and module
+configuration from the snapshot and validates them. If opkg cannot be launched
+or times out, the installer state may be uncertain, so no automatic rollback
+is attempted: first ensure opkg and its package hooks have exited.
+That file restoration **does not restore opkg's installed-package database**:
+opkg may still report the attempted package version. After SIGUSR2 has been
+sent, an activation failure **does not trigger automatic file rollback**,
+because a new master may already be active and restoring modules underneath
+it could break compatibility. The command reports an error and leaves the
+snapshot for manual recovery; inspect process IDs and error logs before
+retiring either master. A failure is never reported as a successful upgrade.
+
+If opkg is unavailable, you are not root, or you choose `--download-only`,
+the command prints an explicit opkg command using the four verified package
+paths. The alias `update-nginx` is supported. The command is unavailable in
+Linux and test modes. To verify the running binary after an upgrade:
+
+```sh
+/opt/sbin/nginx -v
+cat /opt/var/run/nginx.pid
+ps | grep '[n]ginx: master'
+/opt/sbin/nginx -t -c /opt/etc/nginx/nginx.conf
+```
+
+For rollback, use the printed snapshot location to inspect and restore
+individual files under their original `/opt` paths only after determining
+which NGINX master is active. Keep the old master alive when SIGUSR2 activation
+fails; do not blindly restart or overwrite modules. To completely reconcile
+opkg metadata, reinstall the matching previously known-good IPK bundle after
+recovery. Test the recovered configuration and startup before restoring WAN
+traffic. Because `/tmp` is volatile, do not treat these local files as a
+permanent disaster-recovery backup.
+
 ### Tarball installation (alternative)
 
 On the router, ensure `curl`, `tar`, and `sha256sum` are available. You can
