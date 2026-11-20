@@ -230,8 +230,11 @@ running the new executable, and gracefully retires the old master with
 SIGQUIT. A configuration reload (SIGHUP) by itself cannot activate the
 replacement master binary. NGINX is left stopped if it was already stopped.
 
-On pre-activation failures, Router Hub attempts to restore the previous NGINX
-binary, modules and module configuration from the snapshot and validates them.
+When opkg returns a definite failure or post-install verification fails,
+Router Hub attempts to restore the previous NGINX binary, modules and module
+configuration from the snapshot and validates them. If opkg cannot be launched
+or times out, the installer state may be uncertain, so no automatic rollback
+is attempted: first ensure opkg and its package hooks have exited.
 That file restoration **does not restore opkg's installed-package database**:
 opkg may still report the attempted package version. After SIGUSR2 has been
 sent, an activation failure **does not trigger automatic file rollback**,
