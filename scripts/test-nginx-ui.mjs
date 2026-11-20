@@ -69,6 +69,11 @@ try {
   await call('Network.setCookie',{name:'router-hub-token',value:token,url:base});
   await call('Page.navigate',{url:base});
   await wait('typeof editNginxSettings === "function" && document.readyState === "complete"');
+  assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('#rh-nav > .rh-group > .rh-tab')).map(el => el.dataset.group)"),
+    ['dashboard','services','web','security','network'],'expected grouped navigation');
+  assert.ok(await evaluate("!!document.querySelector('#rh-nav [data-view=nginx]') && !!document.querySelector('#rh-nav [data-view=certificates]')"),
+    'Web must retain both existing feature views');
+
   await evaluate('document.querySelector(\'[data-view="nginx"]\').click(); editNginxSettings()');
   await wait('!!document.querySelector("#nginx-settings-form")');
   assert.equal(await evaluate(`(() => {

@@ -11,12 +11,14 @@ custom nginx objects remain authored configuration files.
 
 ## Repository map
 
-- `src/main.rs`, `src/config.rs`, `src/state.rs`, `src/upgrade.rs`, `src/nginx_upgrade.rs` — startup, configuration, shared runtime state, and router-only upgrade commands.
+- `src/main.rs`, `src/config.rs`, `src/state.rs`, `src/platforms/{upgrade,nginx_upgrade}.rs` — startup, configuration, runtime state, and router-only upgrade commands.
 - `src/api/` — authenticated HTTP API handlers and route map.
-- `src/nginx.rs`, `src/nginx_render.rs`, `src/nginx_sites.rs` — nginx filesystem workflows, Jinja rendering, and settings.
-- `src/firewall.rs`, `src/ban_attack/` — firewall management and log-driven bans.
-- `src/command.rs`, `src/asus_ui.rs`, `src/storage.rs` — privilege boundary, ASUS page integration, and persistence.
-- `web/index.html`, `config/`, `scripts/`, `test-fixtures/` — UI/template, configuration, router install, and test-mode support.
+- `src/modules/{nginx,nginx_sites}.rs`, `src/nginx_render.rs` — nginx filesystem workflows, Jinja rendering, and settings.
+- `src/modules/firewall.rs`, `src/ban_attack/` — firewall management and log-driven bans.
+- `src/command.rs`, `src/platforms/asus_ui.rs`, `src/storage.rs` — privilege boundary, ASUS page integration, and persistence.
+- `src/core/modules.rs`, `src/core/system_usage.rs`, `src/modules/`, `src/platforms/` — capabilities, feature code and platform-specific adapters.
+- `web/src/`, `scripts/build-web-ui.py`, `web/index.html` — modular UI sources, deterministic offline composer, and the embedded generated artifact.
+- `config/`, `scripts/`, `test-fixtures/` — configuration, router installation, and test-mode support.
 - `tests/` — API and firewall integration coverage.
 - [`README.md`](README.md) — operator setup and usage.
 - [`docs/architecture.md`](docs/architecture.md) — current boundaries, flows, and invariants.
@@ -30,6 +32,8 @@ cargo fmt --all -- --check
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo build --release
+python3 scripts/build-web-ui.py --check
+node scripts/test-web-ui.mjs
 ```
 
 Useful repository shortcuts are `make check`, `make test`, `make run`,
@@ -83,7 +87,8 @@ Do not introduce automatic NGINX build triggers or router deployment.
 - Keep router paths configurable and provide a test-mode override for every new router-specific path.
 - Preserve atomic JSON and nginx writes, path/symlink protections, token authentication, and bounded log reads.
 - Do not claim router compatibility without an actual matching architecture and firmware test.
-- Keep the self-contained UI offline-capable; do not add a frontend build chain or CDN dependency without a concrete need.
+- Keep the self-contained UI offline-capable; do not add a frontend package manager or CDN dependency. Edit `web/src/`, then regenerate `web/index.html` with `python3 scripts/build-web-ui.py`.
+- On `refactor/modular-architecture`, do not trigger CI until Phase 1 steps 1–3 are implemented. Stop at the M1 feature-parity gate before the rebrand or Server Man integration.
 
 ## Documentation routing
 

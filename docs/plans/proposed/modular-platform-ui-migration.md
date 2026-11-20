@@ -1,7 +1,7 @@
 # Modular platform and UI migration: Router Hub to Server Man
 
-**Status:** Proposed; implementation has not started  
-**Planning branch:** `refactor/modular-architecture`  
+**Status:** Phase 1 source implementation on `refactor/modular-architecture`; M1 validation and hardware sign-off pending  
+**Implementation branch:** `refactor/modular-architecture`  
 **Baseline:** `vm75/router-hub` `main` at `5e2013f031c965cf0381f868c541d60bb5eac602` (v0.10.4)  
 **Source projects:** [router-hub](https://github.com/vm75/router-hub), [server-man](https://github.com/vm75/server-man)  
 **Proposed eventual product name:** **Server Man** (`server-man`), subject to the explicit Phase 1.5 rebrand decision and migration checks.
@@ -103,6 +103,20 @@ For Linux in Phase 2, the same logical contract can add Applications (Podman Qua
 4. Failed reads are surfaced as unavailable/stale, not silently treated as zero or healthy.
 5. Summaries link to their owning tab/section where applicable. Avoid a global dashboard that duplicates all module pages.
 6. Widget placement/order is deterministic in Phase 1; user customization is deferred.
+
+## Phase 1 implementation record (M1 not signed off)
+
+The implementation branch now contains static module discovery and UI
+contributions, a protected additive `/api/modules` endpoint, legacy-compatible
+domain and platform adapters, and a build-free split ASUS UI source composed
+into the same self-contained `web/index.html`. Existing API routes, CLI
+commands, package name, version and persistent configuration are unchanged.
+
+The compatibility inventory and remaining manual/automated acceptance work are
+tracked in [Phase 1 compatibility and validation](../../phase1-compatibility.md).
+A JavaScript syntax check has been performed; the full Rust test suite, ARM IPK,
+native-Linux smoke, browser workflows, GitHub CI and physical ASUS validation
+**must still be run**. No Phase 1.5 rebrand or Phase 2 port is included.
 
 ## Baseline / pre-work (gate B0)
 

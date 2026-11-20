@@ -25,22 +25,56 @@ ipset/iptables, NVRAM, and optionally an AdGuard Home HTTP API.
 | --- | --- | --- |
 | `src/main.rs` | CLI, configuration loading, startup, shutdown, listener, Linux platform selection, background task startup, and init-script signal handling | `config`, `state`, `api` |
 | `src/config.rs` | TOML schema, platform selection, defaults, validation, test-mode path overrides | filesystem paths and command paths |
-| `src/api/` | Axum routes, authentication layer, request validation, JSON responses | `AppState` and domain modules |
+| `src/api/` | Stable Axum routes, authentication and responses; additive `/api/modules` discovery | `AppState`, `core::modules` registry, domain modules |
 | `src/state.rs` | Shared runtime state, dehydrated configuration, renewal loop, and tool updater | `storage`, `firewall`, dehydrated/OpenSSL through `CommandRunner`, GitHub HTTPS download |
 | `src/storage.rs` | Load/save JSON stores with atomic replacement, dehydrated certificate discovery, and policy fallback | configured data paths |
 | `src/command.rs` | External command boundary, timeout handling, test-mode simulation | configured executable paths |
 | `src/backup.rs` | Private CLI tar.gz backups, configured input selection, platform-specific destination, atomic publication without replacement | `config`, `CommandRunner`, configured tar |
 | `src/restore.rs` | Configuration-independent CLI recovery, complete archive staging and validation, descriptor-relative writes without following symlink parents, atomic file replacement | tar/gzip readers, rustix filesystem descriptors |
-| `src/upgrade.rs` | Router-only release verification, mandatory pre-install backup unless skipped, Entware process replacement | GitHub HTTPS, `backup`, opkg |
-| `src/nginx_upgrade.rs` | Router-only custom NGINX release verification, channel selection, mandatory backup, multi-IPK installation, post-test & service restart | GitHub HTTPS, `backup`, opkg, nginx config test, init script |
+| `src/platforms/upgrade.rs` (crate-root `upgrade`) | Router-only release verification, mandatory pre-install backup unless skipped, Entware process replacement | GitHub HTTPS, `backup`, opkg |
+| `src/platforms/nginx_upgrade.rs` (crate-root `nginx_upgrade`) | Router-only custom NGINX release verification, channel selection, mandatory backup, multi-IPK installation, post-test & service restart | GitHub HTTPS, `backup`, opkg, nginx config test, init script |
 | `src/nginx_render.rs` | Embedded Jinja policies, validated shared/site settings, shared-tree rendering and rollback | nginx settings TOML and rendered runtime files |
 | `src/nginx_ingress.rs` | Typed listener/source rules, validation, inherited access resolution, geo/default-server output and preview | `nginx_render`, `nginx_sites` |
 | `src/nginx_mutation.rs` | Object mutation snapshot and rollback of inputs, generated outputs, modes and enabled links | `nginx`, `nginx_render` |
 | `src/certificate_http.rs` | Serialized HTTP-01 session transitions, challenge readiness, scoped WAN lease and startup recovery | `state`, `nginx_ingress`, `CommandRunner` |
-| `src/nginx.rs` | Nginx object tree, upstream data fragments, HTTP forwarder, logs, symlinks, atomic writes | configured nginx filesystem |
-| `src/firewall.rs`, `src/ban_attack/` | Rule compilation, log tailing, aggregation, persistence, firewall backend | configured logs and ipset/iptables |
-| `src/asus_ui.rs` | Standalone UI rendering, ASP extraction, extension-page and menu-tree updates | `web/index.html`, ASUS template, configured ASUS paths |
-| `src/adguard.rs` | AdGuard Home HTTP client and LAN-IP discovery | configured endpoint or router NVRAM |
+| `src/modules/nginx.rs` (crate-root alias) | Nginx object tree, upstream data fragments, HTTP forwarder, logs, symlinks, atomic writes | configured nginx filesystem |
+| `src/modules/firewall.rs`, `src/ban_attack/` | Rule compilation, log tailing, aggregation, persistence, firewall backend | configured logs and ipset/iptables |
+| `src/platforms/asus_ui.rs` (crate-root alias) | Standalone UI rendering, ASP extraction, extension-page and menu-tree updates | `web/index.html`, ASUS template, configured ASUS paths |
+| `src/modules/adguard.rs` (crate-root alias) | AdGuard Home HTTP client and LAN-IP discovery | configured endpoint or router NVRAM |
+
+
+## Phase 1 module and UI boundaries
+
+`src/core/modules.rs` is a static capability registry with platform targets
+(`asuswrt` and `linux`), dependency validation, availability states and optional
+UI contributions. `GET /api/modules` returns non-secret discovery **behind
+existing bearer-token authentication**. It does not grant permissions or replace
+feature APIs. Unsupported and disabled modules are distinct from unavailable
+dependencies. Feature operations retain their existing per-route guards.
+
+Domain sources for AdGuard, NGINX objects/sites, firewall and WOL live under
+`src/modules/`. The crate-root aliases remain in place for existing callers.
+`src/core/system_usage.rs` contains the common proc-based sampler. The
+`src/platforms/service_manager.rs` contract currently selects the existing
+init-script adapter on both ASUS and Linux; native systemd belongs to Phase 2.
+ASUS menu/ASP rendering and router-only upgrade implementations live under
+`src/platforms/`. Rendering, certificate lifecycle, and Ban Shield background
+task startup remain in their existing compatibility locations with the same
+initialization order.
+
+For a build-free router UI, `web/src/` contains independently owned HTML
+panels and global JavaScript feature sources. `python3 scripts/build-web-ui.py`
+deterministically concatenates them into the **committed, single embedded**
+`web/index.html`. Rust continues to embed that one payload; ASUS still
+extracts its style and body contents into the ASP template. A static fallback
+mirrors discovery metadata until `/api/modules` responds. Navigation groups
+feature sections into Web, Network, Security and Services without changing the
+legacy `data-view`, `view-*` IDs, `?tab=` feature links or inline globals.
+Dashboard contributors load separately, showing unavailable errors per widget.
+
+See [Phase 1 compatibility and validation](phase1-compatibility.md) for
+rollback and the M1 stop gate. Phase 1 is not considered hardware validated
+until those checks have passed.
 
 ## Dependency direction
 

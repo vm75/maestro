@@ -1,4 +1,4 @@
-.PHONY: check test test-linux test-nginx test-ipk test-lab run fmt clippy release ipk init-lab run-lab
+.PHONY: check test test-linux test-nginx test-ipk test-ui test-lab run fmt clippy release ipk init-lab run-lab
 check:
 	cargo check --all-targets
 
@@ -10,6 +10,10 @@ test-nginx:
 
 test-ipk:
 	bash scripts/test-package-ipk.sh
+
+test-ui:
+	python3 scripts/build-web-ui.py --check
+	node scripts/test-web-ui.mjs
 
 test-linux:
 	bash scripts/test-linux-integration.sh

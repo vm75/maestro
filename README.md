@@ -8,7 +8,9 @@
 
 Manage your router from a standalone page or inside the ASUS menu. Written in
 Rust, with an offline-capable UI, no database, and no frontend build step.
-Router Hub coordinates your installed Entware tools.
+Router Hub coordinates your installed Entware tools. The modular feature registry
+organizes the UI into Dashboard, Services, Web, Security, and Network groups;
+existing feature URLs and API calls remain compatible.
 
 [Install](#install-on-your-router) · [Try locally](#try-it-locally) · [Documentation](#documentation) · [Releases](https://github.com/vm75/router-hub/releases)
 
