@@ -176,48 +176,28 @@ jobs:
           python3 scripts/auto-release.py tag
 
 
-  temporary-nginx-validation:
-    name: Temporary focused NGINX verification
+  temporary-nginx-rustfmt:
+    name: Format NGINX branch one last time
     if: github.ref == 'refs/heads/ci/upgrade-nginx'
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
     permissions:
       contents: write
     steps:
-      - name: Checkout active branch
+      - name: Check out NGINX branch
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ci/upgrade-nginx
           persist-credentials: true
-      - name: Install Rust 1.85
-        run: rustup toolchain install 1.85.0 --profile minimal --component rustfmt,clippy
-      - name: Capture focused test results in branch for review
+      - name: Format and commit Rust changes
         shell: bash
         run: |
-          set -uo pipefail
-          log="$RUNNER_TEMP/nginx-validation.log"
+          set -euo pipefail
+          rustup toolchain install 1.85.0 --profile minimal --component rustfmt
           cargo +1.85.0 fmt --all
-          cargo +1.85.0 fmt --all -- --check >"$log" 2>&1
-          fmt_status=$?
-          cargo +1.85.0 check --locked --all-targets >>"$log" 2>&1
-          check_status=$?
-          if (( check_status == 0 )); then
-            cargo +1.85.0 test --locked nginx_upgrade::tests >>"$log" 2>&1
-            test_status=$?
-            cargo +1.85.0 clippy --all-targets --locked -- -D warnings >>"$log" 2>&1
-            clippy_status=$?
-          else
-            test_status=99
-            clippy_status=99
+          if ! git diff --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add src/nginx_upgrade.rs src/main.rs
+            git commit -m 'style: finalize NGINX upgrade formatting'
+            git push origin HEAD:refs/heads/ci/upgrade-nginx
           fi
-          {
-            echo "fmt=$fmt_status check=$check_status test=$test_status clippy=$clippy_status"
-            echo "--- last 250 log lines ---"
-            tail -n 250 "$log"
-          } > .ci-nginx-validation.txt
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .ci-nginx-validation.txt src/nginx_upgrade.rs src/main.rs
-          git commit -m 'ci: temporary NGINX validation results'
-          git push origin HEAD:refs/heads/ci/upgrade-nginx
-          if (( fmt_status || check_status || test_status || clippy_status )); then exit 1; fi
