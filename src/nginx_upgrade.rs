@@ -733,7 +733,7 @@ fn nginx_master_identity_at(
     let expected_exe = fs::canonicalize(nginx_binary)
         .with_context(|| format!("cannot resolve {}", nginx_binary.display()))?;
     ensure!(
-        Path::new(running_exe) == expected_exe,
+        Path::new(running_exe) == expected_exe.as_path(),
         "PID {pid} executable is not the configured NGINX binary ({})",
         nginx_binary.display()
     );
@@ -753,9 +753,10 @@ fn nginx_master_identity(pid: i32, nginx_binary: &Path) -> Result<NginxMasterIde
 
 /// A missing PID file means NGINX was stopped; a *present but invalid* PID
 /// file is an error, never permission to signal an arbitrary live process.
-fn nginx_master_from_pid_file(
+fn nginx_master_from_pid_file_at(
     pid_path: &Path,
     nginx_binary: &Path,
+    proc_root: &Path,
 ) -> Result<Option<NginxMasterIdentity>> {
     let contents = match fs::read_to_string(pid_path) {
         Ok(contents) => contents,
@@ -766,7 +767,14 @@ fn nginx_master_from_pid_file(
         .trim()
         .parse::<i32>()
         .context("invalid NGINX PID file contents")?;
-    Ok(Some(nginx_master_identity(pid, nginx_binary)?))
+    Ok(Some(nginx_master_identity_at(proc_root, pid, nginx_binary)?))
+}
+
+fn nginx_master_from_pid_file(
+    pid_path: &Path,
+    nginx_binary: &Path,
+) -> Result<Option<NginxMasterIdentity>> {
+    nginx_master_from_pid_file_at(pid_path, nginx_binary, Path::new("/proc"))
 }
 
 fn signal_nginx_master(
@@ -1562,6 +1570,98 @@ ad87cc6f9b5b693e0c4bc2e6feda0915dce461e4a780d0d2e207730df826c50f  nginx-mod-brot
                 .await
                 .is_err()
         );
+    }
+
+    fn fake_stat(pid: i32, start: u64, state: &str) -> String {
+        let mut fields = vec!["0".to_string(); 19];
+        fields[18] = start.to_string();
+        format!("{pid} (nginx master with spaces) {state} {}\\n", fields.join(" "))
+    }
+
+    fn create_fake_master(proc_root: &Path, pid: i32, binary: &Path, start: u64) {
+        let process = proc_root.join(pid.to_string());
+        fs::create_dir_all(&process).unwrap();
+        fs::write(process.join("comm"), "nginx\\n").unwrap();
+        fs::write(
+            process.join("cmdline"),
+            b"nginx: master process /opt/sbin/nginx\\0",
+        )
+        .unwrap();
+        fs::write(process.join("stat"), fake_stat(pid, start, "S")).unwrap();
+        symlink(binary, process.join("exe")).unwrap();
+    }
+
+    #[test]
+    fn parse_master_identity_rejects_stale_or_reused_pids() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("nginx");
+        let other_binary = dir.path().join("unrelated");
+        fs::write(&binary, "nginx executable").unwrap();
+        fs::write(&other_binary, "unrelated executable").unwrap();
+        let proc_root = dir.path().join("proc");
+        let pid_file = dir.path().join("nginx.pid");
+        let pid = 43210;
+
+        assert!(
+            nginx_master_from_pid_file_at(&pid_file, &binary, &proc_root)
+                .unwrap()
+                .is_none()
+        );
+        fs::write(&pid_file, "garbage").unwrap();
+        assert!(nginx_master_from_pid_file_at(&pid_file, &binary, &proc_root).is_err());
+
+        fs::write(&pid_file, pid.to_string()).unwrap();
+        assert!(nginx_master_from_pid_file_at(&pid_file, &binary, &proc_root).is_err());
+
+        create_fake_master(&proc_root, pid, &binary, 12345);
+        let process = proc_root.join(pid.to_string());
+        let original = nginx_master_from_pid_file_at(&pid_file, &binary, &proc_root)
+            .unwrap()
+            .unwrap();
+        assert_eq!(original.pid, pid);
+        assert_eq!(original.start_ticks, 12345);
+        assert!(original.exe_inode > 0);
+
+        // PID reuse is detected even if the new process runs the same binary.
+        fs::write(process.join("stat"), fake_stat(pid, 12346, "S")).unwrap();
+        let reused = nginx_master_identity_at(&proc_root, pid, &binary).unwrap();
+        assert_ne!(reused, original);
+
+        fs::write(process.join("stat"), fake_stat(pid, 12345, "S")).unwrap();
+        fs::write(process.join("cmdline"), b"nginx: worker process\\0").unwrap();
+        assert!(nginx_master_identity_at(&proc_root, pid, &binary).is_err());
+
+        fs::write(process.join("cmdline"), b"nginx: master process nginx\\0").unwrap();
+        fs::write(process.join("comm"), "bash\\n").unwrap();
+        assert!(nginx_master_identity_at(&proc_root, pid, &binary).is_err());
+
+        fs::write(process.join("comm"), "nginx\\n").unwrap();
+        fs::remove_file(process.join("exe")).unwrap();
+        symlink(&other_binary, process.join("exe")).unwrap();
+        assert!(nginx_master_identity_at(&proc_root, pid, &binary).is_err());
+
+        fs::remove_file(process.join("exe")).unwrap();
+        symlink(&binary, process.join("exe")).unwrap();
+        fs::write(process.join("stat"), fake_stat(pid, 12345, "Z")).unwrap();
+        assert!(nginx_master_identity_at(&proc_root, pid, &binary).is_err());
+    }
+
+    #[test]
+    fn parse_master_title_and_stat_require_valid_fields() {
+        assert!(is_nginx_master_title(b"nginx: master process /opt/sbin/nginx\\0"));
+        assert!(is_nginx_master_title(b"nginx: master process\\0"));
+        for invalid in [
+            &b"nginx: worker process\\0"[..],
+            &b"/opt/sbin/nginx -s reload\\0"[..],
+            &b"nginx: master process-wrapper\\0"[..],
+            &b""[..],
+        ] {
+            assert!(!is_nginx_master_title(invalid));
+        }
+        assert_eq!(parse_proc_start_ticks(&fake_stat(123, 4567, "S")), Some(4567));
+        assert_eq!(parse_proc_start_ticks(&fake_stat(123, 4567, "Z")), None);
+        assert_eq!(parse_proc_start_ticks("123 (nginx) S 0"), None);
+        assert_eq!(parse_proc_start_ticks("not a proc stat"), None);
     }
 
     #[test]
