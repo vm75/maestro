@@ -7,6 +7,7 @@ mod ban_attack;
 mod certificate_http;
 mod command;
 mod config;
+mod core;
 mod firewall;
 mod models;
 mod nginx;
