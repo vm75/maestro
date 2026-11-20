@@ -3,15 +3,25 @@
 
 use std::{
     collections::HashMap,
+    ffi::CString,
+    fs,
+    io::Read,
+    os::{
+        fd::AsRawFd,
+        unix::{
+            ffi::OsStrExt,
+            fs::{OpenOptionsExt, PermissionsExt, symlink},
+        },
+    },
     path::{Path, PathBuf},
-    process::Command as ProcessCommand,
+    process::{Command as ProcessCommand, Output},
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
+use tokio::{io::AsyncWriteExt, process::Command as AsyncCommand, time::timeout};
 use uuid::Uuid;
 
 use crate::{
@@ -19,7 +29,19 @@ use crate::{
     config::{AppConfig, Platform},
 };
 
-pub const RELEASES_API: &str = "https://api.github.com/repos/vm75/router-hub/releases?per_page=30";
+pub const RELEASES_API: &str = "https://api.github.com/repos/vm75/router-hub/releases?per_page=100";
+const MAX_RELEASE_PAGES: usize = 10;
+const OPKG_TIMEOUT: Duration = Duration::from_secs(300);
+const RELOAD_TIMEOUT: Duration = Duration::from_secs(20);
+const MIN_FREE_HEADROOM_BYTES: u64 = 16 * 1024 * 1024;
+const MODULES_DIR: &str = "/opt/lib/nginx/modules";
+const MODULE_CONFIG_DIR: &str = "/opt/etc/nginx/module.d";
+const MODULE_FILES: [&str; 4] = [
+    "ngx_http_brotli_filter_module.so",
+    "ngx_http_brotli_static_module.so",
+    "ngx_stream_module.so",
+    "ngx_http_headers_more_filter_module.so",
+];
 pub const TAG_API_BASE: &str = "https://api.github.com/repos/vm75/router-hub/releases/tags";
 pub const RELEASE_BASE: &str = "https://github.com/vm75/router-hub/releases/download";
 pub const ARCH: &str = "aarch64-3.10";
@@ -70,6 +92,7 @@ pub struct UpgradeNginxOptions {
     pub no_backup: bool,
     pub force: bool,
     pub check: bool,
+    pub allow_downgrade: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -86,6 +109,8 @@ pub struct Release {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Asset {
     pub name: String,
+    #[serde(default)]
+    pub size: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,19 +180,20 @@ pub fn parse_nginx_tag(tag: &str) -> Option<NginxTagInfo> {
     let version = parse_version_numbers(version_part)?;
     let channel = channel_for_version(version);
 
-    let mut run_id = None;
-    let mut attempt = None;
-    for part in parts {
-        if let Some(num) = part.strip_prefix("run") {
-            if let Ok(val) = num.parse::<u64>() {
-                run_id = Some(val);
+    // Refuse unknown suffixes and path characters; the tag becomes part of a
+    // staging directory and release URL, so its format must be unambiguous.
+    let (run_id, attempt) = match (parts.next(), parts.next(), parts.next()) {
+        (None, None, None) => (None, None),
+        (Some(run), Some(attempt), None) => {
+            let run = run.strip_prefix("run")?;
+            let attempt = attempt.strip_prefix('a')?;
+            if run.is_empty() || attempt.is_empty() {
+                return None;
             }
-        } else if let Some(num) = part.strip_prefix('a') {
-            if let Ok(val) = num.parse::<u64>() {
-                attempt = Some(val);
-            }
+            (Some(run.parse().ok()?), Some(attempt.parse().ok()?))
         }
-    }
+        _ => return None,
+    };
 
     Some(NginxTagInfo {
         tag: tag.to_string(),
@@ -413,11 +439,307 @@ async fn download_and_verify_asset(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpgradeDisposition {
+    Current,
+    Newer,
+    Rebuild,
+    Downgrade,
+}
+
+pub fn disposition(
+    installed: Option<[u64; 3]>,
+    requested: [u64; 3],
+    installed_files_match: bool,
+) -> UpgradeDisposition {
+    if installed_files_match {
+        return UpgradeDisposition::Current;
+    }
+    match installed {
+        Some(current) if requested < current => UpgradeDisposition::Downgrade,
+        Some(current) if requested == current => UpgradeDisposition::Rebuild,
+        _ => UpgradeDisposition::Newer,
+    }
+}
+
+fn sha256_file(path: &Path) -> Result<Option<String>> {
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+    };
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 32 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(Some(format!("{:x}", hasher.finalize())))
+}
+
+pub fn installed_matches_release(
+    nginx_bin: &Path,
+    checksum_map: &HashMap<String, String>,
+    modules_dir: &Path,
+) -> Result<bool> {
+    let binary_and_modules = std::iter::once((nginx_bin.to_path_buf(), "nginx".to_string()))
+        .chain(MODULE_FILES.iter().map(|name| (modules_dir.join(name), (*name).to_string())));
+    for (path, name) in binary_and_modules {
+        let expected = checksum_map
+            .get(&name)
+            .with_context(|| format!("release checksum missing for {name}"))?;
+        if sha256_file(&path)?.as_deref() != Some(expected.as_str()) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+async fn list_nginx_releases(client: &reqwest::Client) -> Result<Vec<Release>> {
+    let mut releases = Vec::new();
+    for page in 1..=MAX_RELEASE_PAGES {
+        let page_releases: Vec<Release> = client
+            .get(format!("{RELEASES_API}&page={page}"))
+            .send()
+            .await?
+            .error_for_status()
+            .context("unable to query GitHub releases (check internet access and rate limits)")?
+            .json()
+            .await
+            .context("unable to decode GitHub releases")?;
+        let count = page_releases.len();
+        releases.extend(page_releases);
+        if count < 100 {
+            return Ok(releases);
+        }
+    }
+    bail!(
+        "GitHub release discovery exceeded {MAX_RELEASE_PAGES} pages; specify --tag to select an exact release"
+    )
+}
+
+fn validate_asset_name(name: &str) -> Result<()> {
+    ensure!(
+        !name.is_empty()
+            && name.bytes().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'.' | b'-' | b'_'))
+            && !name.contains(".."),
+        "unsafe release asset filename: {name}"
+    );
+    Ok(())
+}
+
+fn available_bytes(path: &Path) -> Result<u64> {
+    let path_c = CString::new(path.as_os_str().as_bytes())?;
+    let mut data = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    let rc = unsafe { libc::statvfs(path_c.as_ptr(), data.as_mut_ptr()) };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error()).context("cannot inspect free /tmp space");
+    }
+    let data = unsafe { data.assume_init() };
+    Ok((data.f_bavail as u64).saturating_mul(data.f_frsize as u64))
+}
+
+fn ensure_free_space(path: &Path, required: u64) -> Result<()> {
+    let free = available_bytes(path)?;
+    ensure!(
+        free >= required.saturating_add(MIN_FREE_HEADROOM_BYTES),
+        "insufficient free space in {}: {} MiB available; {} MiB needed plus 16 MiB headroom",
+        path.display(),
+        free / 1_048_576,
+        required / 1_048_576
+    );
+    Ok(())
+}
+
+/// flock prevents stale lockfiles from blocking retries after a crash.
+struct UpgradeLock(fs::File);
+
+impl UpgradeLock {
+    fn acquire() -> Result<Self> {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open("/tmp/.router-hub-nginx-upgrade.lock")
+            .context("unable to open NGINX upgrade lock")?;
+        ensure!(
+            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
+            "another NGINX upgrade is already running"
+        );
+        Ok(Self(file))
+    }
+}
+
+fn create_private_directory(path: &Path) -> Result<()> {
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(path)
+        .with_context(|| format!("unable to create {}", path.display()))
+}
+
+fn copy_node(source: &Path, destination: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(source)?;
+    if metadata.file_type().is_symlink() {
+        symlink(fs::read_link(source)?, destination)?;
+    } else if metadata.is_dir() {
+        fs::create_dir(destination)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            copy_node(&entry.path(), &destination.join(entry.file_name()))?;
+        }
+        fs::set_permissions(destination, metadata.permissions())?;
+    } else if metadata.is_file() {
+        fs::copy(source, destination)?;
+        fs::set_permissions(destination, metadata.permissions())?;
+    } else {
+        bail!("cannot snapshot special file: {}", source.display());
+    }
+    Ok(())
+}
+
+fn remove_node(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => fs::remove_dir_all(path)?,
+        Ok(_) => fs::remove_file(path)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+struct RollbackSnapshot {
+    directory: PathBuf,
+    original_paths: Vec<(PathBuf, bool)>,
+}
+
+impl RollbackSnapshot {
+    fn capture(paths: &[PathBuf], temp_root: &Path) -> Result<Self> {
+        let directory = temp_root.join(format!(".nginx-rollback-{}", Uuid::new_v4()));
+        create_private_directory(&directory)?;
+        let mut original_paths = Vec::new();
+        for original in paths {
+            ensure!(original.is_absolute(), "rollback path must be absolute");
+            let relative = original.strip_prefix("/")?;
+            let saved_path = directory.join(relative);
+            let exists = match fs::symlink_metadata(original) {
+                Ok(_) => true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => return Err(error.into()),
+            };
+            if exists {
+                fs::create_dir_all(saved_path.parent().context("missing snapshot parent")?)?;
+                copy_node(original, &saved_path)
+                    .with_context(|| format!("cannot snapshot {}", original.display()))?;
+            }
+            original_paths.push((original.clone(), exists));
+        }
+        Ok(Self { directory, original_paths })
+    }
+
+    fn restore(&self) -> Result<()> {
+        for (original, existed) in &self.original_paths {
+            remove_node(original)?;
+            if *existed {
+                fs::create_dir_all(original.parent().context("missing restore parent")?)?;
+                let saved_path = self.directory.join(original.strip_prefix("/")?);
+                copy_node(&saved_path, original)
+                    .with_context(|| format!("cannot restore {}", original.display()))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn nginx_is_running(pid_path: &Path) -> bool {
+    let Ok(contents) = fs::read_to_string(pid_path) else {
+        return false;
+    };
+    let Ok(pid) = contents.trim().parse::<i32>() else {
+        return false;
+    };
+    if pid <= 1 {
+        return false;
+    }
+    let status = unsafe { libc::kill(pid, 0) };
+    status == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+async fn bounded_command(mut command: AsyncCommand, duration: Duration, description: &str) -> Result<Output> {
+    command.kill_on_drop(true);
+    timeout(duration, command.output())
+        .await
+        .with_context(|| format!("{description} timed out after {} seconds", duration.as_secs()))?
+        .with_context(|| format!("unable to execute {description}"))
+}
+
+async fn reload_nginx(config: &AppConfig) -> Result<()> {
+    let mut command = AsyncCommand::new(&config.commands.nginx);
+    if let Some(prefix) = &config.nginx.prefix_path {
+        command.arg("-p").arg(prefix);
+    }
+    command.arg("-s").arg("reload").arg("-c").arg(&config.nginx.config_path);
+    let output = bounded_command(command, RELOAD_TIMEOUT, "nginx reload").await?;
+    ensure!(
+        output.status.success(),
+        "nginx reload failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    ensure!(
+        nginx_is_running(&config.nginx.pid_path),
+        "nginx reload returned success, but master PID is not running"
+    );
+    Ok(())
+}
+
+async fn recover_failure(config: &AppConfig, snapshot: &RollbackSnapshot, failure: anyhow::Error, was_running: bool) -> anyhow::Error {
+    eprintln!("NGINX upgrade failed: {failure:#}");
+    eprintln!("Restoring previous binary, module files and module load directives...");
+    if let Err(restore_error) = snapshot.restore() {
+        eprintln!("WARNING: automatic file rollback failed: {restore_error:#}");
+        eprintln!("Manual recovery snapshot: {}", snapshot.directory.display());
+        return failure.context(format!("rollback also failed: {restore_error:#}"));
+    }
+    if let Err(test_error) = test_nginx_config(
+        &config.commands.nginx,
+        &config.nginx.config_path,
+        config.nginx.prefix_path.as_deref(),
+    ) {
+        eprintln!("WARNING: restored NGINX did not pass configuration test: {test_error:#}");
+        return failure.context(format!("restored NGINX failed syntax validation: {test_error:#}"));
+    }
+    if was_running && nginx_is_running(&config.nginx.pid_path) {
+        if let Err(reload_error) = reload_nginx(config).await {
+            eprintln!("WARNING: restored NGINX could not be reloaded: {reload_error:#}");
+            return failure.context(format!("restored NGINX reload failed: {reload_error:#}"));
+        }
+    } else if was_running {
+        eprintln!("WARNING: NGINX master is no longer running; start it manually after inspection.");
+    }
+    eprintln!("Previous NGINX files restored; opkg package records may still describe the new version.");
+    eprintln!("Keep the recovery files at {} until the system is repaired.", snapshot.directory.display());
+    failure
+}
+
 pub async fn run(
     config: &AppConfig,
     config_path: &Path,
     options: UpgradeNginxOptions,
 ) -> Result<()> {
+    ensure!(
+        options.tag.is_none() || options.version.is_none(),
+        "--tag and --version are mutually exclusive"
+    );
+    let _lock = if options.check {
+        None
+    } else {
+        Some(UpgradeLock::acquire()?)
+    };
     let opkg_available = check_opkg_architecture()?;
     let client = reqwest::Client::builder()
         .user_agent(concat!("router-hub/", env!("CARGO_PKG_VERSION")))
@@ -425,133 +747,109 @@ pub async fn run(
         .build()?;
 
     let (release, tag_info) = if let Some(tag) = &options.tag {
+        ensure!(parse_nginx_tag(tag).is_some(), "invalid NGINX release tag");
         let url = format!("{TAG_API_BASE}/{tag}");
-        let rel: Release = client
-            .get(&url)
-            .send()
-            .await?
-            .error_for_status()
-            .context(format!("unable to fetch release for tag {tag}"))?
-            .json()
-            .await
-            .context("unable to deserialize GitHub release")?;
-        let info = parse_nginx_tag(&rel.tag_name)
-            .context("specified tag does not match NGINX release format (nginx-vX.Y.Z)")?;
+        let rel: Release = client.get(&url).send().await?.error_for_status()?
+            .json().await.context("unable to deserialize GitHub release")?;
+        ensure!(rel.tag_name == *tag, "release tag does not match requested tag");
+        ensure!(!rel.draft && !rel.prerelease, "release is draft or prerelease");
+        let info = parse_nginx_tag(&rel.tag_name).context("invalid NGINX release tag")?;
         (rel, info)
     } else {
-        let releases: Vec<Release> = client
-            .get(RELEASES_API)
-            .send()
-            .await?
-            .error_for_status()
-            .context(
-                "unable to query GitHub releases (check internet access and GitHub rate limits)",
-            )?
-            .json()
-            .await
-            .context("unable to deserialize GitHub releases list")?;
+        let releases = list_nginx_releases(&client).await?;
         let (selected, info) =
             select_release_from_list(&releases, options.version.as_deref(), options.channel)?;
         (selected.clone(), info)
     };
 
-    let installed = get_installed_nginx_version(&config.commands.nginx);
-
-    if options.check {
-        match installed {
-            Some(curr) => {
-                let curr_str = format!("{}.{}.{}", curr[0], curr[1], curr[2]);
-                println!("Current NGINX: {curr_str}");
-                if tag_info.version > curr {
-                    println!(
-                        "Update available: {} ({} channel, tag: {})",
-                        tag_info.version_str, tag_info.channel, tag_info.tag
-                    );
-                } else {
-                    println!(
-                        "NGINX is up to date (latest {} release: {}, tag: {}).",
-                        tag_info.channel, tag_info.version_str, tag_info.tag
-                    );
-                }
-            }
-            None => {
-                println!(
-                    "NGINX is not detectable at {}.",
-                    config.commands.nginx.display()
-                );
-                println!(
-                    "Latest {} release: {} (tag: {})",
-                    tag_info.channel, tag_info.version_str, tag_info.tag
-                );
-            }
-        }
-        return Ok(());
-    }
-
-    if let Some(curr) = installed {
-        if tag_info.version <= curr && !options.force && options.tag.is_none() {
-            println!(
-                "NGINX {}.{}.{} is up to date (latest {}: {}). Use --force to reinstall.",
-                curr[0], curr[1], curr[2], tag_info.channel, tag_info.tag
-            );
-            return Ok(());
-        }
-    }
-
+    let matched_assets = find_required_assets(&release.assets, &tag_info.version_str, ARCH)?;
     ensure!(
         release.assets.iter().any(|a| a.name == "SHA256SUMS"),
-        "release {} does not contain SHA256SUMS; no upgrade was attempted",
+        "release {} lacks SHA256SUMS",
         tag_info.tag
     );
-    let matched_assets = find_required_assets(&release.assets, &tag_info.version_str, ARCH)?;
+    let mut expected_size = 0u64;
+    for asset in &matched_assets {
+        validate_asset_name(&asset.name)?;
+        ensure!(
+            asset.size > 0 && asset.size <= MAX_IPK_BYTES,
+            "invalid or oversized release asset {}",
+            asset.name
+        );
+        expected_size = expected_size.saturating_add(asset.size);
+    }
 
     let base_url = format!("{RELEASE_BASE}/{}", tag_info.tag);
-    let checksum_url = format!("{base_url}/SHA256SUMS");
-    let checksum_bytes = request_bytes(&client, &checksum_url, MAX_CHECKSUM_BYTES)
-        .await
-        .context("unable to download release checksums (SHA256SUMS)")?;
-    let checksum_str = String::from_utf8(checksum_bytes).context("non-UTF-8 SHA256SUMS")?;
-    let checksum_map = parse_checksums(&checksum_str)?;
-
+    let checksum_bytes = request_bytes(
+        &client, &format!("{base_url}/SHA256SUMS"), MAX_CHECKSUM_BYTES,
+    )
+    .await
+    .context("unable to download release checksums")?;
+    let checksum_map = parse_checksums(&String::from_utf8(checksum_bytes)?)?;
     for asset in &matched_assets {
         ensure!(
             checksum_map.contains_key(&asset.name),
-            "SHA256SUMS does not contain checksum for required asset {}",
+            "SHA256SUMS lacks checksum for required asset {}",
             asset.name
         );
     }
 
-    // Safety: Verify current configuration syntax before making any changes.
+    let installed = get_installed_nginx_version(&config.commands.nginx);
+    let installed_files_match =
+        installed_matches_release(&config.commands.nginx, &checksum_map, Path::new(MODULES_DIR))?;
+    let action = disposition(installed, tag_info.version, installed_files_match);
+
+    if options.check {
+        println!(
+            "Installed NGINX: {}",
+            installed.map_or_else(|| "not detected".to_string(),
+                |v| format!("{}.{}.{}", v[0], v[1], v[2]))
+        );
+        match action {
+            UpgradeDisposition::Current =>
+                println!("Installed binary and modules match release {}.", tag_info.tag),
+            UpgradeDisposition::Downgrade =>
+                println!("Selected release {} is older; installation requires --allow-downgrade.", tag_info.tag),
+            UpgradeDisposition::Rebuild =>
+                println!("Different NGINX build available at the same version: {}.", tag_info.tag),
+            UpgradeDisposition::Newer =>
+                println!("NGINX release available: {} ({}).", tag_info.tag, tag_info.channel),
+        }
+        return Ok(());
+    }
+    if action == UpgradeDisposition::Current && !options.force && !options.download_only {
+        println!("NGINX binary and modules already match {}. Use --force to reinstall.", tag_info.tag);
+        return Ok(());
+    }
+    if action == UpgradeDisposition::Downgrade
+        && !options.allow_downgrade
+        && !options.download_only
+    {
+        bail!(
+            "selected NGINX {} is older than installed version; use --allow-downgrade to proceed",
+            tag_info.version_str
+        );
+    }
+
+    // Verify configuration syntax before staging, backing up or modifying packages.
     test_nginx_config(
         &config.commands.nginx,
         &config.nginx.config_path,
         config.nginx.prefix_path.as_deref(),
     )
-    .context("existing NGINX configuration test failed; aborting upgrade")?;
+    .context("existing NGINX configuration test failed")?;
 
-    // Pre-upgrade backup.
-    if !options.no_backup {
-        backup::run(config, config_path, None).await.context(
-            "pre-upgrade backup failed; no installation was attempted (use --no-backup to skip)",
-        )?;
-    }
-
-    // Stage downloads in a private temporary directory.
+    ensure_free_space(Path::new("/tmp"), expected_size)?;
     let staging_dir = PathBuf::from("/tmp").join(format!(".nginx-upgrade-{}", Uuid::new_v4()));
-    tokio::fs::create_dir_all(&staging_dir)
-        .await
-        .context("unable to create temporary staging directory")?;
-
+    create_private_directory(&staging_dir)?;
     let download_result: Result<()> = async {
         for asset in &matched_assets {
-            let expected_checksum = &checksum_map[&asset.name];
-            let dest_path = staging_dir.join(&asset.name);
             download_and_verify_asset(
                 &client,
                 &base_url,
                 &asset.name,
-                expected_checksum,
-                &dest_path,
+                &checksum_map[&asset.name],
+                &staging_dir.join(&asset.name),
                 MAX_IPK_BYTES,
             )
             .await?;
@@ -559,99 +857,105 @@ pub async fn run(
         Ok(())
     }
     .await;
-
-    if let Err(e) = download_result {
-        let _ = tokio::fs::remove_dir_all(&staging_dir).await;
-        return Err(e);
+    if let Err(error) = download_result {
+        let _ = fs::remove_dir_all(&staging_dir);
+        return Err(error);
     }
 
-    let final_dir = PathBuf::from("/tmp").join(format!("nginx-{}", tag_info.tag));
-    if final_dir.exists() {
-        let _ = tokio::fs::remove_dir_all(&final_dir).await;
-    }
-    tokio::fs::rename(&staging_dir, &final_dir)
-        .await
-        .context("unable to finalize staged NGINX package directory")?;
+    // Use a unique verified directory: never erase a previous staged bundle.
+    let final_dir = PathBuf::from("/tmp").join(format!(
+        "nginx-{}-{}", tag_info.tag, Uuid::new_v4()
+    ));
+    fs::rename(&staging_dir, &final_dir)
+        .context("unable to publish verified NGINX packages")?;
+    println!("Verified NGINX {} ({}) packages: {}", tag_info.version_str, tag_info.channel, final_dir.display());
 
-    println!(
-        "Verified NGINX {} ({}) packages saved to {}.",
-        tag_info.version_str,
-        tag_info.channel,
-        final_dir.display()
+    let package_paths: Vec<PathBuf> = matched_assets
+        .iter()
+        .map(|asset| final_dir.join(&asset.name))
+        .collect();
+    let reinstall = options.force || action == UpgradeDisposition::Rebuild ||
+        (installed == Some(tag_info.version) && !installed_files_match);
+    let mut opkg_options = Vec::new();
+    if reinstall {
+        opkg_options.push("--force-reinstall");
+    }
+    if action == UpgradeDisposition::Downgrade {
+        opkg_options.push("--force-downgrade");
+    }
+    let manual_cmd = format!(
+        "{OPKG} install {}{}",
+        if opkg_options.is_empty() { String::new() } else { format!("{} ", opkg_options.join(" ")) },
+        package_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" ")
     );
 
-    let manual_cmd = format!("{OPKG} install {}/*.ipk", final_dir.display());
+    // Download-only still makes a backup, like router-hub upgrade.
+    if !options.no_backup {
+        backup::run(config, config_path, None)
+            .await
+            .context("pre-upgrade backup failed; no packages were installed")?;
+    }
     if options.download_only || !opkg_available || unsafe { libc::geteuid() } != 0 {
-        println!("To install, run as root: {manual_cmd}");
+        println!("To install as root: {manual_cmd}");
         return Ok(());
     }
 
-    println!(
-        "Installing NGINX {} ({}) through Entware...",
-        tag_info.version_str, tag_info.channel
-    );
-    let mut opkg_cmd = ProcessCommand::new(OPKG);
-    opkg_cmd.arg("install");
-    if options.force {
-        opkg_cmd.arg("--force-reinstall");
-    }
-    for asset in &matched_assets {
-        opkg_cmd.arg(final_dir.join(&asset.name));
-    }
-    let output = opkg_cmd.output().context("unable to launch opkg install")?;
-    if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!(
-            "opkg install failed:\nstdout: {stdout}\nstderr: {stderr}\nRetry command: {manual_cmd}"
-        );
-    }
+    ensure_free_space(Path::new("/tmp"), 0)?;
+    let snapshot_paths = vec![
+        config.commands.nginx.clone(),
+        PathBuf::from(MODULES_DIR),
+        PathBuf::from(MODULE_CONFIG_DIR),
+        config.services.init_dir.join("S80nginx"),
+    ];
+    let snapshot = RollbackSnapshot::capture(&snapshot_paths, Path::new("/tmp"))?;
+    println!("Previous NGINX executable/modules preserved at {}", snapshot.directory.display());
+    println!("If opkg fails, inspect the snapshot; package-manager metadata is not rolled back.");
+    println!("Installing NGINX via Entware. Manual retry command: {manual_cmd}");
+    let was_running = nginx_is_running(&config.nginx.pid_path);
 
-    // Verify configuration with the newly installed binary.
-    if let Err(err) = test_nginx_config(
+    let mut opkg_cmd = AsyncCommand::new(OPKG);
+    opkg_cmd.arg("install").args(&opkg_options).args(&package_paths);
+    let opkg_out = match bounded_command(opkg_cmd, OPKG_TIMEOUT, "opkg install").await {
+        Ok(result) => result,
+        Err(error) => return Err(recover_failure(config, &snapshot, error, was_running).await),
+    };
+    if !opkg_out.status.success() {
+        let error = anyhow!(
+            "opkg install failed ({}):\nstdout: {}\nstderr: {}\nRetry: {}",
+            opkg_out.status,
+            String::from_utf8_lossy(&opkg_out.stdout),
+            String::from_utf8_lossy(&opkg_out.stderr),
+            manual_cmd
+        );
+        return Err(recover_failure(config, &snapshot, error, was_running).await);
+    }
+    if let Err(error) = test_nginx_config(
         &config.commands.nginx,
         &config.nginx.config_path,
         config.nginx.prefix_path.as_deref(),
     ) {
-        eprintln!("\nWARNING: Configuration syntax test failed under the newly installed NGINX!");
-        eprintln!("{err}");
-        eprintln!("NGINX service was NOT restarted; existing worker processes remain active.");
-        eprintln!(
-            "Inspect configuration in {}.",
-            config.nginx.root_dir.display()
-        );
-        eprintln!("A pre-upgrade backup is available in /tmp.");
-        bail!("new NGINX failed configuration test; service was not restarted");
+        return Err(recover_failure(config, &snapshot, error, was_running).await);
     }
 
-    // Restart the service.
-    let init_script = config.services.init_dir.join("S80nginx");
-    if init_script.is_file() {
-        println!("Restarting NGINX via {}...", init_script.display());
-        let restart_out = ProcessCommand::new(&init_script).arg("restart").output();
-        if let Ok(res) = restart_out {
-            if !res.status.success() {
-                let stderr = String::from_utf8_lossy(&res.stderr);
-                eprintln!("Warning: NGINX init script restart returned non-zero: {stderr}");
-            }
+    // A graceful reload keeps the serving master and workers alive; the Entware
+    // S80nginx restart uses a hard stop and can block with foreground configs.
+    if was_running {
+        if !nginx_is_running(&config.nginx.pid_path) {
+            return Err(recover_failure(
+                config, &snapshot,
+                anyhow!("NGINX master stopped during package installation"), was_running
+            ).await);
         }
+        if let Err(error) = reload_nginx(config).await {
+            return Err(recover_failure(config, &snapshot, error, was_running).await);
+        }
+        println!("NGINX gracefully reloaded and master process verified.");
     } else {
-        println!("Reloading NGINX service...");
-        let mut reload_cmd = ProcessCommand::new(&config.commands.nginx);
-        if let Some(prefix) = &config.nginx.prefix_path {
-            reload_cmd.arg("-p").arg(prefix);
-        }
-        reload_cmd
-            .arg("-s")
-            .arg("reload")
-            .arg("-c")
-            .arg(&config.nginx.config_path);
-        let _ = reload_cmd.output();
+        println!("NGINX was not running before the upgrade; packages installed, service left stopped.");
     }
-
     println!(
-        "Successfully updated NGINX to {} ({} channel).",
-        tag_info.version_str, tag_info.channel
+        "Successfully installed NGINX {} ({}). Recovery files: {}",
+        tag_info.version_str, tag_info.channel, snapshot.directory.display()
     );
     Ok(())
 }
