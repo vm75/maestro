@@ -10,7 +10,7 @@ use std::{
         fd::AsRawFd,
         unix::{
             ffi::OsStrExt,
-            fs::{MetadataExt, OpenOptionsExt, symlink},
+            fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, symlink},
         },
     },
     path::{Path, PathBuf},
