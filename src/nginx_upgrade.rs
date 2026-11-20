@@ -1072,6 +1072,13 @@ mod tests {
         assert!(parse_nginx_tag("v0.10.3").is_none());
         assert!(parse_nginx_tag("nginx-1.30.7").is_none());
         assert!(parse_nginx_tag("nginx-v1.30").is_none());
+        for invalid in [
+            "nginx-v1.30.7/../../oops", "nginx-v1.30.7-run12-a1/escape",
+            "nginx-v1.30.7-unknown", "nginx-v1.30.7-run12",
+            "nginx-v1.30.7-run12-a1-extra", "nginx-v1.30.7-runx-a2",
+        ] {
+            assert!(parse_nginx_tag(invalid).is_none(), "{invalid}");
+        }
     }
 
     #[test]
@@ -1136,18 +1143,23 @@ ad87cc6f9b5b693e0c4bc2e6feda0915dce461e4a780d0d2e207730df826c50f  nginx-mod-brot
         let assets = vec![
             Asset {
                 name: "SHA256SUMS".into(),
+                size: 1024,
             },
             Asset {
                 name: "nginx-ssl_1.30.7-99_aarch64-3.10.ipk".into(),
+                size: 1024,
             },
             Asset {
                 name: "nginx-mod-brotli_1.30.7-99_aarch64-3.10.ipk".into(),
+                size: 1024,
             },
             Asset {
                 name: "nginx-mod-stream_1.30.7-99_aarch64-3.10.ipk".into(),
+                size: 1024,
             },
             Asset {
                 name: "nginx-mod-headers-more_1.30.7-99_aarch64-3.10.ipk".into(),
+                size: 1024,
             },
         ];
 
@@ -1157,6 +1169,7 @@ ad87cc6f9b5b693e0c4bc2e6feda0915dce461e4a780d0d2e207730df826c50f  nginx-mod-brot
         // Missing package should fail
         let missing = vec![Asset {
             name: "nginx-ssl_1.30.7-99_aarch64-3.10.ipk".into(),
+                size: 1024,
         }];
         assert!(find_required_assets(&missing, "1.30.7", "aarch64-3.10").is_err());
     }
@@ -1210,6 +1223,106 @@ ad87cc6f9b5b693e0c4bc2e6feda0915dce461e4a780d0d2e207730df826c50f  nginx-mod-brot
 
         // Non-existent version
         assert!(select_release_from_list(&releases, Some("1.32.0"), NginxChannel::Stable).is_err());
+    }
+
+    #[test]
+    fn upgrade_decision_handles_channel_switches_and_rebuilds() {
+        assert_eq!(
+            disposition(Some([1, 31, 8]), [1, 30, 7], false),
+            UpgradeDisposition::Downgrade
+        );
+        assert_eq!(
+            disposition(Some([1, 30, 6]), [1, 31, 8], false),
+            UpgradeDisposition::Newer
+        );
+        assert_eq!(
+            disposition(Some([1, 30, 7]), [1, 30, 7], false),
+            UpgradeDisposition::Rebuild
+        );
+        assert_eq!(
+            disposition(Some([1, 30, 7]), [1, 30, 7], true),
+            UpgradeDisposition::Current
+        );
+        assert_eq!(
+            disposition(None, [1, 30, 7], false),
+            UpgradeDisposition::Newer
+        );
+    }
+
+    #[test]
+    fn release_identity_requires_binary_and_all_modules() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("nginx");
+        let modules = dir.path().join("modules");
+        fs::create_dir(&modules).unwrap();
+        fs::write(&binary, "nginx executable").unwrap();
+        let mut checksums = HashMap::new();
+        checksums.insert("nginx".to_string(), sha256_file(&binary).unwrap().unwrap());
+        for name in MODULE_FILES {
+            let path = modules.join(name);
+            fs::write(&path, format!("module {name}")).unwrap();
+            checksums.insert(name.to_string(), sha256_file(&path).unwrap().unwrap());
+        }
+        assert!(installed_matches_release(&binary, &checksums, &modules).unwrap());
+
+        fs::write(modules.join(MODULE_FILES[1]), "different release").unwrap();
+        assert!(!installed_matches_release(&binary, &checksums, &modules).unwrap());
+        fs::remove_file(binary).unwrap();
+        assert!(!installed_matches_release(&binary, &checksums, &modules).unwrap());
+    }
+
+    #[test]
+    fn rollback_snapshot_restores_binary_modules_and_missing_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("nginx");
+        let modules = dir.path().join("modules");
+        let module_link = dir.path().join("module-link");
+        let absent = dir.path().join("formerly-absent");
+        fs::write(&executable, "old binary").unwrap();
+        fs::create_dir(&modules).unwrap();
+        fs::write(modules.join("module.so"), "old module").unwrap();
+        symlink("modules/module.so", &module_link).unwrap();
+        let snapshot = RollbackSnapshot::capture(
+            &[executable.clone(), modules.clone(), module_link.clone(), absent.clone()],
+            dir.path(),
+        ).unwrap();
+
+        fs::write(&executable, "new binary").unwrap();
+        fs::write(modules.join("module.so"), "new module").unwrap();
+        fs::write(modules.join("new.so"), "new extra module").unwrap();
+        fs::remove_file(&module_link).unwrap();
+        fs::write(&absent, "new file").unwrap();
+        snapshot.restore().unwrap();
+
+        assert_eq!(fs::read_to_string(&executable).unwrap(), "old binary");
+        assert_eq!(fs::read_to_string(modules.join("module.so")).unwrap(), "old module");
+        assert!(!modules.join("new.so").exists());
+        assert_eq!(fs::read_link(module_link).unwrap(), PathBuf::from("modules/module.so"));
+        assert!(!absent.exists());
+    }
+
+    #[test]
+    fn refuses_unsafe_release_filenames() {
+        for valid in ["nginx-ssl_1.30.7-99_aarch64-3.10.ipk", "SHA256SUMS"] {
+            assert!(validate_asset_name(valid).is_ok());
+        }
+        for invalid in ["../nginx", "foo/bar.ipk", "evil ipk", "foo\\bar"] {
+            assert!(validate_asset_name(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[tokio::test]
+    async fn command_execution_reports_nonzero_and_timeout() {
+        let mut failed = AsyncCommand::new("sh");
+        failed.arg("-c").arg("exit 17");
+        let output = bounded_command(failed, Duration::from_secs(2), "test command")
+            .await.unwrap();
+        assert_eq!(output.status.code(), Some(17));
+
+        let mut stuck = AsyncCommand::new("sh");
+        stuck.arg("-c").arg("sleep 2");
+        assert!(bounded_command(stuck, Duration::from_millis(50), "test timeout")
+            .await.is_err());
     }
 
     #[test]
