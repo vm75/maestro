@@ -187,43 +187,79 @@ releases cannot be installed through this command.
 
 ```sh
 /opt/bin/router-hub upgrade-nginx
-# Target mainline releases instead of stable:
 /opt/bin/router-hub upgrade-nginx --channel mainline
-# Check if an update is available without downloading or installing:
 /opt/bin/router-hub upgrade-nginx --check
-# Download and verify the 4-package bundle without attempting opkg installation:
 /opt/bin/router-hub upgrade-nginx --download-only
-# Explicitly skip the pre-upgrade backup:
 /opt/bin/router-hub upgrade-nginx --no-backup
-# Target a specific NGINX version or exact release tag:
 /opt/bin/router-hub upgrade-nginx --version 1.30.7
 /opt/bin/router-hub upgrade-nginx --tag nginx-v1.30.7-run44684227015-a1
-# Force re-installation even if already up to date:
 /opt/bin/router-hub upgrade-nginx --force
+# Explicitly allow moving from newer mainline to older stable:
+/opt/bin/router-hub upgrade-nginx --channel stable --allow-downgrade
 ```
 
-The CLI queries GitHub Releases for manually built Entware NGINX releases tagged
-`nginx-v*` (published by the [Build Nginx workflow](../.github/workflows/build-nginx.yml)).
-By default it selects the newest release in the **stable** channel (even minor
-version numbers such as 1.28.x and 1.30.x); `--channel mainline` targets odd
-minor versions (e.g. 1.29.x and 1.31.x).
+The CLI discovers manually published `nginx-v*` GitHub releases, selecting
+the latest stable (even minor) or mainline (odd minor) version unless you
+pin `--tag` or `--version`. Tag and version cannot be combined. Release
+discovery reads up to ten pages of GitHub Releases; older releases beyond that
+limit require `--tag`. A checksum comparison against the installed NGINX binary
+**and all four module binaries** detects same-version rebuilds, not just
+version increases. `--check` fetches only release metadata and checksums.
 
-The command downloads and verifies `SHA256SUMS` and the four version-matched
-IPK packages (`nginx-ssl`, `nginx-mod-brotli`, `nginx-mod-stream`, and
-`nginx-mod-headers-more`). Dynamic modules are strictly ABI-bound to their NGINX
-build; installing the bundle together prevents runtime module load failures.
+The downloader verifies `SHA256SUMS` and all four matching Entware IPKs:
+`nginx-ssl`, `nginx-mod-brotli`, `nginx-mod-stream`, and
+`nginx-mod-headers-more`. It verifies the old NGINX configuration, checks
+available temporary space, stages the bundle in a unique private directory,
+and takes a full Router Hub backup by default (including `--download-only`).
+Use `--no-backup` only when you have a current external backup.
 
-Before making any changes, `upgrade-nginx` tests the existing NGINX configuration
-syntax (`nginx -t`) and creates a full backup (same as `router-hub backup`).
-When running as root, it installs all four packages in a single `opkg install`
-transaction, re-verifies configuration syntax with the newly installed binary,
-and restarts the NGINX service (`/opt/etc/init.d/S80nginx restart`).
+A live router upgrade also saves the previous executable, module directory,
+module load directives and `S80nginx` in a **separate private rollback
+snapshot** under `/tmp/.nginx-rollback-*`. These files are important because
+Router Hub's normal backup does not include NGINX package binaries. Both
+the staged IPKs and rollback snapshot remain in temporary storage after the
+command; copy them off the router before rebooting if needed.
 
-If the post-installation configuration test fails, NGINX is **not** restarted,
-ensuring active worker processes continue serving traffic while the administrator
-inspects syntax changes. Staged verified packages remain in `/tmp/nginx-<tag>/`
-for inspection or manual retries. `update-nginx` is supported as an alias.
-Like `upgrade`, this command is rejected on native Linux and simulated test-mode runs.
+When running as root, it invokes a bounded `opkg install` for the full
+bundle and validates the replacement NGINX configuration. Same-version
+rebuilds use `--force-reinstall`; selecting an older version explicitly
+requires `--allow-downgrade`, which passes `--force-downgrade` to opkg.
+If NGINX was running before installation, the command requests the supported
+NGINX **live binary upgrade** with SIGUSR2, waits for a different master PID
+running the new executable, and gracefully retires the old master with
+SIGQUIT. A configuration reload (SIGHUP) by itself cannot activate the
+replacement master binary. NGINX is left stopped if it was already stopped.
+
+On pre-activation failures, Router Hub attempts to restore the previous NGINX
+binary, modules and module configuration from the snapshot and validates them.
+That file restoration **does not restore opkg's installed-package database**:
+opkg may still report the attempted package version. After SIGUSR2 has been
+sent, an activation failure **does not trigger automatic file rollback**,
+because a new master may already be active and restoring modules underneath
+it could break compatibility. The command reports an error and leaves the
+snapshot for manual recovery; inspect process IDs and error logs before
+retiring either master. A failure is never reported as a successful upgrade.
+
+If opkg is unavailable, you are not root, or you choose `--download-only`,
+the command prints an explicit opkg command using the four verified package
+paths. The alias `update-nginx` is supported. The command is unavailable in
+Linux and test modes. To verify the running binary after an upgrade:
+
+```sh
+/opt/sbin/nginx -v
+cat /opt/var/run/nginx.pid
+ps | grep '[n]ginx: master'
+/opt/sbin/nginx -t -c /opt/etc/nginx/nginx.conf
+```
+
+For rollback, use the printed snapshot location to inspect and restore
+individual files under their original `/opt` paths only after determining
+which NGINX master is active. Keep the old master alive when SIGUSR2 activation
+fails; do not blindly restart or overwrite modules. To completely reconcile
+opkg metadata, reinstall the matching previously known-good IPK bundle after
+recovery. Test the recovered configuration and startup before restoring WAN
+traffic. Because `/tmp` is volatile, do not treat these local files as a
+permanent disaster-recovery backup.
 
 ### Tarball installation (alternative)
 
