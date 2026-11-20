@@ -769,7 +769,11 @@ fn nginx_master_from_pid_file_at(
         .trim()
         .parse::<i32>()
         .context("invalid NGINX PID file contents")?;
-    Ok(Some(nginx_master_identity_at(proc_root, pid, nginx_binary)?))
+    Ok(Some(nginx_master_identity_at(
+        proc_root,
+        pid,
+        nginx_binary,
+    )?))
 }
 
 fn nginx_master_from_pid_file(
@@ -1577,7 +1581,10 @@ ad87cc6f9b5b693e0c4bc2e6feda0915dce461e4a780d0d2e207730df826c50f  nginx-mod-brot
     fn fake_stat(pid: i32, start: u64, state: &str) -> String {
         let mut fields = vec!["0".to_string(); 19];
         fields[18] = start.to_string();
-        format!("{pid} (nginx master with spaces) {state} {}\n", fields.join(" "))
+        format!(
+            "{pid} (nginx master with spaces) {state} {}\n",
+            fields.join(" ")
+        )
     }
 
     fn create_fake_master(proc_root: &Path, pid: i32, binary: &Path, start: u64) {
@@ -1650,7 +1657,9 @@ ad87cc6f9b5b693e0c4bc2e6feda0915dce461e4a780d0d2e207730df826c50f  nginx-mod-brot
 
     #[test]
     fn parse_master_title_and_stat_require_valid_fields() {
-        assert!(is_nginx_master_title(b"nginx: master process /opt/sbin/nginx\0"));
+        assert!(is_nginx_master_title(
+            b"nginx: master process /opt/sbin/nginx\0"
+        ));
         assert!(is_nginx_master_title(b"nginx: master process\0"));
         for invalid in [
             &b"nginx: worker process\0"[..],
@@ -1660,7 +1669,10 @@ ad87cc6f9b5b693e0c4bc2e6feda0915dce461e4a780d0d2e207730df826c50f  nginx-mod-brot
         ] {
             assert!(!is_nginx_master_title(invalid));
         }
-        assert_eq!(parse_proc_start_ticks(&fake_stat(123, 4567, "S")), Some(4567));
+        assert_eq!(
+            parse_proc_start_ticks(&fake_stat(123, 4567, "S")),
+            Some(4567)
+        );
         assert_eq!(parse_proc_start_ticks(&fake_stat(123, 4567, "Z")), None);
         assert_eq!(parse_proc_start_ticks("123 (nginx) S 0"), None);
         assert_eq!(parse_proc_start_ticks("not a proc stat"), None);
