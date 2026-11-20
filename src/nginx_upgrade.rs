@@ -544,7 +544,7 @@ fn available_bytes(path: &Path) -> Result<u64> {
         return Err(std::io::Error::last_os_error()).context("cannot inspect free /tmp space");
     }
     let data = unsafe { data.assume_init() };
-    Ok(u64::from(data.f_bavail).saturating_mul(u64::from(data.f_frsize)))
+    Ok(data.f_bavail.saturating_mul(data.f_frsize))
 }
 
 fn ensure_free_space(path: &Path, required: u64) -> Result<()> {
@@ -1393,7 +1393,7 @@ ad87cc6f9b5b693e0c4bc2e6feda0915dce461e4a780d0d2e207730df826c50f  nginx-mod-brot
 
         fs::write(modules.join(MODULE_FILES[1]), "different release").unwrap();
         assert!(!installed_matches_release(&binary, &checksums, &modules).unwrap());
-        fs::remove_file(binary).unwrap();
+        fs::remove_file(&binary).unwrap();
         assert!(!installed_matches_release(&binary, &checksums, &modules).unwrap());
     }
 
