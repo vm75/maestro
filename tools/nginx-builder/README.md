@@ -45,7 +45,7 @@ The persistent cache defaults to `~/.cache/nginx-entware-aarch64/` (or `$XDG_CAC
 
 - **Included:** HTTPS/TLS, HTTP/2, HTTP/3/QUIC, HTTP proxy, WebSockets/SSE, gRPC, FastCGI, uwsgi, SCGI, Memcached, TCP/UDP stream, real-IP handling, rewrites, caching, gzip, rate/connection limits, and authentication. Dynamic modules: **Brotli**, **stream**, **headers-more**.
 - **Excluded:** native WebDAV, FLV, SSI, autoindex, tracking/legacy modules, njs, GeoIP2, NAXSI, Lua, RTMP, and MPEG-TS.
-- **Hardening:** PIE, strong stack protection, `_FORTIFY_SOURCE=2`, full RELRO, and format-security checks. Targets Entware AArch64 / glibc 2.27. HTTP/3 and stream listeners remain inactive until configured.
+- **Hardening:** PIE, strong stack protection, full RELRO, and format-security checks. Targets Entware AArch64 / glibc 2.27. HTTP/3 and stream listeners remain inactive until configured.
 
 ## Manual GitHub Actions build
 

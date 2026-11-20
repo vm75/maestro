@@ -52,7 +52,7 @@ NOTES:
   * Requires substantial disk space (10+ GiB recommended), RAM, and internet.
   * Requires a source release signed by one of the four pinned nginx.org keys.
   * Entware recipes may need adjustments for brand-new NGINX versions.
-  * Hardened reverse-proxy profile: PIE, SSP, FORTIFY=2, full RELRO.
+  * Hardened reverse-proxy profile: PIE, SSP, full RELRO.
   * Fixed, broad reverse-proxy profile: HTTP/3, HTTP/2, gRPC, CGI gateways,
     Memcached proxy, TCP/UDP stream, Brotli, headers-more, request limits.
   * Excludes native WebDAV, FLV, SSI, autoindex, tracking/legacy modules,
@@ -333,7 +333,7 @@ content = path.read_text()
 choices = {
     'PKG_ASLR_PIE': 'REGULAR',
     'PKG_CC_STACKPROTECTOR': 'STRONG',
-    'PKG_FORTIFY_SOURCE': '2',
+    'PKG_FORTIFY_SOURCE': 'NONE',
     'PKG_RELRO': 'FULL',
 }
 settings = {
@@ -426,7 +426,7 @@ expect_kconfig() {
   fi
 }
 for name in PKG_ASLR_PIE_REGULAR PKG_CC_STACKPROTECTOR_STRONG \
-  PKG_FORTIFY_SOURCE_2 PKG_RELRO_FULL PKG_CHECK_FORMAT_SECURITY \
+  PKG_FORTIFY_SOURCE_NONE PKG_RELRO_FULL PKG_CHECK_FORMAT_SECURITY \
   NGINX_HTTP_V2 NGINX_HTTP_QUIC NGINX_HTTP_REAL_IP NGINX_HTTP_AUTH_REQUEST \
   NGINX_HTTP_ACCESS NGINX_HTTP_AUTH_BASIC NGINX_HTTP_PROXY \
   NGINX_HTTP_REWRITE NGINX_HTTP_MAP NGINX_HTTP_LIMIT_REQ NGINX_HTTP_LIMIT_CONN \
@@ -435,7 +435,8 @@ for name in PKG_ASLR_PIE_REGULAR PKG_CC_STACKPROTECTOR_STRONG \
   NGINX_HTTP_SCGI NGINX_HTTP_MEMCACHED NGINX_STREAM_REAL_IP NGINX_PCRE; do
   expect_kconfig "$name" y
 done
-for name in NGINX_DAV NGINX_FLV NGINX_HTTP_SSI NGINX_HTTP_USERID \
+for name in PKG_FORTIFY_SOURCE_1 PKG_FORTIFY_SOURCE_2 PKG_FORTIFY_SOURCE_3 \
+  NGINX_DAV NGINX_FLV NGINX_HTTP_SSI NGINX_HTTP_USERID \
   NGINX_HTTP_AUTOINDEX NGINX_HTTP_EMPTY_GIF NGINX_HTTP_BROWSER \
   PACKAGE_nginx-full PACKAGE_nginx-mod-geoip2 PACKAGE_nginx-mod-lua \
   PACKAGE_nginx-mod-lua-resty-core PACKAGE_nginx-mod-lua-resty-lrucache \
@@ -455,7 +456,7 @@ log "Building Entware cross-toolchain, NGINX, Brotli, stream and headers-more wi
 (cd "$ENTWARE" && make -j"$JOBS" toolchain/kernel-headers/compile V=s \
   HOST_CFLAGS="-O2 -std=gnu17 -I$ENTWARE/staging_dir/host/include" \
   HOST_CXXFLAGS="-O2 -I$ENTWARE/staging_dir/host/include")
-(cd "$ENTWARE" && make -j"$JOBS" toolchain/install)
+(cd "$ENTWARE" && make -j"$JOBS" toolchain/install V=s MAKEINFO=true ac_cv_prog_MAKEINFO=true)
 # target/compile prepares a separate Linux source tree and rebuilds the same
 # legacy host helpers, so it needs the compatibility flags too.
 (cd "$ENTWARE" && make -j"$JOBS" target/compile V=s \
@@ -592,12 +593,12 @@ PY
     printf 'target=aarch64-k3.10\n'
     printf 'nginx_source_sha256=%s\n' "$SOURCE_SHA256"
     printf 'profile=router-hub-reverse-proxy-hardened-v2-broad-upstream\n'
-    printf 'hardening=PIE+SSP_STRONG+FORTIFY2+FULL_RELRO+FORMAT_SECURITY\n'
+    printf 'hardening=PIE+SSP_STRONG+FULL_RELRO+FORMAT_SECURITY\n'
     printf 'enabled_upstreams=HTTP,HTTPS,GRPC,FASTCGI,UWSGI,SCGI,MEMCACHED,TCP,UDP\n'
     printf 'enabled_features=HTTP2,HTTP3,REAL_IP,ACCESS,AUTH_REQUEST,RATE_LIMIT,CONN_LIMIT,GZIP,BROTLI,HEADERS_MORE\n'
     printf 'disabled_modules=DAV,FLV,SSI,USERID,AUTOINDEX,EMPTY_GIF,BROWSER,NJS,GEOIP2,NAXSI,LUA,RTMP,TS,DAV_EXT\n'
     printf '\nSelected configuration:\n'
-    grep -E '^(CONFIG_PKG_(ASLR_PIE_REGULAR|CC_STACKPROTECTOR_STRONG|FORTIFY_SOURCE_2|RELRO_FULL|CHECK_FORMAT_SECURITY)=y|CONFIG_NGINX_HTTP_(V2|REAL_IP|QUIC|AUTH_REQUEST|FASTCGI|UWSGI|SCGI|MEMCACHED)=y|CONFIG_PACKAGE_nginx-(ssl|mod-(brotli|stream|headers-more))=m)' "$ENTWARE/.config"
+    grep -E '^(CONFIG_PKG_(ASLR_PIE_REGULAR|CC_STACKPROTECTOR_STRONG|FORTIFY_SOURCE_NONE|RELRO_FULL|CHECK_FORMAT_SECURITY)=y|CONFIG_NGINX_HTTP_(V2|REAL_IP|QUIC|AUTH_REQUEST|FASTCGI|UWSGI|SCGI|MEMCACHED)=y|CONFIG_PACKAGE_nginx-(ssl|mod-(brotli|stream|headers-more))=m)' "$ENTWARE/.config"
     printf 'entware_commit=%s\n' "$(git -C "$ENTWARE" rev-parse HEAD)"
     printf 'entware_packages_commit=%s\n' "$(git -C "$ENTWARE/feeds/packages" rev-parse HEAD)"
     printf '\nELF interpreter:\n'
