@@ -74,6 +74,14 @@ It creates a backup first; use `--no-backup` to skip it.
 Use `--download-only` to stage a verified package under `/tmp` and print a
 manual install command. Upgrade is unavailable in Linux and test modes.
 
+Similarly, `/opt/bin/router-hub upgrade-nginx` (or `update-nginx`) checks the
+latest custom Entware NGINX IPK release bundle on GitHub, verifies checksums,
+and installs the matching packages (`nginx-ssl`, `nginx-mod-brotli`,
+`nginx-mod-stream`, and `nginx-mod-headers-more`). By default it selects the
+`stable` channel; specify `--channel mainline` to upgrade to mainline releases,
+or pass `--tag <tag>` / `--version <version>`. Use `--check` to inspect available
+updates, or `--download-only` to verify and stage packages under `/tmp`.
+
 Create a backup separately with `router-hub backup`; see
 [backup instructions](docs/installation.md#backups). Use
 `router-hub restore <archive>` while services are stopped to recover a backup;

@@ -107,6 +107,9 @@ never overwrite one another. These `nginx-v*` tags cannot trigger the Router
 Hub `v*` release workflow. The NGINX release is explicitly marked
 `--latest=false`, leaving the existing Router Hub release workflow and its
 `releases/latest` endpoint (used by `router-hub upgrade`) untouched.
+On an Asuswrt-Merlin router, `/opt/bin/router-hub upgrade-nginx` discovers,
+verifies, and installs these published NGINX packages automatically (defaulting
+to the stable channel, with opt-in `--channel mainline`).
 
 The builder requires substantial disk space when compiled on a fresh runner.
 If the pre-built Entware toolchain container image is available on GitHub

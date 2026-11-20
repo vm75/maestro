@@ -14,6 +14,7 @@ mod nginx_ingress;
 mod nginx_mutation;
 mod nginx_render;
 mod nginx_sites;
+mod nginx_upgrade;
 mod restore;
 mod state;
 mod storage;
@@ -91,6 +92,31 @@ enum Command {
         #[arg(long)]
         no_backup: bool,
     },
+    /// Download the newest custom NGINX Entware IPK bundle and optionally install it (router only).
+    #[command(alias = "update-nginx")]
+    UpgradeNginx {
+        /// NGINX release channel: stable (default) or mainline.
+        #[arg(long, value_enum, default_value_t = nginx_upgrade::NginxChannel::Stable)]
+        channel: nginx_upgrade::NginxChannel,
+        /// Target a specific release tag (e.g. nginx-v1.30.7-run44684227015-a1).
+        #[arg(long)]
+        tag: Option<String>,
+        /// Target a specific NGINX version (e.g. 1.30.7).
+        #[arg(long)]
+        version: Option<String>,
+        /// Verify and stage the IPK bundle in /tmp without invoking opkg.
+        #[arg(long)]
+        download_only: bool,
+        /// Skip creating the pre-upgrade backup.
+        #[arg(long)]
+        no_backup: bool,
+        /// Force installation even if already up to date.
+        #[arg(long)]
+        force: bool,
+        /// Check for available updates without downloading or installing.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -131,6 +157,33 @@ fn main() -> Result<()> {
                 .enable_all()
                 .build()?
                 .block_on(upgrade::run(&config, &cli.config, download_only, no_backup))
+        }
+        Command::UpgradeNginx {
+            channel,
+            tag,
+            version,
+            download_only,
+            no_backup,
+            force,
+            check,
+        } => {
+            nginx_upgrade::require_router(config.platform, config.test_mode)?;
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(nginx_upgrade::run(
+                    &config,
+                    &cli.config,
+                    nginx_upgrade::UpgradeNginxOptions {
+                        channel,
+                        tag,
+                        version,
+                        download_only,
+                        no_backup,
+                        force,
+                        check,
+                    },
+                ))
         }
         Command::CheckConfig => {
             println!("configuration is valid: {}", cli.config.display());
@@ -361,6 +414,8 @@ async fn shutdown_signal(state: AppState) {
 
 #[cfg(test)]
 mod cli_tests {
+    use std::path::Path;
+
     use super::*;
 
     #[test]
@@ -394,7 +449,7 @@ mod cli_tests {
         .unwrap();
         assert!(cli.linux_mode);
         assert!(
-            matches!(cli.command, Some(Command::Backup { output_dir: Some(path) }) if path == PathBuf::from("/lab/backups"))
+            matches!(cli.command, Some(Command::Backup { output_dir: Some(path) }) if path == Path::new("/lab/backups"))
         );
         let cli = Cli::try_parse_from([
             "router-hub",
@@ -405,7 +460,84 @@ mod cli_tests {
         ])
         .unwrap();
         assert!(
-            matches!(cli.command, Some(Command::Restore { archive, root }) if archive == PathBuf::from("/tmp/backup.tar.gz") && root == PathBuf::from("/tmp/recovery"))
+            matches!(cli.command, Some(Command::Restore { archive, root }) if archive == Path::new("/tmp/backup.tar.gz") && root == Path::new("/tmp/recovery"))
         );
+
+        // upgrade-nginx default flags
+        let cli = Cli::try_parse_from(["router-hub", "upgrade-nginx"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::UpgradeNginx {
+                channel: nginx_upgrade::NginxChannel::Stable,
+                tag: None,
+                version: None,
+                download_only: false,
+                no_backup: false,
+                force: false,
+                check: false,
+            })
+        ));
+
+        // upgrade-nginx with alias update-nginx and mainline channel
+        let cli = Cli::try_parse_from([
+            "router-hub",
+            "update-nginx",
+            "--channel",
+            "mainline",
+            "--download-only",
+            "--no-backup",
+            "--force",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::UpgradeNginx {
+                channel: nginx_upgrade::NginxChannel::Mainline,
+                tag: None,
+                version: None,
+                download_only: true,
+                no_backup: true,
+                force: true,
+                check: false,
+            })
+        ));
+
+        // upgrade-nginx with explicit tag and check
+        let cli = Cli::try_parse_from([
+            "router-hub",
+            "upgrade-nginx",
+            "--tag",
+            "nginx-v1.30.7-run44684227015-a1",
+            "--check",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::UpgradeNginx {
+                channel: nginx_upgrade::NginxChannel::Stable,
+                tag: Some(ref t),
+                version: None,
+                download_only: false,
+                no_backup: false,
+                force: false,
+                check: true,
+            }) if t == "nginx-v1.30.7-run44684227015-a1"
+        ));
+
+        // upgrade-nginx with explicit version
+        let cli =
+            Cli::try_parse_from(["router-hub", "upgrade-nginx", "--version", "1.30.7"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::UpgradeNginx {
+                channel: nginx_upgrade::NginxChannel::Stable,
+                tag: None,
+                version: Some(ref v),
+                download_only: false,
+                no_backup: false,
+                force: false,
+                check: false,
+            }) if v == "1.30.7"
+        ));
     }
 }

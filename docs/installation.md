@@ -183,6 +183,48 @@ This is a separate CLI process, **not** an authenticated API/UI action.
 upgrade requires a published stable IPK; prerelease tags and older tarball-only
 releases cannot be installed through this command.
 
+### Router-only NGINX upgrade command
+
+```sh
+/opt/bin/router-hub upgrade-nginx
+# Target mainline releases instead of stable:
+/opt/bin/router-hub upgrade-nginx --channel mainline
+# Check if an update is available without downloading or installing:
+/opt/bin/router-hub upgrade-nginx --check
+# Download and verify the 4-package bundle without attempting opkg installation:
+/opt/bin/router-hub upgrade-nginx --download-only
+# Explicitly skip the pre-upgrade backup:
+/opt/bin/router-hub upgrade-nginx --no-backup
+# Target a specific NGINX version or exact release tag:
+/opt/bin/router-hub upgrade-nginx --version 1.30.7
+/opt/bin/router-hub upgrade-nginx --tag nginx-v1.30.7-run44684227015-a1
+# Force re-installation even if already up to date:
+/opt/bin/router-hub upgrade-nginx --force
+```
+
+The CLI queries GitHub Releases for manually built Entware NGINX releases tagged
+`nginx-v*` (published by the [Build Nginx workflow](../.github/workflows/build-nginx.yml)).
+By default it selects the newest release in the **stable** channel (even minor
+version numbers such as 1.28.x and 1.30.x); `--channel mainline` targets odd
+minor versions (e.g. 1.29.x and 1.31.x).
+
+The command downloads and verifies `SHA256SUMS` and the four version-matched
+IPK packages (`nginx-ssl`, `nginx-mod-brotli`, `nginx-mod-stream`, and
+`nginx-mod-headers-more`). Dynamic modules are strictly ABI-bound to their NGINX
+build; installing the bundle together prevents runtime module load failures.
+
+Before making any changes, `upgrade-nginx` tests the existing NGINX configuration
+syntax (`nginx -t`) and creates a full backup (same as `router-hub backup`).
+When running as root, it installs all four packages in a single `opkg install`
+transaction, re-verifies configuration syntax with the newly installed binary,
+and restarts the NGINX service (`/opt/etc/init.d/S80nginx restart`).
+
+If the post-installation configuration test fails, NGINX is **not** restarted,
+ensuring active worker processes continue serving traffic while the administrator
+inspects syntax changes. Staged verified packages remain in `/tmp/nginx-<tag>/`
+for inspection or manual retries. `update-nginx` is supported as an alias.
+Like `upgrade`, this command is rejected on native Linux and simulated test-mode runs.
+
 ### Tarball installation (alternative)
 
 On the router, ensure `curl`, `tar`, and `sha256sum` are available. You can
