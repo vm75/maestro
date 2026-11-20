@@ -544,7 +544,7 @@ fn available_bytes(path: &Path) -> Result<u64> {
         return Err(std::io::Error::last_os_error()).context("cannot inspect free /tmp space");
     }
     let data = unsafe { data.assume_init() };
-    Ok((data.f_bavail as u64).saturating_mul(data.f_frsize as u64))
+    Ok(u64::from(data.f_bavail).saturating_mul(u64::from(data.f_frsize)))
 }
 
 fn ensure_free_space(path: &Path, required: u64) -> Result<()> {
