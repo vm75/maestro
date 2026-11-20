@@ -984,7 +984,7 @@ pub async fn run(
         opkg_options.push("--force-downgrade");
     }
     let manual_cmd = format!(
-        "{OPKG} install {}{}",
+        "{OPKG} {}install {}",
         if opkg_options.is_empty() {
             String::new()
         } else {
@@ -1027,8 +1027,8 @@ pub async fn run(
 
     let mut opkg_cmd = AsyncCommand::new(OPKG);
     opkg_cmd
-        .arg("install")
         .args(&opkg_options)
+        .arg("install")
         .args(&package_paths);
     let opkg_out = match bounded_command(opkg_cmd, OPKG_TIMEOUT, "opkg install").await {
         Ok(result) => result,
@@ -1050,6 +1050,15 @@ pub async fn run(
         config.nginx.prefix_path.as_deref(),
     ) {
         return Err(recover_failure(config, &snapshot, error, was_running).await);
+    }
+
+    if !installed_matches_release(&config.commands.nginx, &checksum_map, Path::new(MODULES_DIR))? {
+        return Err(recover_failure(
+            config,
+            &snapshot,
+            anyhow!("installed NGINX executable/modules do not match verified release checksums"),
+            was_running,
+        ).await);
     }
 
     // HUP/reload only reconfigures the OLD master binary. NGINX's supported
