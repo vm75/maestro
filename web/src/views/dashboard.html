@@ -1,0 +1,62 @@
+      <section class="view active" id="view-dashboard">
+        <div class="grid" id="dashboard-grid"></div>
+        <div class="grid" id="system-usage-grid" style="margin-top: 12px; display: none;">
+          <div class="card pad span-12" id="card-network">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+              <div style="width:4px;height:14px;background:#31d7dc;"></div>
+              <strong style="font-size:14px;">Internet Traffic</strong>
+            </div>
+            <div style="display:flex;align-items:center;margin-bottom:8px;">
+              <div style="flex:1;background:#101112;height:12px;border-radius:6px;overflow:hidden;position:relative;">
+                <div id="bar-dl" style="width:0%;height:100%;background:#4cdb98;border-radius:6px;"></div>
+              </div>
+              <div style="width:120px;text-align:right;font-size:12px;display:flex;justify-content:space-between;padding-left:12px;"><span style="color:#b0bec5">DL</span><span id="txt-dl">0.00 KB/s</span></div>
+            </div>
+            <div style="display:flex;align-items:center;">
+              <div style="flex:1;background:#101112;height:12px;border-radius:6px;overflow:hidden;position:relative;">
+                <div id="bar-ul" style="width:0%;height:100%;background:#31d7dc;border-radius:6px;"></div>
+              </div>
+              <div style="width:120px;text-align:right;font-size:12px;display:flex;justify-content:space-between;padding-left:12px;"><span style="color:#b0bec5">UL</span><span id="txt-ul">0.00 KB/s</span></div>
+            </div>
+          </div>
+          <div class="card pad span-12" id="card-cpu">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+              <div style="width:4px;height:14px;background:#31d7dc;"></div>
+              <strong style="font-size:14px;">CPU</strong>
+              <span id="txt-loadavg" style="margin-left:12px;color:#8b9bb0;font-size:12px;"></span>
+              <span id="txt-uptime" style="margin-left:auto;color:#b0bec5;font-size:11px;"></span>
+            </div>
+            <div id="cpu-cores" style="display:grid;gap:8px;margin-bottom:12px;"></div>
+            <canvas id="cpu-canvas" style="width:100%;height:100px;background:#050505;border:1px solid #334956;border-radius:2px;"></canvas>
+          </div>
+          <div class="card pad span-12" id="card-ram">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+              <div style="width:4px;height:14px;background:#31d7dc;"></div>
+              <strong style="font-size:14px;">RAM</strong>
+            </div>
+            <div style="display:flex;justify-content:space-around;text-align:center;margin-bottom:12px;font-size:13px;">
+              <div><div style="color:#fff;">Used</div><div id="txt-ram-used" style="color:#b0bec5;">0 MB</div></div>
+              <div><div style="color:#fff;">Free</div><div id="txt-ram-free" style="color:#b0bec5;">0 MB</div></div>
+              <div><div style="color:#fff;">Total</div><div id="txt-ram-total" style="color:#b0bec5;">0 MB</div></div>
+            </div>
+            <div style="display:flex;align-items:center;">
+              <div style="flex:1;background:#101112;height:12px;border-radius:6px;overflow:hidden;position:relative;">
+                <div id="bar-ram" style="width:0%;height:100%;background:#31d7dc;border-radius:6px;"></div>
+              </div>
+              <div style="width:60px;text-align:right;font-size:12px;" id="txt-ram-pct">0%</div>
+            </div>
+            <div style="display:flex;justify-content:space-around;text-align:center;margin-bottom:12px;font-size:13px;margin-top:16px;">
+              <div><div style="color:#fff;">Swap Used</div><div id="txt-swap-used" style="color:#b0bec5;">0 MB</div></div>
+              <div><div style="color:#fff;">Swap Free</div><div id="txt-swap-free" style="color:#b0bec5;">0 MB</div></div>
+              <div><div style="color:#fff;">Swap Total</div><div id="txt-swap-total" style="color:#b0bec5;">0 MB</div></div>
+            </div>
+            <div style="display:flex;align-items:center;">
+              <div style="flex:1;background:#101112;height:12px;border-radius:6px;overflow:hidden;position:relative;">
+                <div id="bar-swap" style="width:0%;height:100%;background:#ffcb66;border-radius:6px;"></div>
+              </div>
+              <div style="width:60px;text-align:right;font-size:12px;" id="txt-swap-pct">0%</div>
+            </div>
+          </div>
+        </div>
+      </section>
+

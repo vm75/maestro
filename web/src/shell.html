@@ -1,0 +1,71 @@
+<body class="rh-page">
+  <div class="rh-shell">
+
+    <div class="rh-hero-banner">
+      <img src="__ROUTER_HUB_LOGO_DATA_URI__" alt="Router Hub Logo" class="rh-hero-logo">
+      <div style="flex:1">
+        <div class="rh-hero-title">Router Hub</div>
+        <div class="rh-hero-sub">Router Admin</div>
+      </div>
+      <div class="rh-mode-pill" id="rh-mode" style="display:none;"></div>
+    </div>
+
+    <!-- Fallback tab nav for standalone mode; tabs are moved to ASUS #tabMenu when embedded -->
+    <!-- On mobile the tab strip is hidden; a sidebar replaces it -->
+    <div id="rh-nav" class="submenuBlock rh-tabs">
+      <div class="tabClicked rh-tab" data-view="dashboard">Dashboard</div>
+      <div class="tab rh-tab" data-view="services">Services</div>
+      <div class="tab rh-tab" data-view="nginx">Nginx</div>
+      <div class="tab rh-tab" data-view="certificates">Certificates</div>
+      <div class="tab rh-tab" data-view="wol">Wake-on-LAN</div>
+      <div class="tab rh-tab" data-view="firewall">Ban Shield</div>
+      <div class="tab rh-tab" data-view="adguard">AdGuard</div>
+      <div class="tab rh-tab" data-view="wireguard">WireGuard</div>
+    </div>
+
+    <!-- Mobile sidebar (standalone only) -->
+    <button class="rh-sidebar-toggle" id="rh-sidebar-toggle" aria-expanded="false" aria-controls="rh-sidebar" onclick="rhToggleSidebar()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      <span id="rh-sidebar-label">Dashboard</span>
+      <svg style="margin-left:auto" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+    <div id="rh-sidebar" class="rh-sidebar" role="navigation" aria-label="Page navigation">
+      <div class="tabClicked rh-tab" data-view="dashboard" data-sidebar>Dashboard</div>
+      <div class="tab rh-tab" data-view="services" data-sidebar>Services</div>
+      <div class="tab rh-tab" data-view="nginx" data-sidebar>Nginx</div>
+      <div class="tab rh-tab" data-view="certificates" data-sidebar>Certificates</div>
+      <div class="tab rh-tab" data-view="wol" data-sidebar>Wake-on-LAN</div>
+      <div class="tab rh-tab" data-view="firewall" data-sidebar>Ban Shield</div>
+      <div class="tab rh-tab" data-view="adguard" data-sidebar>AdGuard</div>
+      <div class="tab rh-tab" data-view="wireguard" data-sidebar>WireGuard</div>
+    </div>
+
+    <!-- Header row: formfonttitle left, brand/status right (AdaptiveQoS_Bandwidth_Monitor pattern) -->
+    <div>&nbsp;</div>
+    <table class="rh-title-row">
+      <tr>
+        <td class="title-cell formfonttitle">Router Hub &mdash; <span id="page-title">Dashboard</span></td>
+        <td class="brand-cell">
+          <div class="rh-brand-info">
+            <span class="rh-badge" style="padding:0 8px;">
+              <span class="rh-version" id="rh-version">v__ROUTER_HUB_VERSION__</span>
+            </span>
+            <span class="rh-badge">
+              <span class="rh-logo"><img src="__ROUTER_HUB_LOGO_DATA_URI__" alt="RH" style="width:22px;height:22px;object-fit:contain"></span>
+              <span class="rh-badge-copy">
+                <strong class="rh-model" id="router-model">Router</strong>
+                <span class="rh-conn" id="connection-status"><span class="rh-dot"></span><span
+                    id="connection">Checking</span></span>
+              </span>
+            </span>
+            <button class="btn" style="height:32px;" onclick="refreshCurrent()">Refresh</button>
+          </div>
+        </td>
+      </tr>
+    </table>
+    <div class="splitLine"></div>
+    <div class="rh-tab-pane">
+      <div class="formfontdesc" id="page-subtitle">Router status at a glance</div>
+
+      <!-- ── Views ── -->
+

@@ -1,0 +1,75 @@
+      <section class="view" id="view-adguard">
+        <div class="card pad">
+          <div class="toolbar">
+            <div><strong>AdGuard Home</strong> <span id="adguard-status"></span></div>
+            <div class="actions"><button class="btn primary" onclick="launchAdGuard()">Launch Web UI</button></div>
+          </div>
+          <div class="grid" style="margin-top:12px">
+            <div class="span-6">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <h3 style="margin:0;font-size:13px">Pause Filtering</h3>
+                <div id="filtering-status"></div>
+              </div>
+              <div class="actions">
+                <button class="btn" onclick="toggleAdguardFiltering(false,1)">1 min</button>
+                <button class="btn" onclick="toggleAdguardFiltering(false,10)">10 min</button>
+                <button class="btn" onclick="toggleAdguardFiltering(false,30)">30 min</button>
+                <button class="btn" onclick="toggleAdguardFiltering(false,60)">60 min</button>
+                <button id="resume-filtering-btn" class="btn primary" style="display:none" onclick="toggleAdguardFiltering(true)">Resume</button>
+              </div>
+            </div>
+            <div class="span-6">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <h3 style="margin:0;font-size:13px">Pause Protection</h3>
+                <div id="protection-status"></div>
+              </div>
+              <div class="actions">
+                <button class="btn" onclick="toggleAdguardProtection(false,1)">1 min</button>
+                <button class="btn" onclick="toggleAdguardProtection(false,10)">10 min</button>
+                <button class="btn" onclick="toggleAdguardProtection(false,30)">30 min</button>
+                <button class="btn" onclick="toggleAdguardProtection(false,60)">60 min</button>
+                <button id="resume-protection-btn" class="btn primary" style="display:none" onclick="toggleAdguardProtection(true)">Resume</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="height:12px"></div>
+        <div class="card pad">
+          <div class="toolbar"><div><strong>Router Hub DNS files</strong><div class="hint">Manage local DNS overrides and DHCP reservations.</div></div><div class="actions"><button class="btn" onclick="openAdguardRewrites()">Manage DNS rewrites</button><button class="btn" onclick="openAdguardHosts()">Manage hosts.add</button><button class="btn" onclick="openDnsmasqHosts()">Manage dnsmasq.conf.add</button></div></div>
+        </div>
+        <div style="height:12px"></div>
+        <div class="card pad">
+          <h2 style="margin-top:0;font-size:13px">Integration Settings</h2>
+          <form id="adguard-form" class="form" onsubmit="saveAdGuardSettings(event)">
+            <div class="form-grid">
+              <div class="field full">
+                <label><input type="checkbox" name="enabled"> Enable AdGuard Integration</label>
+              </div>
+              <div class="field">
+                <label>API Endpoint (used for Router Hub API requests)</label>
+                <input class="input" name="api_endpoint" placeholder="http://192.168.1.1:3000">
+              </div>
+              <div class="field">
+                <label>Web UI Launch Alias (optional, used for launcher button)</label>
+                <input class="input" name="launch_url" placeholder="http://adguard.lan:3000">
+              </div>
+              <div class="field">
+                <label>Username (optional)</label>
+                <input class="input" name="username">
+              </div>
+              <div class="field">
+                <label>Password (optional)</label>
+                <input class="input" type="password" name="password" placeholder="••••••••">
+              </div>
+              <div class="field full">
+                <label>LAN IP Address (used for DNS rewrites &amp; launch URL default)</label>
+                <input class="input" name="lan_ip" placeholder="192.168.1.1">
+              </div>
+            </div>
+            <div style="margin-top:14px">
+              <button type="submit" class="btn primary">Save Settings</button>
+            </div>
+          </form>
+        </div>
+      </section>
+

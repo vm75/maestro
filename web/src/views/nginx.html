@@ -1,0 +1,44 @@
+      <section class="view" id="view-nginx">
+        <div class="notice nginx-status-line"><span>Site changes are tested and reload a running nginx. Service
+            lifecycle is managed from Services.</span><span id="nginx-status" class="muted">Loading…</span><div class="actions"><button class="btn" onclick="nginxCommand('test')">Test</button><button class="btn" onclick="nginxCommand('reload')">Reload</button></div></div>
+        <details class="card nginx-card nginx-accordion">
+          <summary><span>Sites</span><span class="muted">Domains, subdomains, and subfolders</span></summary>
+          <div class="nginx-accordion-body">
+            <div class="card-head">
+              <h2>Manage sites</h2>
+              <div class="actions"><button class="btn primary"
+                  onclick="newNginxObject('domain')">+ Domain</button><button class="btn primary"
+                  onclick="newNginxObject('subdomain')">+ Subdomain</button><button class="btn primary"
+                  onclick="newNginxObject('subfolder')">+ Subfolder</button></div>
+            </div>
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th><button class="table-sort" data-sort-table="nginx" data-sort-key="site" onclick="sortTable('nginx','site')">Site <span class="table-sort-indicator">↕</span></button></th>
+                    <th><button class="table-sort" data-sort-table="nginx" data-sort-key="port" onclick="sortTable('nginx','port')">Port <span class="table-sort-indicator">↕</span></button></th>
+                    <th><button class="table-sort" data-sort-table="nginx" data-sort-key="managed" onclick="sortTable('nginx','managed')">Configuration <span class="table-sort-indicator">↕</span></button></th>
+                    <th><button class="table-sort" data-sort-table="nginx" data-sort-key="state" onclick="sortTable('nginx','state')">State <span class="table-sort-indicator">↕</span></button></th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="nginx-objects-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </details>
+        <div class="card nginx-summary-card"><div class="card-head"><h2>Setup quick reference</h2><button type="button" class="btn" onclick="openNginxReference()">Open guide</button></div><p class="muted">Settings for PWAs, WordPress, and video, photo, audio, and book servers.</p></div>
+        <div class="card nginx-summary-card"><div class="card-head"><h2>Global settings</h2><button class="btn" onclick="editNginxSettings()">Configure</button></div><p class="muted">Shared listeners, DNS, client allowlists, and defaults inherited by managed sites.</p></div>
+        <details class="card nginx-card nginx-accordion">
+          <summary><span>Logs</span><span class="muted">Read-only, manually refreshed</span></summary>
+          <div class="nginx-accordion-body">
+            <div class="card-head">
+              <h2>Nginx logs</h2>
+              <div class="actions"><select class="input" id="nginx-log-select"></select><button class="btn"
+                  onclick="viewNginxLog()">View / refresh</button></div>
+            </div>
+            <pre class="log" id="nginx-log-content">Select a log to view it. Logs do not auto-refresh.</pre>
+          </div>
+        </details>
+      </section>
+

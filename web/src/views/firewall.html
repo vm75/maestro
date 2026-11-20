@@ -1,0 +1,74 @@
+      <section class="view" id="view-firewall">
+        <div class="card pad" id="fw-health" style="margin-bottom:12px">
+          <h2 style="margin-top:0;font-size:13px">Ban shield performance</h2>
+          <p>Loading firewall health…</p>
+        </div>
+        <div class="grid">
+          <div class="card pad span-4">
+            <h2 style="margin-top:0;font-size:13px">Protection</h2>
+            <div class="notice" id="fw-ban-summary">Active bans: — subnet · — IP</div>
+            <div class="protection-setting">
+              <label class="field" for="fw-enabled"><span>Engine</span><select id="fw-enabled" class="input">
+                  <option value="false">Disabled</option>
+                  <option value="true">Enabled</option>
+                </select></label>
+              <button class="btn primary" onclick="saveFirewallToggle()">Save</button>
+            </div>
+            <hr style="border:0;border-top:1px solid #2a4050;margin:14px 0">
+            <h3 style="font-size:13px">Allowlist</h3>
+            <div class="actions"><input class="input" id="allow-network" placeholder="192.168.1.0/24"><button
+                class="btn" onclick="addAllowlist()">Add</button></div>
+            <div id="allow-list" style="margin-top:8px"></div>
+            <hr style="border:0;border-top:1px solid #2a4050;margin:14px 0">
+            <h3 style="font-size:13px">Quick actions</h3>
+            <div class="protection-actions">
+              <button class="btn" onclick="showActiveBans()">Active bans</button>
+              <div class="manual-ban"><input class="input" id="manual-ban" placeholder="203.0.113.4/32"><button
+                  class="btn danger" onclick="manualBan()">Ban 1 hour</button></div>
+            </div>
+          </div>
+          <div class="card span-8">
+            <div class="card-head">
+              <h2>Detection rules</h2><button class="btn primary" onclick="editRule()">Add rule</button>
+            </div>
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Weight / threshold</th>
+                    <th>Hits / bans</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="rules-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="card pad">
+          <div class="toolbar">
+            <div><strong>Security tuning</strong><div class="hint">Saved in firewall-policy.json and applied live. Prefixes, backend commands, and resource caps remain in router-hub.toml.</div></div>
+            <div class="actions"><span class="muted" id="fw-tuning-source"></span><button type="button" class="btn" onclick="applyStrictFirewallPreset()">Load strict preset</button></div>
+          </div>
+          <div class="notice warn">Score retention and subnet promotion memory must outlast the minimum subnet ban; reputation retention must outlast the maximum ban. The strict preset is intentionally less forgiving and may block shared hosting or carrier networks when multiple clients share a subnet.</div>
+          <form id="firewall-settings-form" class="form" onsubmit="saveFirewallSettings(event)">
+            <div class="form-grid">
+              <div class="field"><label>IP failure threshold</label><input class="input" type="number" min="1" name="ip_failures" required></div>
+              <div class="field"><label>Subnet score threshold</label><input class="input" type="number" min="1" name="subnet_failures" required></div>
+              <div class="field"><label>Distinct IPs for subnet promotion</label><input class="input" type="number" min="2" name="promote_after_banned_ips" required></div>
+              <div class="field"><label>Prior subnet offenses before fast re-promotion</label><input class="input" type="number" min="1" name="reputation_repromote_after_offenses" required><span class="hint">1 means a previously promoted subnet is re-banned when one address reaches the IP threshold.</span></div>
+              <div class="field"><label>Score retention (days)</label><input class="input" type="number" min="1" name="score_retention_days" required></div>
+              <div class="field"><label>Subnet promotion memory (days)</label><input class="input" type="number" min="1" name="subnet_promotion_window_days" required></div>
+              <div class="field"><label>Reputation retention (days)</label><input class="input" type="number" min="1" name="reputation_retention_days" required></div>
+              <div class="field"><label>Minimum subnet ban (days)</label><input class="input" type="number" min="1" name="subnet_ban_days" required></div>
+              <div class="field"><label>First ban (days)</label><input class="input" type="number" min="1" name="first_ban_days" required></div>
+              <div class="field"><label>Second ban (days)</label><input class="input" type="number" min="1" name="second_ban_days" required></div>
+              <div class="field"><label>Third ban (days)</label><input class="input" type="number" min="1" name="third_ban_days" required></div>
+              <div class="field"><label>Maximum ban (days)</label><input class="input" type="number" min="1" name="max_ban_days" required></div>
+            </div>
+            <div class="actions" style="margin-top:12px"><button type="submit" class="btn primary">Save security tuning</button></div>
+          </form>
+        </div>
+      </section>
+
