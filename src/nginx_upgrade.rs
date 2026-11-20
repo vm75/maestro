@@ -973,9 +973,7 @@ pub async fn run(
         .iter()
         .map(|asset| final_dir.join(&asset.name))
         .collect();
-    let reinstall = options.force
-        || action == UpgradeDisposition::Rebuild
-        || (installed == Some(tag_info.version) && !installed_files_match);
+    let reinstall = options.force || action == UpgradeDisposition::Rebuild;
     let mut opkg_options = Vec::new();
     if reinstall {
         opkg_options.push("--force-reinstall");
@@ -1032,7 +1030,14 @@ pub async fn run(
         .args(&package_paths);
     let opkg_out = match bounded_command(opkg_cmd, OPKG_TIMEOUT, "opkg install").await {
         Ok(result) => result,
-        Err(error) => return Err(recover_failure(config, &snapshot, error, was_running).await),
+        // A timed-out opkg process may leave package hooks running. Never
+        // restore files underneath an installer whose state is uncertain.
+        Err(error) => {
+            return Err(error.context(format!(
+                "opkg did not complete; do not overwrite modules until all package processes have exited; recovery snapshot: {}",
+                snapshot.directory.display()
+            )));
+        }
     };
     if !opkg_out.status.success() {
         let error = anyhow!(
@@ -1052,13 +1057,17 @@ pub async fn run(
         return Err(recover_failure(config, &snapshot, error, was_running).await);
     }
 
-    if !installed_matches_release(&config.commands.nginx, &checksum_map, Path::new(MODULES_DIR))? {
-        return Err(recover_failure(
-            config,
-            &snapshot,
-            anyhow!("installed NGINX executable/modules do not match verified release checksums"),
-            was_running,
-        ).await);
+    match installed_matches_release(&config.commands.nginx, &checksum_map, Path::new(MODULES_DIR)) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(recover_failure(
+                config,
+                &snapshot,
+                anyhow!("installed NGINX executable/modules do not match verified release checksums"),
+                was_running,
+            ).await);
+        }
+        Err(error) => return Err(recover_failure(config, &snapshot, error, was_running).await),
     }
 
     // HUP/reload only reconfigures the OLD master binary. NGINX's supported
