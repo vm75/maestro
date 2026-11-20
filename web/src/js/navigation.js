@@ -194,8 +194,10 @@
         navRoot.addEventListener('click', event => {
           const tab = event.target.closest('[data-view]'); if (!tab) return;
           navRoot.querySelectorAll('[data-view]').forEach(x => {
-            x.classList.toggle('tabClicked', x === tab);
-            x.classList.toggle('tab', x !== tab);
+            const selected = x.dataset.view === tab.dataset.view ||
+              (x.classList.contains('rh-tab') && x.dataset.group === rhGroupFor(tab.dataset.view));
+            x.classList.toggle('tabClicked', selected);
+            x.classList.toggle('tab', !selected);
           });
           // Keep sidebar in sync when horizontal tabs are used
           rhSyncSidebarActive(tab.dataset.view);
