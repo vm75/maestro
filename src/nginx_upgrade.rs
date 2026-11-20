@@ -669,19 +669,127 @@ impl RollbackSnapshot {
     }
 }
 
-fn nginx_pid(pid_path: &Path) -> Option<i32> {
-    let contents = fs::read_to_string(pid_path).ok()?;
-    let pid = contents.trim().parse::<i32>().ok()?;
-    (pid > 1).then_some(pid)
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NginxMasterIdentity {
+    pid: i32,
+    start_ticks: u64,
+    exe_device: u64,
+    exe_inode: u64,
 }
 
-fn pid_is_alive(pid: i32) -> bool {
-    let status = unsafe { libc::kill(pid, 0) };
-    status == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+/// Field 22 of /proc/<pid>/stat is the process start time in clock ticks.
+/// Parse after the closing parenthesis: the comm field may contain spaces.
+fn parse_proc_start_ticks(stat: &str) -> Option<u64> {
+    let (_, fields) = stat.rsplit_once(") ")?;
+    let mut fields = fields.split_whitespace();
+    let state = fields.next()?;
+    if matches!(state, "Z" | "X" | "x") {
+        return None;
+    }
+    fields.nth(18)?.parse::<u64>().ok().filter(|ticks| *ticks > 0)
 }
 
-fn nginx_is_running(pid_path: &Path) -> bool {
-    nginx_pid(pid_path).is_some_and(pid_is_alive)
+fn is_nginx_master_title(cmdline: &[u8]) -> bool {
+    let title = cmdline.split(|byte| *byte == 0).next().unwrap_or(&[]);
+    title == b"nginx: master process"
+        || title.starts_with(b"nginx: master process ")
+}
+
+/// Read the identity from procfs, independently of the PID file. Comparing
+/// start ticks and executable inode prevents a reused PID from passing a
+/// second check, even if another NGINX master later receives the same PID.
+fn nginx_master_identity_at(
+    proc_root: &Path,
+    pid: i32,
+    nginx_binary: &Path,
+) -> Result<NginxMasterIdentity> {
+    ensure!(pid > 1, "invalid NGINX master PID {pid}");
+    let process = proc_root.join(pid.to_string());
+    let comm = fs::read_to_string(process.join("comm"))
+        .with_context(|| format!("cannot inspect process {pid} name"))?;
+    ensure!(comm.trim() == "nginx", "PID {pid} is not an NGINX process");
+
+    let cmdline = fs::read(process.join("cmdline"))
+        .with_context(|| format!("cannot inspect process {pid} command line"))?;
+    ensure!(
+        is_nginx_master_title(&cmdline),
+        "PID {pid} is not an NGINX master process"
+    );
+
+    let stat = fs::read_to_string(process.join("stat"))
+        .with_context(|| format!("cannot inspect process {pid} start time"))?;
+    let start_ticks = parse_proc_start_ticks(&stat)
+        .with_context(|| format!("PID {pid} has invalid or exited process state"))?;
+
+    // The old executable may be unlinked by opkg and appear with a
+    // " (deleted)" suffix. Its path must still match this configured NGINX.
+    let running_exe = fs::read_link(process.join("exe"))
+        .with_context(|| format!("cannot inspect process {pid} executable"))?;
+    let running_exe = running_exe.to_string_lossy();
+    let running_exe = running_exe
+        .strip_suffix(" (deleted)")
+        .unwrap_or(&running_exe);
+    let expected_exe = fs::canonicalize(nginx_binary)
+        .with_context(|| format!("cannot resolve {}", nginx_binary.display()))?;
+    ensure!(
+        Path::new(running_exe) == expected_exe,
+        "PID {pid} executable is not the configured NGINX binary ({})",
+        nginx_binary.display()
+    );
+    let executable = fs::metadata(process.join("exe"))
+        .with_context(|| format!("cannot stat process {pid} executable"))?;
+    Ok(NginxMasterIdentity {
+        pid,
+        start_ticks,
+        exe_device: executable.dev(),
+        exe_inode: executable.ino(),
+    })
+}
+
+fn nginx_master_identity(pid: i32, nginx_binary: &Path) -> Result<NginxMasterIdentity> {
+    nginx_master_identity_at(Path::new("/proc"), pid, nginx_binary)
+}
+
+/// A missing PID file means NGINX was stopped; a *present but invalid* PID
+/// file is an error, never permission to signal an arbitrary live process.
+fn nginx_master_from_pid_file(
+    pid_path: &Path,
+    nginx_binary: &Path,
+) -> Result<Option<NginxMasterIdentity>> {
+    let contents = match fs::read_to_string(pid_path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("cannot read NGINX PID file"),
+    };
+    let pid = contents
+        .trim()
+        .parse::<i32>()
+        .context("invalid NGINX PID file contents")?;
+    Ok(Some(nginx_master_identity(pid, nginx_binary)?))
+}
+
+fn signal_nginx_master(
+    expected: NginxMasterIdentity,
+    nginx_binary: &Path,
+    signal: i32,
+) -> Result<()> {
+    let current = nginx_master_identity(expected.pid, nginx_binary)
+        .context("NGINX master identity could not be revalidated before signal")?;
+    ensure!(
+        current == expected,
+        "NGINX master PID {} changed identity; refusing to signal a reused PID",
+        expected.pid
+    );
+    // There is no pidfd_send_signal on older Asuswrt kernels. The procfs
+    // identity check immediately precedes kill to minimize the remaining race.
+    ensure!(
+        unsafe { libc::kill(expected.pid, signal) } == 0,
+        "cannot signal verified NGINX master {}: {}",
+        expected.pid,
+        std::io::Error::last_os_error()
+    );
+    Ok(())
 }
 
 fn process_uses_binary(pid: i32, binary: &Path) -> Result<bool> {
@@ -690,19 +798,26 @@ fn process_uses_binary(pid: i32, binary: &Path) -> Result<bool> {
     Ok(executable.dev() == installed.dev() && executable.ino() == installed.ino())
 }
 
-async fn wait_for_new_master(config: &AppConfig, old_pid: i32) -> Result<i32> {
+async fn wait_for_new_master(
+    config: &AppConfig,
+    old_master: NginxMasterIdentity,
+) -> Result<NginxMasterIdentity> {
     for _ in 0..100 {
-        if let Some(new_pid) = nginx_pid(&config.nginx.pid_path) {
-            if new_pid != old_pid
-                && pid_is_alive(new_pid)
-                && process_uses_binary(new_pid, &config.commands.nginx).unwrap_or(false)
+        // A partial PID file during master startup is transient; never signal
+        // it. Only a fully verified new master can advance this operation.
+        if let Ok(Some(candidate)) = nginx_master_from_pid_file(
+            &config.nginx.pid_path,
+            &config.commands.nginx,
+        ) {
+            if candidate.pid != old_master.pid
+                && process_uses_binary(candidate.pid, &config.commands.nginx).unwrap_or(false)
             {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 ensure!(
-                    pid_is_alive(new_pid),
-                    "new NGINX master exited during verification"
+                    nginx_master_identity(candidate.pid, &config.commands.nginx)? == candidate,
+                    "new NGINX master identity changed during verification"
                 );
-                return Ok(new_pid);
+                return Ok(candidate);
             }
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -728,6 +843,8 @@ async fn bounded_command(
 }
 
 async fn reload_nginx(config: &AppConfig) -> Result<()> {
+    let expected = nginx_master_from_pid_file(&config.nginx.pid_path, &config.commands.nginx)?
+        .context("no verified NGINX master is running for reload")?;
     let mut command = AsyncCommand::new(&config.commands.nginx);
     if let Some(prefix) = &config.nginx.prefix_path {
         command.arg("-p").arg(prefix);
@@ -745,8 +862,8 @@ async fn reload_nginx(config: &AppConfig) -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     ensure!(
-        nginx_is_running(&config.nginx.pid_path),
-        "nginx reload returned success, but master PID is not running"
+        nginx_master_from_pid_file(&config.nginx.pid_path, &config.commands.nginx)? == Some(expected),
+        "NGINX master identity changed after reload"
     );
     Ok(())
 }
@@ -774,15 +891,12 @@ async fn recover_failure(
             "restored NGINX failed syntax validation: {test_error:#}"
         ));
     }
-    if was_running && nginx_is_running(&config.nginx.pid_path) {
+    if was_running {
+        // reload_nginx refuses to target a stale, reused or non-master PID.
         if let Err(reload_error) = reload_nginx(config).await {
             eprintln!("WARNING: restored NGINX could not be reloaded: {reload_error:#}");
             return failure.context(format!("restored NGINX reload failed: {reload_error:#}"));
         }
-    } else if was_running {
-        eprintln!(
-            "WARNING: NGINX master is no longer running; start it manually after inspection."
-        );
     }
     eprintln!(
         "Previous NGINX files restored; opkg package records may still describe the new version."
@@ -1020,8 +1134,9 @@ pub async fn run(
     );
     println!("If opkg fails, inspect the snapshot; package-manager metadata is not rolled back.");
     println!("Installing NGINX via Entware. Manual retry command: {manual_cmd}");
-    let old_pid = nginx_pid(&config.nginx.pid_path).filter(|pid| pid_is_alive(*pid));
-    let was_running = old_pid.is_some();
+    let old_master = nginx_master_from_pid_file(&config.nginx.pid_path, &config.commands.nginx)
+        .context("NGINX PID file does not identify the configured master; refusing to install")?;
+    let was_running = old_master.is_some();
 
     let mut opkg_cmd = AsyncCommand::new(OPKG);
     opkg_cmd
@@ -1080,54 +1195,36 @@ pub async fn run(
     // HUP/reload only reconfigures the OLD master binary. NGINX's supported
     // live binary upgrade is SIGUSR2: the old master launches the replacement
     // master using inherited sockets; SIGQUIT retires old workers gracefully.
-    if let Some(old_pid) = old_pid {
-        if !pid_is_alive(old_pid) {
-            return Err(recover_failure(
-                config,
-                &snapshot,
-                anyhow!("NGINX master stopped during package installation"),
-                was_running,
-            )
-            .await);
-        }
-        // Check procfs support before signalling the active service.
-        if let Err(error) = process_uses_binary(old_pid, &config.commands.nginx) {
-            return Err(recover_failure(
-                config,
-                &snapshot,
-                error.context("cannot inspect NGINX master executable"),
-                was_running,
-            )
-            .await);
-        }
-        if unsafe { libc::kill(old_pid, libc::SIGUSR2) } != 0 {
-            return Err(recover_failure(
-                config,
-                &snapshot,
-                std::io::Error::last_os_error().into(),
-                was_running,
-            )
-            .await);
+    if let Some(old_master) = old_master {
+        // Validate the exact same master seen before opkg. If the PID was
+        // reused, do not send a signal to its new owner.
+        if let Err(error) = signal_nginx_master(old_master, &config.commands.nginx, libc::SIGUSR2) {
+            return Err(recover_failure(config, &snapshot, error, was_running).await);
         }
         // Once USR2 succeeds, do not automatically restore modules: a new
         // master may have started, and changing on-disk modules underneath it
         // risks loading the wrong ABI. Preserve the snapshot for diagnosis.
-        let new_pid = wait_for_new_master(config, old_pid).await.with_context(|| {
+        let new_master = wait_for_new_master(config, old_master).await.with_context(|| {
             format!(
                 "live NGINX binary activation incomplete; inspect error logs and PID files;                  previous binary/modules are at {} (no automatic rollback after SIGUSR2)",
                 snapshot.directory.display()
             )
         })?;
+        // The old PID may now be in nginx.pid.oldbin, not nginx.pid.
+        // Only retire it if its original process identity still matches.
+        signal_nginx_master(old_master, &config.commands.nginx, libc::SIGQUIT).with_context(|| {
+            format!(
+                "new NGINX master PID {} is running, but previous PID {} could not be safely retired; inspect and retire manually",
+                new_master.pid, old_master.pid
+            )
+        })?;
         ensure!(
-            unsafe { libc::kill(old_pid, libc::SIGQUIT) } == 0,
-            "new NGINX master (PID {new_pid}) is running, but old master (PID {old_pid})              could not be retired; manually send SIGQUIT after inspection"
-        );
-        ensure!(
-            pid_is_alive(new_pid),
-            "new NGINX master exited after retiring the old master"
+            nginx_master_identity(new_master.pid, &config.commands.nginx)? == new_master,
+            "new NGINX master identity changed after retiring the old master"
         );
         println!(
-            "New NGINX master PID {new_pid} verified; old master PID {old_pid} retiring gracefully."
+            "New NGINX master PID {} verified; old master PID {} retiring gracefully.",
+            new_master.pid, old_master.pid
         );
     } else {
         println!(
