@@ -548,13 +548,31 @@ mod cli_tests {
                 allow_downgrade: false,
             }) if v == "1.30.7"
         ));
-        assert!(Cli::try_parse_from([
-            "router-hub", "upgrade-nginx", "--tag", "nginx-v1.30.7",
-            "--version", "1.30.7"
-        ]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "router-hub",
+                "upgrade-nginx",
+                "--tag",
+                "nginx-v1.30.7",
+                "--version",
+                "1.30.7"
+            ])
+            .is_err()
+        );
         let cli = Cli::try_parse_from([
-            "router-hub", "upgrade-nginx", "--channel", "stable", "--allow-downgrade"
-        ]).unwrap();
-        assert!(matches!(cli.command, Some(Command::UpgradeNginx { allow_downgrade: true, .. })));
+            "router-hub",
+            "upgrade-nginx",
+            "--channel",
+            "stable",
+            "--allow-downgrade",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::UpgradeNginx {
+                allow_downgrade: true,
+                ..
+            })
+        ));
     }
 }
