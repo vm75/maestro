@@ -81,6 +81,9 @@ and installs the matching packages (`nginx-ssl`, `nginx-mod-brotli`,
 `stable` channel; specify `--channel mainline` to upgrade to mainline releases,
 or pass `--tag <tag>` / `--version <version>`. Use `--check` to inspect available
 updates, or `--download-only` to verify and stage packages under `/tmp`.
+Selecting an older release requires `--allow-downgrade`. Successful router
+upgrades activate the new NGINX master using NGINX's live binary-upgrade signals,
+and preserve prior binary/module files in a private `/tmp` recovery directory.
 
 Create a backup separately with `router-hub backup`; see
 [backup instructions](docs/installation.md#backups). Use
