@@ -10,7 +10,7 @@ use std::{
         fd::AsRawFd,
         unix::{
             ffi::OsStrExt,
-            fs::{OpenOptionsExt, PermissionsExt, symlink},
+            fs::{MetadataExt, OpenOptionsExt, symlink},
         },
     },
     path::{Path, PathBuf},
@@ -557,6 +557,12 @@ fn ensure_free_space(path: &Path, required: u64) -> Result<()> {
 /// flock prevents stale lockfiles from blocking retries after a crash.
 struct UpgradeLock(fs::File);
 
+impl Drop for UpgradeLock {
+    fn drop(&mut self) {
+        let _ = unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 impl UpgradeLock {
     fn acquire() -> Result<Self> {
         let file = fs::OpenOptions::new()
@@ -655,18 +661,41 @@ impl RollbackSnapshot {
     }
 }
 
-fn nginx_is_running(pid_path: &Path) -> bool {
-    let Ok(contents) = fs::read_to_string(pid_path) else {
-        return false;
-    };
-    let Ok(pid) = contents.trim().parse::<i32>() else {
-        return false;
-    };
-    if pid <= 1 {
-        return false;
-    }
+fn nginx_pid(pid_path: &Path) -> Option<i32> {
+    let contents = fs::read_to_string(pid_path).ok()?;
+    let pid = contents.trim().parse::<i32>().ok()?;
+    (pid > 1).then_some(pid)
+}
+
+fn pid_is_alive(pid: i32) -> bool {
     let status = unsafe { libc::kill(pid, 0) };
     status == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+fn nginx_is_running(pid_path: &Path) -> bool {
+    nginx_pid(pid_path).is_some_and(pid_is_alive)
+}
+
+fn process_uses_binary(pid: i32, binary: &Path) -> Result<bool> {
+    let executable = fs::metadata(format!("/proc/{pid}/exe"))?;
+    let installed = fs::metadata(binary)?;
+    Ok(executable.dev() == installed.dev() && executable.ino() == installed.ino())
+}
+
+async fn wait_for_new_master(config: &AppConfig, old_pid: i32) -> Result<i32> {
+    for _ in 0..100 {
+        if let Some(new_pid) = nginx_pid(&config.nginx.pid_path) {
+            if new_pid != old_pid && pid_is_alive(new_pid)
+                && process_uses_binary(new_pid, &config.commands.nginx).unwrap_or(false)
+            {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                ensure!(pid_is_alive(new_pid), "new NGINX master exited during verification");
+                return Ok(new_pid);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    bail!("NGINX did not publish a verified new master PID after SIGUSR2 (20s timeout)")
 }
 
 async fn bounded_command(mut command: AsyncCommand, duration: Duration, description: &str) -> Result<Output> {
@@ -911,7 +940,8 @@ pub async fn run(
     println!("Previous NGINX executable/modules preserved at {}", snapshot.directory.display());
     println!("If opkg fails, inspect the snapshot; package-manager metadata is not rolled back.");
     println!("Installing NGINX via Entware. Manual retry command: {manual_cmd}");
-    let was_running = nginx_is_running(&config.nginx.pid_path);
+    let old_pid = nginx_pid(&config.nginx.pid_path).filter(|pid| pid_is_alive(*pid));
+    let was_running = old_pid.is_some();
 
     let mut opkg_cmd = AsyncCommand::new(OPKG);
     opkg_cmd.arg("install").args(&opkg_options).args(&package_paths);
@@ -937,19 +967,49 @@ pub async fn run(
         return Err(recover_failure(config, &snapshot, error, was_running).await);
     }
 
-    // A graceful reload keeps the serving master and workers alive; the Entware
-    // S80nginx restart uses a hard stop and can block with foreground configs.
-    if was_running {
-        if !nginx_is_running(&config.nginx.pid_path) {
+    // HUP/reload only reconfigures the OLD master binary. NGINX's supported
+    // live binary upgrade is SIGUSR2: the old master launches the replacement
+    // master using inherited sockets; SIGQUIT retires old workers gracefully.
+    if let Some(old_pid) = old_pid {
+        if !pid_is_alive(old_pid) {
             return Err(recover_failure(
                 config, &snapshot,
-                anyhow!("NGINX master stopped during package installation"), was_running
+                anyhow!("NGINX master stopped during package installation"), was_running,
             ).await);
         }
-        if let Err(error) = reload_nginx(config).await {
-            return Err(recover_failure(config, &snapshot, error, was_running).await);
+        // Check procfs support before signalling the active service.
+        if let Err(error) = process_uses_binary(old_pid, &config.commands.nginx) {
+            return Err(recover_failure(
+                config, &snapshot,
+                error.context("cannot inspect NGINX master executable"), was_running,
+            ).await);
         }
-        println!("NGINX gracefully reloaded and master process verified.");
+        if unsafe { libc::kill(old_pid, libc::SIGUSR2) } != 0 {
+            return Err(recover_failure(
+                config, &snapshot,
+                std::io::Error::last_os_error().into(), was_running,
+            ).await);
+        }
+        // Once USR2 succeeds, do not automatically restore modules: a new
+        // master may have started, and changing on-disk modules underneath it
+        // risks loading the wrong ABI. Preserve the snapshot for diagnosis.
+        let new_pid = wait_for_new_master(config, old_pid).await.with_context(|| {
+            format!(
+                "live NGINX binary activation incomplete; inspect error logs and PID files;                  previous binary/modules are at {} (no automatic rollback after SIGUSR2)",
+                snapshot.directory.display()
+            )
+        })?;
+        ensure!(
+            unsafe { libc::kill(old_pid, libc::SIGQUIT) } == 0,
+            "new NGINX master (PID {new_pid}) is running, but old master (PID {old_pid})              could not be retired; manually send SIGQUIT after inspection"
+        );
+        ensure!(
+            pid_is_alive(new_pid),
+            "new NGINX master exited after retiring the old master"
+        );
+        println!(
+            "New NGINX master PID {new_pid} verified; old master PID {old_pid} retiring gracefully."
+        );
     } else {
         println!("NGINX was not running before the upgrade; packages installed, service left stopped.");
     }
