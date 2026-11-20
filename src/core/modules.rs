@@ -238,37 +238,57 @@ pub fn validate_registry(specs: &[ModuleSpec]) -> Result<(), String> {
 /// Readiness here means configured for the target, not a guarantee a daemon is running.
 /// The response is read-only and never contains credentials or configured paths.
 pub fn discover(config: &AppConfig) -> Discovery {
+    let specs = module_specs();
+    let mut states = BTreeMap::new();
+    for spec in specs {
+        let availability = if !spec.targets.contains(&config.platform) {
+            Availability::Unsupported
+        } else {
+            match spec.id {
+                "asus_menu" if !config.asus_ui.enabled || config.test_mode => {
+                    Availability::Disabled
+                }
+                "router_upgrade" | "nginx_upgrade" if config.test_mode => {
+                    Availability::Disabled
+                }
+                "adguard" if !config.adguard.enabled => Availability::Disabled,
+                "services" if !config.services.init_dir.is_dir() => Availability::Unavailable,
+                "nginx" if !config.nginx.config_path.exists() => Availability::Unavailable,
+                _ => Availability::Ready,
+            }
+        };
+        states.insert(spec.id, availability);
+    }
+
+    // Resolve dependencies independent of declaration order. The registry is
+    // validated for missing IDs and cycles before the HTTP server starts.
+    loop {
+        let mut changed = false;
+        for spec in specs {
+            if states[spec.id] == Availability::Ready
+                && spec
+                    .dependencies
+                    .iter()
+                    .any(|dependency| states.get(dependency) != Some(&Availability::Ready))
+            {
+                states.insert(spec.id, Availability::Unavailable);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
     Discovery {
         platform: config.platform,
-        modules: module_specs()
+        modules: specs
             .iter()
-            .map(|spec| {
-                let availability = if !spec.targets.contains(&config.platform) {
-                    Availability::Unsupported
-                } else {
-                    match spec.id {
-                        "asus_menu" if !config.asus_ui.enabled || config.test_mode => {
-                            Availability::Disabled
-                        }
-                        "router_upgrade" | "nginx_upgrade" if config.test_mode => {
-                            Availability::Disabled
-                        }
-                        "adguard" if !config.adguard.enabled => Availability::Disabled,
-                        "services" if !config.services.init_dir.is_dir() => {
-                            Availability::Unavailable
-                        }
-                        "nginx" if !config.nginx.config_path.exists() => {
-                            Availability::Unavailable
-                        }
-                        _ => Availability::Ready,
-                    }
-                };
-                ModuleStatus {
-                    id: spec.id,
-                    availability,
-                    dependencies: spec.dependencies,
-                    ui: spec.ui,
-                }
+            .map(|spec| ModuleStatus {
+                id: spec.id,
+                availability: states[spec.id],
+                dependencies: spec.dependencies,
+                ui: spec.ui,
             })
             .collect(),
     }
@@ -381,6 +401,48 @@ mod tests {
             ..one
         };
         assert!(validate_registry(&[router_only, cross_platform]).is_err());
+    }
+
+    #[test]
+    fn dependent_module_readiness_follows_nginx() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = AppConfig::default();
+        config.nginx.config_path = temp.path().join("nginx.conf");
+
+        let modules = discover(&config);
+        assert_eq!(
+            modules
+                .modules
+                .iter()
+                .find(|module| module.id == "nginx_upgrade")
+                .unwrap()
+                .availability,
+            Availability::Unavailable
+        );
+
+        std::fs::write(&config.nginx.config_path, "events {}").unwrap();
+        let modules = discover(&config);
+        assert_eq!(
+            modules
+                .modules
+                .iter()
+                .find(|module| module.id == "nginx_upgrade")
+                .unwrap()
+                .availability,
+            Availability::Ready
+        );
+
+        config.platform = Platform::Linux;
+        let modules = discover(&config);
+        assert_eq!(
+            modules
+                .modules
+                .iter()
+                .find(|module| module.id == "nginx_upgrade")
+                .unwrap()
+                .availability,
+            Availability::Unsupported
+        );
     }
 
     #[test]

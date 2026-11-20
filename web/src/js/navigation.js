@@ -138,6 +138,21 @@
       if (label && activeTab) label.textContent = activeTab.textContent.trim();
     }
 
+    // Group headers use div[role=tab] for ASUS compatibility; make their
+    // advertised keyboard focusability functional. Subsection buttons already
+    // receive native keyboard activation and must not be clicked twice.
+    function rhBindKeyboardNavigation(root) {
+      if (!root || root.dataset.rhKeyboardBound) return;
+      root.dataset.rhKeyboardBound = 'true';
+      root.addEventListener('keydown', event => {
+        const tab = event.target.closest('.rh-tab[data-view]');
+        if (!tab || tab.tagName !== 'DIV' || !root.contains(tab)) return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        tab.click();
+      });
+    }
+
     function rhSetupTabs() {
       const asusTabs = document.getElementById('tabMenu');
       const ownNav = document.getElementById('rh-nav');
@@ -158,6 +173,8 @@
 
       // Wire sidebar nav (mobile only, standalone)
       const sidebar = document.getElementById('rh-sidebar');
+      rhBindKeyboardNavigation(navRoot);
+      rhBindKeyboardNavigation(sidebar);
       if (sidebar && !sidebar.dataset.rhTabsBound) {
         sidebar.dataset.rhTabsBound = 'true';
         sidebar.addEventListener('click', event => {
