@@ -1,5 +1,6 @@
 mod adguard;
 mod api;
+#[path = "platforms/asus_ui.rs"]
 mod asus_ui;
 mod auth;
 mod backup;
@@ -17,11 +18,13 @@ mod nginx_ingress;
 mod nginx_mutation;
 mod nginx_render;
 mod nginx_sites;
+#[path = "platforms/nginx_upgrade.rs"]
 mod nginx_upgrade;
 mod restore;
 mod state;
 mod storage;
 mod system;
+#[path = "platforms/upgrade.rs"]
 mod upgrade;
 mod util;
 

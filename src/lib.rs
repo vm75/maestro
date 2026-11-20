@@ -1,5 +1,6 @@
 pub mod adguard;
 pub mod api;
+#[path = "platforms/asus_ui.rs"]
 pub mod asus_ui;
 pub mod auth;
 pub mod ban_attack;

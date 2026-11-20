@@ -5,9 +5,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 use crate::config::AppConfig;
 
-const UI: &str = include_str!("../web/index.html");
-const ASP_TEMPLATE: &str = include_str!("../config/asus-wrt.asp.template");
-const LOGO_SVG: &str = include_str!("../router-hub.svg");
+const UI: &str = include_str!("../../web/index.html");
+const ASP_TEMPLATE: &str = include_str!("../../config/asus-wrt.asp.template");
+const LOGO_SVG: &str = include_str!("../../router-hub.svg");
 
 pub fn render_ui(config: &AppConfig) -> String {
     render_ui_with_token(config, None)
