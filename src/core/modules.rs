@@ -1,4 +1,5 @@
 //! Static feature discovery. This is metadata, not an authorization or plugin mechanism.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
@@ -49,61 +50,124 @@ pub struct Discovery {
 
 const BOTH: &[Platform] = &[Platform::Asuswrt, Platform::Linux];
 const ROUTER: &[Platform] = &[Platform::Asuswrt];
-const SERVICES_UI: &[UiContribution] = &[UiContribution {
-    tab: "services", tab_label: "Services", tab_order: 10,
-    section: "services", section_label: "Services", section_order: 10,
-    dashboard_widgets: &["services"],
-}];
-const NGINX_UI: &[UiContribution] = &[UiContribution {
-    tab: "web", tab_label: "Web", tab_order: 20,
-    section: "nginx", section_label: "Nginx", section_order: 10,
-    dashboard_widgets: &["nginx"],
-}];
-const CERTIFICATES_UI: &[UiContribution] = &[UiContribution {
-    tab: "web", tab_label: "Web", tab_order: 20,
-    section: "certificates", section_label: "Certificates", section_order: 20,
-    dashboard_widgets: &["certificates"],
-}];
-const FIREWALL_UI: &[UiContribution] = &[UiContribution {
-    tab: "security", tab_label: "Security", tab_order: 30,
-    section: "firewall", section_label: "Ban Shield", section_order: 10,
-    dashboard_widgets: &["active_bans"],
-}];
-const WOL_UI: &[UiContribution] = &[UiContribution {
-    tab: "network", tab_label: "Network", tab_order: 40,
-    section: "wol", section_label: "Wake-on-LAN", section_order: 10,
-    dashboard_widgets: &[],
-}];
-const ADGUARD_UI: &[UiContribution] = &[UiContribution {
-    tab: "network", tab_label: "Network", tab_order: 40,
-    section: "adguard", section_label: "AdGuard Home", section_order: 20,
-    dashboard_widgets: &[],
-}];
-const WIREGUARD_UI: &[UiContribution] = &[UiContribution {
-    tab: "network", tab_label: "Network", tab_order: 40,
-    section: "wireguard", section_label: "WireGuard", section_order: 30,
-    dashboard_widgets: &[],
-}];
+
+const fn contribution(
+    tab: &'static str,
+    tab_label: &'static str,
+    tab_order: u16,
+    section: &'static str,
+    section_label: &'static str,
+    section_order: u16,
+    dashboard_widgets: &'static [&'static str],
+) -> UiContribution {
+    UiContribution {
+        tab,
+        tab_label,
+        tab_order,
+        section,
+        section_label,
+        section_order,
+        dashboard_widgets,
+    }
+}
+
+const fn module(
+    id: &'static str,
+    targets: &'static [Platform],
+    dependencies: &'static [&'static str],
+    ui: &'static [UiContribution],
+) -> ModuleSpec {
+    ModuleSpec {
+        id,
+        targets,
+        dependencies,
+        ui,
+    }
+}
+
+const SERVICES_UI: &[UiContribution] = &[contribution(
+    "services",
+    "Services",
+    10,
+    "services",
+    "Services",
+    10,
+    &["services"],
+)];
+const NGINX_UI: &[UiContribution] = &[contribution(
+    "web",
+    "Web",
+    20,
+    "nginx",
+    "Nginx",
+    10,
+    &["nginx"],
+)];
+const CERTIFICATES_UI: &[UiContribution] = &[contribution(
+    "web",
+    "Web",
+    20,
+    "certificates",
+    "Certificates",
+    20,
+    &["certificates"],
+)];
+const FIREWALL_UI: &[UiContribution] = &[contribution(
+    "security",
+    "Security",
+    30,
+    "firewall",
+    "Ban Shield",
+    10,
+    &["active_bans"],
+)];
+const WOL_UI: &[UiContribution] = &[contribution(
+    "network",
+    "Network",
+    40,
+    "wol",
+    "Wake-on-LAN",
+    10,
+    &[],
+)];
+const ADGUARD_UI: &[UiContribution] = &[contribution(
+    "network",
+    "Network",
+    40,
+    "adguard",
+    "AdGuard Home",
+    20,
+    &[],
+)];
+const WIREGUARD_UI: &[UiContribution] = &[contribution(
+    "network",
+    "Network",
+    40,
+    "wireguard",
+    "WireGuard",
+    30,
+    &[],
+)];
 
 const MODULES: &[ModuleSpec] = &[
-    ModuleSpec { id: "system", targets: BOTH, dependencies: &[], ui: &[] },
-    ModuleSpec { id: "services", targets: BOTH, dependencies: &[], ui: SERVICES_UI },
-    ModuleSpec { id: "nginx", targets: BOTH, dependencies: &[], ui: NGINX_UI },
-    ModuleSpec { id: "certificates", targets: BOTH, dependencies: &[], ui: CERTIFICATES_UI },
-    ModuleSpec { id: "ban_shield", targets: BOTH, dependencies: &[], ui: FIREWALL_UI },
-    ModuleSpec { id: "wol", targets: BOTH, dependencies: &[], ui: WOL_UI },
-    ModuleSpec { id: "adguard", targets: BOTH, dependencies: &[], ui: ADGUARD_UI },
-    ModuleSpec { id: "wireguard", targets: BOTH, dependencies: &[], ui: WIREGUARD_UI },
-    ModuleSpec { id: "asus_menu", targets: ROUTER, dependencies: &[], ui: &[] },
-    ModuleSpec { id: "router_upgrade", targets: ROUTER, dependencies: &[], ui: &[] },
-    ModuleSpec { id: "nginx_upgrade", targets: ROUTER, dependencies: &["nginx"], ui: &[] },
+    module("system", BOTH, &[], &[]),
+    module("services", BOTH, &[], SERVICES_UI),
+    module("nginx", BOTH, &[], NGINX_UI),
+    module("certificates", BOTH, &[], CERTIFICATES_UI),
+    module("ban_shield", BOTH, &[], FIREWALL_UI),
+    module("wol", BOTH, &[], WOL_UI),
+    module("adguard", BOTH, &[], ADGUARD_UI),
+    module("wireguard", BOTH, &[], WIREGUARD_UI),
+    module("asus_menu", ROUTER, &[], &[]),
+    module("router_upgrade", ROUTER, &[], &[]),
+    module("nginx_upgrade", ROUTER, &["nginx"], &[]),
 ];
 
 pub fn module_specs() -> &'static [ModuleSpec] {
     MODULES
 }
 
-/// Check IDs, platform dependencies and cycles before initializing the HTTP server.
+/// Check IDs, platform dependencies, and cycles before initializing the HTTP server.
 pub fn validate_registry(specs: &[ModuleSpec]) -> Result<(), String> {
     let mut by_id = BTreeMap::new();
     let mut sections = BTreeSet::new();
@@ -126,6 +190,7 @@ pub fn validate_registry(specs: &[ModuleSpec]) -> Result<(), String> {
             }
         }
     }
+
     for spec in specs {
         for dependency in spec.dependencies {
             let required = by_id.get(dependency).ok_or_else(|| {
@@ -134,20 +199,26 @@ pub fn validate_registry(specs: &[ModuleSpec]) -> Result<(), String> {
             for target in spec.targets {
                 if !required.targets.contains(target) {
                     return Err(format!(
-                        "module {} depends on unsupported {} for {target:?}", spec.id, dependency
+                        "module {} depends on unsupported {} for {target:?}",
+                        spec.id, dependency
                     ));
                 }
             }
         }
     }
+
     fn visit(
         id: &'static str,
         by_id: &BTreeMap<&str, &ModuleSpec>,
         visiting: &mut BTreeSet<&'static str>,
         complete: &mut BTreeSet<&'static str>,
     ) -> Result<(), String> {
-        if complete.contains(id) { return Ok(()); }
-        if !visiting.insert(id) { return Err(format!("cyclic module dependency at {id}")); }
+        if complete.contains(id) {
+            return Ok(());
+        }
+        if !visiting.insert(id) {
+            return Err(format!("cyclic module dependency at {id}"));
+        }
         for dependency in by_id[id].dependencies {
             visit(dependency, by_id, visiting, complete)?;
         }
@@ -155,32 +226,51 @@ pub fn validate_registry(specs: &[ModuleSpec]) -> Result<(), String> {
         complete.insert(id);
         Ok(())
     }
+
     let mut visiting = BTreeSet::new();
     let mut complete = BTreeSet::new();
-    for spec in specs { visit(spec.id, &by_id, &mut visiting, &mut complete)?; }
+    for spec in specs {
+        visit(spec.id, &by_id, &mut visiting, &mut complete)?;
+    }
     Ok(())
 }
 
-/// Discovery is read-only and never reveals configured credentials or paths.
-/// A "ready" module means it is configured for this target, not that its daemon is running.
+/// Readiness here means configured for the target, not a guarantee a daemon is running.
+/// The response is read-only and never contains credentials or configured paths.
 pub fn discover(config: &AppConfig) -> Discovery {
     Discovery {
         platform: config.platform,
-        modules: module_specs().iter().map(|spec| {
-            let availability = if !spec.targets.contains(&config.platform) {
-                Availability::Unsupported
-            } else {
-                match spec.id {
-                    "asus_menu" if !config.asus_ui.enabled || config.test_mode => Availability::Disabled,
-                    "router_upgrade" | "nginx_upgrade" if config.test_mode => Availability::Disabled,
-                    "adguard" if !config.adguard.enabled => Availability::Disabled,
-                    "services" if !config.services.init_dir.is_dir() => Availability::Unavailable,
-                    "nginx" if !config.nginx.config_path.exists() => Availability::Unavailable,
-                    _ => Availability::Ready,
+        modules: module_specs()
+            .iter()
+            .map(|spec| {
+                let availability = if !spec.targets.contains(&config.platform) {
+                    Availability::Unsupported
+                } else {
+                    match spec.id {
+                        "asus_menu" if !config.asus_ui.enabled || config.test_mode => {
+                            Availability::Disabled
+                        }
+                        "router_upgrade" | "nginx_upgrade" if config.test_mode => {
+                            Availability::Disabled
+                        }
+                        "adguard" if !config.adguard.enabled => Availability::Disabled,
+                        "services" if !config.services.init_dir.is_dir() => {
+                            Availability::Unavailable
+                        }
+                        "nginx" if !config.nginx.config_path.exists() => {
+                            Availability::Unavailable
+                        }
+                        _ => Availability::Ready,
+                    }
+                };
+                ModuleStatus {
+                    id: spec.id,
+                    availability,
+                    dependencies: spec.dependencies,
+                    ui: spec.ui,
                 }
-            };
-            ModuleStatus { id: spec.id, availability, dependencies: spec.dependencies, ui: spec.ui }
-        }).collect(),
+            })
+            .collect(),
     }
 }
 
@@ -192,15 +282,33 @@ mod tests {
     fn registry_is_valid_for_both_platforms() {
         validate_registry(module_specs()).unwrap();
         for platform in BOTH {
-            let config = AppConfig { platform: *platform, ..AppConfig::default() };
+            let config = AppConfig {
+                platform: *platform,
+                ..AppConfig::default()
+            };
             let discovery = discover(&config);
             assert_eq!(discovery.modules.len(), MODULES.len());
             assert_eq!(
-                discovery.modules.iter().find(|m| m.id == "router_upgrade").unwrap().availability,
-                if *platform == Platform::Linux { Availability::Unsupported } else { Availability::Ready }
+                discovery
+                    .modules
+                    .iter()
+                    .find(|module| module.id == "router_upgrade")
+                    .unwrap()
+                    .availability,
+                if *platform == Platform::Linux {
+                    Availability::Unsupported
+                } else {
+                    Availability::Ready
+                }
             );
             assert_eq!(
-                discovery.modules.iter().find(|m| m.id == "nginx").unwrap().ui[0].tab,
+                discovery
+                    .modules
+                    .iter()
+                    .find(|module| module.id == "nginx")
+                    .unwrap()
+                    .ui[0]
+                    .tab,
                 "web"
             );
         }
@@ -210,27 +318,68 @@ mod tests {
     fn disabled_is_not_unsupported() {
         let config = AppConfig {
             adguard: crate::config::AdGuardConfig {
-                enabled: false, ..Default::default()
+                enabled: false,
+                ..Default::default()
             },
             ..AppConfig::default()
         };
-        assert_eq!(discover(&config).modules.iter().find(|m| m.id == "adguard").unwrap().availability, Availability::Disabled);
+        assert_eq!(
+            discover(&config)
+                .modules
+                .iter()
+                .find(|module| module.id == "adguard")
+                .unwrap()
+                .availability,
+            Availability::Disabled
+        );
         let mut linux = config;
         linux.platform = Platform::Linux;
-        assert_eq!(discover(&linux).modules.iter().find(|m| m.id == "asus_menu").unwrap().availability, Availability::Unsupported);
+        assert_eq!(
+            discover(&linux)
+                .modules
+                .iter()
+                .find(|module| module.id == "asus_menu")
+                .unwrap()
+                .availability,
+            Availability::Unsupported
+        );
     }
 
     #[test]
     fn duplicate_missing_dependency_and_cycle_are_rejected() {
-        let one = ModuleSpec { id: "one", targets: BOTH, dependencies: &[], ui: &[] };
+        let one = ModuleSpec {
+            id: "one",
+            targets: BOTH,
+            dependencies: &[],
+            ui: &[],
+        };
         assert!(validate_registry(&[one, one]).is_err());
-        let missing = ModuleSpec { dependencies: &["unknown"], ..one };
+        let missing = ModuleSpec {
+            dependencies: &["unknown"],
+            ..one
+        };
         assert!(validate_registry(&[missing]).is_err());
-        let a = ModuleSpec { id: "a", dependencies: &["b"], ..one };
-        let b = ModuleSpec { id: "b", dependencies: &["a"], ..one };
+        let a = ModuleSpec {
+            id: "a",
+            dependencies: &["b"],
+            ..one
+        };
+        let b = ModuleSpec {
+            id: "b",
+            dependencies: &["a"],
+            ..one
+        };
         assert!(validate_registry(&[a, b]).is_err());
-        let router_only = ModuleSpec { id: "router", targets: ROUTER, ..one };
-        let cross_platform = ModuleSpec { id: "cross", dependencies: &["router"], ..one };
+        let router_only = ModuleSpec {
+            id: "router",
+            targets: ROUTER,
+            ..one
+        };
+        let cross_platform = ModuleSpec {
+            id: "cross",
+            dependencies: &["router"],
+            ..one
+        };
         assert!(validate_registry(&[router_only, cross_platform]).is_err());
     }
 
@@ -239,6 +388,9 @@ mod tests {
         let value = serde_json::to_value(discover(&AppConfig::default())).unwrap();
         assert_eq!(value["modules"][1]["id"], "services");
         assert_eq!(value["modules"][1]["ui"][0]["tab"], "services");
-        assert_eq!(value["modules"][1]["ui"][0]["dashboard_widgets"][0], "services");
+        assert_eq!(
+            value["modules"][1]["ui"][0]["dashboard_widgets"][0],
+            "services"
+        );
     }
 }

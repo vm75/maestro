@@ -16,9 +16,9 @@ use axum::{
 use crate::{
     api::ApiError,
     models::{ApiMessage, CommandResult, ServiceInfo},
+    platforms::service_manager::{ServiceManager, for_platform},
     state::AppState,
     util::{tail_lines, validate_simple_name},
-    platforms::service_manager::{for_platform, ServiceManager},
 };
 
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<ServiceInfo>>, ApiError> {
