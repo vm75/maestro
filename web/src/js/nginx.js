@@ -199,17 +199,95 @@
       }
     }
     function nginxEndpointRow(protocol, endpoint = {}) {
-      return `<div class="form-grid" data-nginx-endpoint="${protocol}"><div class="field"><label>${protocol.toUpperCase()} address<input class="input" data-endpoint-address value="${esc(endpoint.address || '127.0.0.1')}" placeholder="127.0.0.1" required></label></div><div class="field"><label>Port<input class="input" data-endpoint-port type="number" min="1" max="65535" value="${endpoint.port || (protocol === 'https' ? 8444 : 8080)}" required></label></div><div><button type="button" class="btn small" onclick="this.closest('[data-nginx-endpoint]').remove()">Remove address</button></div></div>`;
+      const isHttps = protocol === 'https';
+      return `<div class="nginx-endpoint-row" data-nginx-endpoint="${protocol}">
+        <span class="endpoint-proto-badge ${protocol}">${protocol.toUpperCase()}</span>
+        <div class="field endpoint-field-address">
+          <label>Listen address</label>
+          <input class="input" data-endpoint-address value="${esc(endpoint.address || '127.0.0.1')}" placeholder="127.0.0.1" required>
+        </div>
+        <div class="field endpoint-field-port">
+          <label>Port</label>
+          <input class="input" data-endpoint-port type="number" min="1" max="65535" value="${endpoint.port || (isHttps ? 8444 : 8080)}" required>
+        </div>
+        <div class="endpoint-field-action">
+          <button type="button" class="btn small danger endpoint-remove-btn" title="Remove address" onclick="this.closest('[data-nginx-endpoint]').remove()">✕ Remove</button>
+        </div>
+      </div>`;
     }
     function nginxUsageHint(type, name) {
       const rows = (state.nginxUsage || {})[`${type}:${name}`] || [];
-      return `<details><summary>${rows.length} reference${rows.length === 1 ? '' : 's'} affected by edits</summary><p class="hint">${rows.length ? rows.map(esc).join('<br>') : 'Not referenced by saved managed settings.'}</p></details>`;
+      const count = rows.length;
+      return `<details class="nginx-usage-details"><summary class="nginx-usage-summary"><span class="nginx-usage-pill ${count > 0 ? 'active' : ''}">${count} reference${count === 1 ? '' : 's'}</span><span class="nginx-usage-label">affected by edits</span></summary><div class="nginx-usage-content"><p class="hint">${count ? rows.map(esc).join('<br>') : 'Not referenced by saved managed settings.'}</p></div></details>`;
     }
     function nginxProfileCard(name = '', profile = {https:[{address:'127.0.0.1',port:8444}],http:[],http_redirect:false}) {
-      return `<fieldset class="card" data-nginx-profile><legend>Listener</legend><div class="field"><label>Name<input class="input" data-profile-name value="${esc(name)}" placeholder="internal" required pattern="[A-Za-z0-9_]{1,32}"></label></div>${nginxUsageHint('listener', name)}<div data-endpoints>${profile.https.map(e => nginxEndpointRow('https',e)).join('')}${profile.http.map(e => nginxEndpointRow('http',e)).join('')}</div><div class="actions"><button type="button" class="btn small" onclick="this.closest('[data-nginx-profile]').querySelector('[data-endpoints]').insertAdjacentHTML('beforeend', nginxEndpointRow('https'))">Add HTTPS address</button><button type="button" class="btn small" onclick="this.closest('[data-nginx-profile]').querySelector('[data-endpoints]').insertAdjacentHTML('beforeend', nginxEndpointRow('http'))">Add HTTP address</button></div><label><input type="checkbox" data-http-redirect ${profile.http_redirect ? 'checked' : ''}> HTTP redirects when shared HTTP mode is Always on</label><p class="hint">Use literal addresses; 0.0.0.0 means all IPv4 interfaces, :: means all IPv6 interfaces. Choose additional interfaces explicitly.</p><button type="button" class="btn small danger" onclick="this.closest('[data-nginx-profile]').remove()">Delete listener</button></fieldset>`;
+      return `<div class="card nginx-item-card" data-nginx-profile>
+        <div class="card-head">
+          <div class="card-title-group">
+            <span class="card-title-badge">Listener</span>
+            <h4 class="card-title-name" data-profile-title>${esc(name || 'New listener')}</h4>
+          </div>
+          <button type="button" class="btn small danger" onclick="this.closest('[data-nginx-profile]').remove()">Delete listener</button>
+        </div>
+        <div class="card-body">
+          <div class="form-grid nginx-profile-header-grid">
+            <div class="field">
+              <label>Listener name</label>
+              <input class="input" data-profile-name value="${esc(name)}" placeholder="internal" required pattern="[A-Za-z0-9_]{1,32}" oninput="const t=this.closest('[data-nginx-profile]').querySelector('[data-profile-title]'); if(t) t.textContent=this.value.trim() || 'New listener'">
+            </div>
+            <div class="field nginx-usage-field">
+              ${nginxUsageHint('listener', name)}
+            </div>
+          </div>
+          <div class="nginx-endpoints-wrapper">
+            <div class="nginx-endpoints-header">
+              <span class="endpoints-heading">Bound addresses &amp; ports</span>
+              <div class="actions">
+                <button type="button" class="btn small action" onclick="this.closest('[data-nginx-profile]').querySelector('[data-endpoints]').insertAdjacentHTML('beforeend', nginxEndpointRow('https'))">+ Add HTTPS</button>
+                <button type="button" class="btn small" onclick="this.closest('[data-nginx-profile]').querySelector('[data-endpoints]').insertAdjacentHTML('beforeend', nginxEndpointRow('http'))">+ Add HTTP</button>
+              </div>
+            </div>
+            <div data-endpoints>
+              ${profile.https.map(e => nginxEndpointRow('https',e)).join('')}
+              ${profile.http.map(e => nginxEndpointRow('http',e)).join('')}
+            </div>
+          </div>
+          <div class="nginx-card-options">
+            <label class="checkbox-label">
+              <input type="checkbox" data-http-redirect ${profile.http_redirect ? 'checked' : ''}>
+              <span>HTTP redirects when shared HTTP mode is Always on</span>
+            </label>
+            <p class="hint">Use literal addresses; 0.0.0.0 means all IPv4 interfaces, :: means all IPv6 interfaces. Choose additional interfaces explicitly.</p>
+          </div>
+        </div>
+      </div>`;
     }
     function nginxAccessCard(name = '', policy = {allow:[]}) {
-      return `<fieldset class="card" data-nginx-access><legend>Access rule</legend><div class="field"><label>Name<input class="input" data-access-name value="${esc(name)}" placeholder="trusted_clients" required pattern="[A-Za-z0-9_]{1,32}"></label></div>${nginxUsageHint('access',name)}<div class="field"><label>Allowed IPs / networks, one per line<textarea class="input" data-access-allow>${esc(policy.allow.join('\n'))}</textarea></label><p class="hint">Empty blocks all sources. Loopback identifies a forwarding process, not the individual users behind it.</p></div><button type="button" class="btn small danger" onclick="this.closest('[data-nginx-access]').remove()">Delete access rule</button></fieldset>`;
+      return `<div class="card nginx-item-card" data-nginx-access>
+        <div class="card-head">
+          <div class="card-title-group">
+            <span class="card-title-badge access">Access rule</span>
+            <h4 class="card-title-name" data-access-title>${esc(name || 'New rule')}</h4>
+          </div>
+          <button type="button" class="btn small danger" onclick="this.closest('[data-nginx-access]').remove()">Delete access rule</button>
+        </div>
+        <div class="card-body">
+          <div class="form-grid nginx-profile-header-grid">
+            <div class="field">
+              <label>Access rule name</label>
+              <input class="input" data-access-name value="${esc(name)}" placeholder="trusted_clients" required pattern="[A-Za-z0-9_]{1,32}" oninput="const t=this.closest('[data-nginx-access]').querySelector('[data-access-title]'); if(t) t.textContent=this.value.trim() || 'New rule'">
+            </div>
+            <div class="field nginx-usage-field">
+              ${nginxUsageHint('access', name)}
+            </div>
+          </div>
+          <div class="field full">
+            <label for="access-allow-${esc(name || 'new')}">Allowed IPs / networks (one per line)</label>
+            <textarea class="input nginx-mono-textarea" id="access-allow-${esc(name || 'new')}" data-access-allow placeholder="192.168.1.0/24&#10;10.0.0.1&#10;127.0.0.1">${esc(policy.allow.join('\n'))}</textarea>
+            <p class="hint">Empty blocks all sources. Loopback identifies a forwarding process, not the individual users behind it.</p>
+          </div>
+        </div>
+      </div>`;
     }
     function nginxReadCollections(form) {
       const listener_profiles = Object.create(null), access_policies = Object.create(null);
@@ -236,7 +314,7 @@
       return `<div class="field"><label for="${prefix}access-policy">Access rule</label><select class="input" name="${prefix}access_policy" id="${prefix}access-policy">${nginxAccessOptions(global,nginxSelectedAccess(settings),nginxSelectedAccess(global.site_defaults) || 'Existing configuration allowlist')}</select></div>`;
     }
     function nginxSessionPolicyControl(global,settings,prefix='') {
-      return `<div class="field"><label>Restricted Sessions access rule<select class="input" name="${prefix}restricted_sessions_policy">${nginxAccessOptions(global,settings.restricted_sessions_policy || '',global.site_defaults.restricted_sessions_policy || 'Existing configuration allowlist')}</select></label></div>`;
+      return `<div class="field"><label for="${prefix}restricted-sessions-policy">Restricted Sessions access rule</label><select class="input" name="${prefix}restricted_sessions_policy" id="${prefix}restricted-sessions-policy">${nginxAccessOptions(global,settings.restricted_sessions_policy || '',global.site_defaults.restricted_sessions_policy || 'Existing configuration allowlist')}</select></div>`;
     }
     function nginxListenerOptions(global, selected = '') {
       return [['','Use configured default'],['legacy','Existing configuration'],...Object.entries(global.listener_profiles || {}).map(([name,p]) => [name,`${name} · ${p.https.map(e => `${e.address}:${e.port}`).join(', ')}`])].map(([value,label]) => `<option value="${esc(value)}" ${value === selected ? 'selected' : ''}>${esc(label)}</option>`).join('');
@@ -247,7 +325,145 @@
         state.nginxUsage = usage;
         const http = settings.http_access || {mode:'always',window_seconds:3600,listener_profile:'legacy'}, profiles = settings.listener_profiles || {}, policies = settings.access_policies || {};
         const legacyFields = nginxSharedFields.filter(([key]) => ['router_ip','http_port','https_port'].includes(key)), advancedFields = nginxSharedFields.filter(([key]) => !legacyFields.some(([legacy]) => legacy === key));
-        openEditor('Nginx listeners and access', `<form id="nginx-settings-form" class="form"><p class="muted">Configure reusable listeners and source rules once, then select them for each site. Names do not configure VPN user permissions or general firewall policy.</p><h3>Public HTTP access</h3><div class="form-grid"><div class="field"><label for="nginx-http-mode">HTTP mode</label><select class="input" name="http_mode" id="nginx-http-mode"><option value="off" ${http.mode === 'off' ? 'selected' : ''}>Off</option><option value="renewal_only" ${http.mode === 'renewal_only' ? 'selected' : ''}>Certificate validation only</option><option value="always" ${http.mode === 'always' ? 'selected' : ''}>Always on with redirects</option></select><p class="hint">Validation only closes managed public HTTP outside actual HTTP-01 batches. Normal HTTP redirects are unavailable. DNS-01 never opens a window.</p></div><div class="field"><label for="nginx-http-listener">Challenge listener</label><select class="input" name="http_listener" id="nginx-http-listener">${nginxListenerOptions(settings,http.listener_profile)}</select></div><div class="field"><label for="nginx-http-window">Maximum validation window (seconds)</label><input class="input" name="http_window" id="nginx-http-window" type="number" min="60" max="86400" value="${http.window_seconds}"></div><div class="field"><label for="nginx-http-wan">Validation WAN access</label><select class="input" id="nginx-http-wan" name="http_wan"><option value="unconfigured">Not configured</option><option value="external" ${http.externally_managed_wan ? 'selected' : ''}>Externally managed</option><option value="managed" ${http.wan ? 'selected' : ''}>Managed IPv4 (firmware verification required)</option></select></div><div class="field"><label for="nginx-wan-interface">WAN interface</label><input class="input" id="nginx-wan-interface" name="wan_interface" value="${esc(http.wan?.interface || '')}" placeholder="Verified interface name"></div><div class="field"><label for="nginx-wan-target">Router IPv4 challenge address</label><input class="input" id="nginx-wan-target" name="wan_target" value="${esc(http.wan?.target || '')}" placeholder="Address bound by the challenge listener"></div></div><p class="hint">The experimental managed adapter controls only owned TCP-80 rules, requires iptables, ip6tables and ipset, and blocks WAN IPv6 TCP 80. Verify firmware rule ordering before deployment. Its timed kernel gate limits WAN access after a crash; local nginx cleanup requires Router Hub startup recovery. External mode does not toggle your WAN rules.</p><h3>Listeners</h3><details><summary>Existing configuration · legacy listener</summary><div class="form-grid">${nginxSettingsFields(legacyFields,settings.shared)}</div>${nginxUsageHint('listener','legacy')}</details><div id="nginx-profile-rows">${Object.entries(profiles).map(([name,p]) => nginxProfileCard(name,p)).join('')}</div><button class="btn" type="button" onclick="document.getElementById('nginx-profile-rows').insertAdjacentHTML('beforeend',nginxProfileCard())">Add listener</button><h3>Access rules</h3><details><summary>Existing configuration allowlist</summary><div class="field"><label>Allowed IPs / networks, one per line<textarea class="input" name="allowed_ips">${esc(settings.allowed_ips.join('\n'))}</textarea></label></div>${nginxUsageHint('access','legacy')}</details><div id="nginx-access-rows">${Object.entries(policies).map(([name,p]) => nginxAccessCard(name,p)).join('')}</div><button class="btn" type="button" onclick="document.getElementById('nginx-access-rows').insertAdjacentHTML('beforeend',nginxAccessCard())">Add access rule</button><details><summary>Default site settings</summary><p class="hint">Changes affect inheriting sites. Explicit site selections are retained.</p><div class="form-grid"><div class="field"><label>Default listener<select class="input" name="default_listener_profile">${nginxListenerOptions(settings,settings.site_defaults.listener_profile || '')}</select></label></div>${nginxAccessControl(settings,settings.site_defaults,'default_')}${nginxSettingsFields(nginxPolicyFields.filter(([key]) => key !== 'enable_lanonly'),settings.site_defaults,{},'default_')}${nginxSessionPolicyControl(settings,settings.site_defaults,'default_')}${nginxRoutesField(settings.site_defaults,'default_routes')}</div></details><details><summary>Advanced global settings</summary><div class="form-grid">${nginxSettingsFields(advancedFields,settings.shared)}</div><div class="field"><label>Request limit policies (JSON object)<textarea class="input" name="limit_policies">${esc(JSON.stringify(settings.limit_policies || {},null,2))}</textarea></label></div><div class="field"><label>Shared domain suffixes, one per line<textarea class="input" name="free_subdomains">${esc(settings.free_subdomains.join('\n'))}</textarea></label></div></details><p class="route-policy-error" role="alert" data-form-error hidden></p></form>`, async () => {
+        openEditor('Nginx listeners and access', `<form id="nginx-settings-form" class="form">
+          <div class="nginx-settings-intro">
+            <div class="nginx-intro-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+            </div>
+            <div class="nginx-intro-text">
+              Configure reusable listeners and source rules once, then select them for each site. Names do not configure VPN user permissions or general firewall policy.
+            </div>
+          </div>
+
+          <div class="nginx-section-header">
+            <div class="nginx-section-title">
+              <span class="nginx-section-badge">HTTP</span>
+              <h3>Public HTTP access</h3>
+            </div>
+          </div>
+          <div class="card pad nginx-section-card">
+            <div class="form-grid">
+              <div class="field">
+                <label for="nginx-http-mode">HTTP mode</label>
+                <select class="input" name="http_mode" id="nginx-http-mode">
+                  <option value="off" ${http.mode === 'off' ? 'selected' : ''}>Off</option>
+                  <option value="renewal_only" ${http.mode === 'renewal_only' ? 'selected' : ''}>Certificate validation only</option>
+                  <option value="always" ${http.mode === 'always' ? 'selected' : ''}>Always on with redirects</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="nginx-http-listener">Challenge listener</label>
+                <select class="input" name="http_listener" id="nginx-http-listener">${nginxListenerOptions(settings,http.listener_profile)}</select>
+              </div>
+              <div class="nginx-mode-hint">
+                <p class="hint">Validation only closes managed public HTTP outside actual HTTP-01 batches. Normal HTTP redirects are unavailable. DNS-01 never opens a window.</p>
+              </div>
+              <div class="field">
+                <label for="nginx-http-window">Maximum validation window (seconds)</label>
+                <input class="input" name="http_window" id="nginx-http-window" type="number" min="60" max="86400" value="${http.window_seconds}">
+              </div>
+              <div class="field">
+                <label for="nginx-http-wan">Validation WAN access</label>
+                <select class="input" id="nginx-http-wan" name="http_wan">
+                  <option value="unconfigured">Not configured</option>
+                  <option value="external" ${http.externally_managed_wan ? 'selected' : ''}>Externally managed</option>
+                  <option value="managed" ${http.wan ? 'selected' : ''}>Managed IPv4 (firmware verification required)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="nginx-wan-interface">WAN interface</label>
+                <input class="input" id="nginx-wan-interface" name="wan_interface" value="${esc(http.wan?.interface || '')}" placeholder="Verified interface name">
+              </div>
+              <div class="field">
+                <label for="nginx-wan-target">Router IPv4 challenge address</label>
+                <input class="input" id="nginx-wan-target" name="wan_target" value="${esc(http.wan?.target || '')}" placeholder="Address bound by the challenge listener">
+              </div>
+            </div>
+            <div class="notice nginx-wan-notice">
+              The experimental managed adapter controls only owned TCP-80 rules, requires iptables, ip6tables and ipset, and blocks WAN IPv6 TCP 80. Verify firmware rule ordering before deployment. Its timed kernel gate limits WAN access after a crash; local nginx cleanup requires Router Hub startup recovery. External mode does not toggle your WAN rules.
+            </div>
+          </div>
+
+          <div class="nginx-section-header">
+            <div class="nginx-section-title">
+              <span class="nginx-section-badge">Listeners</span>
+              <h3>Listeners</h3>
+            </div>
+            <button class="btn small action" type="button" onclick="document.getElementById('nginx-profile-rows').insertAdjacentHTML('beforeend',nginxProfileCard())">+ Add listener</button>
+          </div>
+          <details class="nginx-settings-accordion">
+            <summary><span>Existing configuration · legacy listener</span></summary>
+            <div class="nginx-accordion-content">
+              <div class="form-grid">${nginxSettingsFields(legacyFields,settings.shared)}</div>
+              <div style="margin-top: 10px;">${nginxUsageHint('listener','legacy')}</div>
+            </div>
+          </details>
+          <div id="nginx-profile-rows">${Object.entries(profiles).map(([name,p]) => nginxProfileCard(name,p)).join('')}</div>
+
+          <div class="nginx-section-header">
+            <div class="nginx-section-title">
+              <span class="nginx-section-badge">Access</span>
+              <h3>Access rules</h3>
+            </div>
+            <button class="btn small action" type="button" onclick="document.getElementById('nginx-access-rows').insertAdjacentHTML('beforeend',nginxAccessCard())">+ Add access rule</button>
+          </div>
+          <details class="nginx-settings-accordion">
+            <summary><span>Existing configuration allowlist</span></summary>
+            <div class="nginx-accordion-content">
+              <div class="field full">
+                <label for="nginx-allowed-ips">Allowed IPs / networks (one per line)</label>
+                <textarea class="input nginx-mono-textarea" id="nginx-allowed-ips" name="allowed_ips">${esc(settings.allowed_ips.join('\n'))}</textarea>
+              </div>
+              <div style="margin-top: 10px;">${nginxUsageHint('access','legacy')}</div>
+            </div>
+          </details>
+          <div id="nginx-access-rows">${Object.entries(policies).map(([name,p]) => nginxAccessCard(name,p)).join('')}</div>
+
+          <div class="nginx-section-header">
+            <div class="nginx-section-title">
+              <span class="nginx-section-badge">Defaults</span>
+              <h3>Default site settings</h3>
+            </div>
+          </div>
+          <details class="nginx-settings-accordion">
+            <summary><span>Default site settings (inherited by sites)</span></summary>
+            <div class="nginx-accordion-content">
+              <div class="notice" style="margin-bottom: 12px;">Changes affect inheriting sites. Explicit site selections are retained.</div>
+              <div class="form-grid">
+                <div class="field">
+                  <label for="default-listener-profile">Default listener</label>
+                  <select class="input" name="default_listener_profile" id="default-listener-profile">${nginxListenerOptions(settings,settings.site_defaults.listener_profile || '')}</select>
+                </div>
+                ${nginxAccessControl(settings,settings.site_defaults,'default_')}
+                ${nginxSettingsFields(nginxPolicyFields.filter(([key]) => key !== 'enable_lanonly'),settings.site_defaults,{},'default_')}
+                ${nginxSessionPolicyControl(settings,settings.site_defaults,'default_')}
+                ${nginxRoutesField(settings.site_defaults,'default_routes')}
+              </div>
+            </div>
+          </details>
+
+          <div class="nginx-section-header">
+            <div class="nginx-section-title">
+              <span class="nginx-section-badge">Advanced</span>
+              <h3>Advanced global settings</h3>
+            </div>
+          </div>
+          <details class="nginx-settings-accordion">
+            <summary><span>Advanced global settings</span></summary>
+            <div class="nginx-accordion-content">
+              <div class="form-grid">${nginxSettingsFields(advancedFields,settings.shared)}</div>
+              <div class="field full" style="margin-top: 12px;">
+                <label for="nginx-limit-policies">Request limit policies (JSON object)</label>
+                <textarea class="input nginx-mono-textarea" id="nginx-limit-policies" name="limit_policies">${esc(JSON.stringify(settings.limit_policies || {},null,2))}</textarea>
+              </div>
+              <div class="field full" style="margin-top: 12px;">
+                <label for="nginx-free-subdomains">Shared domain suffixes (one per line)</label>
+                <textarea class="input nginx-mono-textarea" id="nginx-free-subdomains" name="free_subdomains">${esc(settings.free_subdomains.join('\n'))}</textarea>
+              </div>
+            </div>
+          </details>
+          <p class="route-policy-error" role="alert" data-form-error hidden></p>
+        </form>`, async () => {
           const f = document.getElementById('nginx-settings-form');
           try {
             if (!f.reportValidity()) return;

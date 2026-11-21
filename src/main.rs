@@ -36,6 +36,9 @@ use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
+// Stable crate-root aliases while domain sources move beneath modules/.
+use modules::{adguard, firewall, nginx, nginx_sites};
+
 use crate::{
     asus_ui::{install_menu_entry, render_ui_file},
     config::{AppConfig, Platform},
@@ -603,6 +606,3 @@ mod cli_tests {
         ));
     }
 }
-
-// Stable crate-root aliases while domain sources move beneath modules/.
-use modules::{adguard, firewall, nginx, nginx_sites};

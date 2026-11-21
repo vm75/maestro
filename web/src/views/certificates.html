@@ -1,5 +1,13 @@
       <section class="view" id="view-certificates">
-        <div class="card"><div class="card-head"><h2>HTTP certificate access</h2><button class="btn small" onclick="closeCertificateHttpAccess()">Retry closure</button></div><p id="certificate-http-status" aria-live="polite">Loading…</p></div>
+        <div class="card certificate-http-card">
+          <div class="card-head">
+            <h2>HTTP certificate access</h2>
+            <button class="btn small" onclick="closeCertificateHttpAccess()">Retry closure</button>
+          </div>
+          <div class="certificate-http-body">
+            <p id="certificate-http-status" aria-live="polite">Loading…</p>
+          </div>
+        </div>
         <div class="notice warn">Certificates use the dehydrated script and hooks in the configured data directory.
           HTTP challenges use the configured dehydrated <code>acme-challenge</code> directory; DNS certificates require
           an installed hook (or the default data-directory hook) and its environment values. Existing matching

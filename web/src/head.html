@@ -147,8 +147,8 @@
       float: left;
       height: 35px;
       padding: 5px 12px;
-      margin-left: -3px;
-      margin-right: 2px;
+      margin-left: 0;
+      margin-right: 3px;
       text-align: center;
       text-decoration: none;
       font: 12px/35px Verdana, "MS UI Gothic", "MS P Gothic", "Microsoft Yahei UI", sans-serif;
@@ -156,11 +156,6 @@
       display: flex;
       align-items: center;
       gap: 6px
-    }
-
-    /* Keep the first tab aligned with the content table in ASUS embedded mode. */
-    .rh-tabs > .rh-tab:first-child {
-      margin-left: 0
     }
 
     .rh-tab.tab {
@@ -225,23 +220,42 @@
       gap: 8px
     }
 
-    .rh-badge {
+    .rh-brand-info > .rh-badge {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 8px;
-      min-height: 32px;
-      padding: 3px 9px 3px 4px;
-      border: 1px solid #527383;
+      box-sizing: border-box;
+      height: 34px;
+      min-height: 34px;
+      padding: 0 10px;
+      border: 1px solid #3b5361;
       border-radius: 6px;
-      background: #25353d;
-      box-shadow: inset 0 1px rgba(255, 255, 255, .06)
+      background: #1f2d35;
+      box-shadow: inset 0 1px rgba(255, 255, 255, .04);
+      color: #c9dde8;
+      font-size: 11px;
+      line-height: 1;
+      white-space: nowrap;
+      vertical-align: middle
+    }
+
+    .rh-brand-info > .btn {
+      box-sizing: border-box;
+      height: 34px;
+      min-height: 34px
+    }
+
+    .rh-brand-info > .btn:focus-visible {
+      outline: 2px solid var(--cyan);
+      outline-offset: 2px
     }
 
     .rh-logo {
-      width: 28px;
-      height: 28px;
-      border-radius: 6px;
-      background: #ffffff;
+      width: 22px;
+      height: 22px;
+      border-radius: 4px;
+      background: transparent;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -591,6 +605,48 @@
       flex: 1
     }
 
+    /* Ban Shield follows the compact section styling used by Nginx settings. */
+    #view-firewall { --shield-gap: 16px }
+    #view-firewall .card { border-radius: 6px; overflow: hidden; margin-bottom: 16px; min-width: 0 }
+    #view-firewall > .grid { grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr); gap: var(--shield-gap); align-items: stretch }
+    #view-firewall > .grid > .card { grid-column: auto }
+    #view-firewall h2, #view-firewall h3 { color: #fff }
+    #view-firewall .card-head { padding: 12px 14px; border-bottom-color: #273b47 }
+    #view-firewall .input { width: 100%; min-width: 0; box-sizing: border-box }
+    #view-firewall .btn { flex-shrink: 0; white-space: nowrap }
+    #view-firewall .shield-input-row { display: flex; flex-wrap: nowrap; gap: 8px }
+    #view-firewall .shield-input-row .input { flex: 1 }
+    #allow-list { display: flex; flex-wrap: wrap; gap: 6px; overflow-wrap: anywhere }
+    #allow-list .tag { max-width: 100%; box-sizing: border-box }
+    #view-firewall .toolbar { flex-wrap: wrap; gap: 12px; align-items: flex-start }
+    #view-firewall .toolbar > div:first-child { flex: 1; min-width: 240px }
+    #view-firewall .toolbar .hint { margin-top: 5px; line-height: 1.5 }
+    #view-firewall .toolbar .actions { justify-content: flex-end }
+    #fw-tuning-source { font-size: 11px }
+    #firewall-settings-form { display: grid; gap: 14px }
+    .shield-tuning-section { margin: 0; min-width: 0; padding: 14px; border: 1px solid var(--asus-border); border-radius: 6px; background: #23313a }
+    .shield-tuning-section legend { padding: 0 8px; color: #7ecfee; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase }
+    #firewall-settings-form .form-grid { gap: 14px 16px; align-items: start }
+    #firewall-settings-form .field { min-width: 0; display: flex; flex-direction: column }
+    #firewall-settings-form label { min-height: 28px; display: flex; align-items: flex-end; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; line-height: 1.4 }
+    #firewall-settings-form .hint { line-height: 1.5 }
+    #firewall-settings-form > .actions { justify-content: flex-end; padding-top: 12px; border-top: 1px solid #3b4f5b }
+    .shield-health-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px }
+    .shield-health-heading h2 { margin: 0; font-size: 13px }
+    .shield-health-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 16px }
+    .shield-health-grid p { margin: 0; line-height: 1.6; overflow-wrap: anywhere }
+    .shield-health-label { display: block; color: var(--asus-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; margin-bottom: 4px }
+    #fw-health { background: linear-gradient(135deg, #182832, #23313a); border-left: 3px solid var(--cyan) }
+    #fw-health > .hint { margin: 12px 0 0; line-height: 1.5 }
+    @media (max-width: 1050px) {
+      #view-firewall > .grid { grid-template-columns: minmax(0, 1fr) }
+    }
+    @media (max-width: 600px) {
+      #firewall-settings-form .form-grid, .shield-health-grid { grid-template-columns: minmax(0, 1fr) }
+      #firewall-settings-form label { min-height: 0 }
+      #view-firewall .toolbar .actions { justify-content: flex-start }
+    }
+
     /* ── Form inputs ── */
     .input {
       border: 1px solid #4a6070;
@@ -712,6 +768,20 @@
 
     .nginx-summary-card .muted {
       margin: 10px;
+    }
+
+    .certificate-http-card {
+      margin-bottom: 12px;
+    }
+
+    .certificate-http-card .certificate-http-body {
+      padding: 10px 12px;
+    }
+
+    #certificate-http-status {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.5;
     }
 
     .nginx-card .table td {
@@ -854,6 +924,310 @@
     }
     @media (max-width: 480px) {
       .nginx-site-editor .site-policy-grid { grid-template-columns: minmax(0, 1fr) }
+    }
+
+    /* ── Nginx Listeners and Access Settings Modal ── */
+    .nginx-settings-editor { width: min(980px, calc(100vw - 20px)) }
+    .nginx-settings-editor .modal-body { padding: 16px; max-height: calc(90vh - 110px); overflow-y: auto }
+    #nginx-settings-form { display: flex; flex-direction: column; gap: 16px }
+    #nginx-settings-form .field { min-width: 0; gap: 4px }
+    #nginx-settings-form .input { width: 100%; box-sizing: border-box; min-width: 0 }
+    #nginx-settings-form label { color: #9cb2c0; font-size: 11px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; display: block }
+    .nginx-settings-editor .nginx-field-heading { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 20px }
+    .nginx-settings-editor .nginx-help-toggle { width: 18px; height: 18px; font-size: 10px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center }
+    .nginx-settings-editor .nginx-field-help { font-size: 11px; color: #7ecfee; background: #14222a; border: 1px solid #234557; border-radius: 4px; padding: 6px 8px; margin-top: 4px; line-height: 1.45 }
+
+    .nginx-settings-intro {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px 16px;
+      background: linear-gradient(135deg, #182832 0%, #131f28 100%);
+      border: 1px solid #284455;
+      border-left: 3px solid var(--cyan);
+      border-radius: 6px;
+      color: #c9dde8;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .nginx-intro-icon { color: var(--cyan); flex-shrink: 0; margin-top: 2px }
+    .nginx-intro-icon svg { display: block }
+    .nginx-intro-text { flex: 1 }
+
+    .nginx-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 8px;
+      margin-bottom: -4px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #273b47;
+    }
+    .nginx-section-title { display: inline-flex; align-items: center; gap: 8px }
+    .nginx-section-title h3 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #fff }
+    .nginx-section-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .05em;
+      padding: 2px 7px;
+      border-radius: 4px;
+      background: #143240;
+      border: 1px solid #23556e;
+      color: #7ecfee;
+      text-transform: uppercase;
+    }
+    .nginx-section-card {
+      margin-bottom: 0;
+      border-radius: 6px;
+      border: 1px solid var(--asus-border);
+      background: #23313a;
+      padding: 14px;
+    }
+    .nginx-mode-hint { grid-column: 1 / -1; margin: 0 0 2px }
+    .nginx-mode-hint .hint {
+      padding: 8px 12px;
+      background: #17242c;
+      border: 1px solid #263b47;
+      border-radius: 4px;
+      color: #8faec0;
+      margin: 0;
+      line-height: 1.45;
+    }
+    .nginx-wan-notice {
+      margin: 14px 0 0;
+      padding: 10px 12px;
+      font-size: 11px;
+      line-height: 1.5;
+      border-radius: 4px;
+      border-color: #2b4555;
+      background: #16242c;
+      color: #9ab4c4;
+    }
+
+    details.nginx-settings-accordion {
+      border: 1px solid var(--asus-border);
+      background: #23313a;
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 0;
+      transition: border-color .15s ease;
+    }
+    details.nginx-settings-accordion[open] { border-color: #3b5a6c }
+    details.nginx-settings-accordion > summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: #1a2830;
+      color: #e2eff7;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+      list-style: none;
+      border-bottom: 1px solid transparent;
+      outline: none;
+    }
+    details.nginx-settings-accordion > summary::-webkit-details-marker { display: none }
+    details.nginx-settings-accordion > summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px }
+    details.nginx-settings-accordion[open] > summary { border-bottom: 1px solid #273b47; background: #1d2d37 }
+    details.nginx-settings-accordion > summary::after { content: '▼'; font-size: 9px; color: var(--cyan); transition: transform .2s ease }
+    details.nginx-settings-accordion:not([open]) > summary::after { content: '▶'; color: var(--asus-muted) }
+    .nginx-accordion-content { padding: 14px; background: #212e37 }
+
+    .nginx-item-card {
+      margin-bottom: 12px;
+      border: 1px solid var(--asus-border);
+      border-radius: 6px;
+      background: #23313a;
+      overflow: hidden;
+    }
+    .nginx-item-card .card-head {
+      padding: 8px 12px;
+      background: #1a2830;
+      border-bottom: 1px solid #283e4d;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .nginx-item-card .card-head h4 { margin: 0; font-size: 13px; font-weight: 600; color: #fff }
+    .nginx-item-card .card-title-group { display: inline-flex; align-items: center; gap: 8px; min-width: 0 }
+    .nginx-item-card .card-title-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #133842;
+      border: 1px solid #235c6b;
+      color: #67e8f9;
+      flex-shrink: 0;
+    }
+    .nginx-item-card .card-title-badge.access { background: #2a2c1a; border-color: #555b2a; color: #e5e985 }
+    .nginx-item-card .card-body { padding: 14px; display: flex; flex-direction: column; gap: 12px }
+    .nginx-profile-header-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+      gap: 12px;
+      align-items: flex-end;
+    }
+    @media (max-width: 640px) {
+      .nginx-profile-header-grid { grid-template-columns: minmax(0, 1fr) }
+    }
+
+    .nginx-usage-details {
+      border: 1px solid #283e4d;
+      background: #17232b;
+      border-radius: 4px;
+      overflow: hidden;
+      width: 100%;
+    }
+    .nginx-usage-summary {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 8px;
+      font-size: 11px;
+      cursor: pointer;
+      color: #a2b7c4;
+      user-select: none;
+      list-style: none;
+    }
+    .nginx-usage-summary::-webkit-details-marker { display: none }
+    .nginx-usage-summary::after { content: '▼'; margin-left: auto; font-size: 8px; color: var(--asus-muted) }
+    .nginx-usage-details:not([open]) .nginx-usage-summary::after { content: '▶' }
+    .nginx-usage-pill {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: #22343f;
+      color: #7ecfee;
+      border: 1px solid #334e5f;
+    }
+    .nginx-usage-pill.active { background: #153c30; color: #6ee7b7; border-color: #276749 }
+    .nginx-usage-label { color: #8da4b3; font-size: 11px }
+    .nginx-usage-content {
+      padding: 8px 10px;
+      border-top: 1px solid #233642;
+      background: #121c22;
+      font-size: 11px;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    .nginx-usage-content .hint { margin: 0; line-height: 1.5 }
+
+    .nginx-endpoints-wrapper {
+      background: #1a262e;
+      border: 1px solid #2a3c47;
+      border-radius: 5px;
+      padding: 12px;
+    }
+    .nginx-endpoints-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .endpoints-heading {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      color: #9cb2c0;
+    }
+    .nginx-endpoint-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      padding: 8px 10px;
+      background: #141f26;
+      border: 1px solid #263844;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      transition: border-color .15s;
+    }
+    .nginx-endpoint-row:last-child { margin-bottom: 0 }
+    .nginx-endpoint-row:hover { border-color: #385264 }
+    .endpoint-proto-badge {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .05em;
+      padding: 4px 8px;
+      border-radius: 4px;
+      align-self: flex-end;
+      min-width: 52px;
+      text-align: center;
+      flex-shrink: 0;
+      height: 28px;
+      line-height: 20px;
+      box-sizing: border-box;
+    }
+    .endpoint-proto-badge.https { background: #133842; border: 1px solid #235c6b; color: #67e8f9 }
+    .endpoint-proto-badge.http { background: #332b17; border: 1px solid #6b5523; color: #ffd166 }
+    .endpoint-field-address { flex: 1; min-width: 130px }
+    .endpoint-field-port { width: 95px; flex-shrink: 0 }
+    .endpoint-field-action { flex-shrink: 0 }
+    .endpoint-remove-btn { height: 28px; display: inline-flex; align-items: center; gap: 4px }
+    @media (max-width: 560px) {
+      .nginx-endpoint-row { flex-wrap: wrap }
+      .endpoint-field-address { min-width: 100% }
+    }
+
+    .nginx-card-options {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-top: 4px;
+      border-top: 1px solid #273b47;
+    }
+    .checkbox-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      color: #ddebf4;
+      user-select: none;
+    }
+    .checkbox-label input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-color: var(--cyan) }
+    .nginx-card-options .hint { margin: 0; color: #8da4b3 }
+    .nginx-mono-textarea {
+      min-height: 84px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.45;
+      tab-size: 2;
+      white-space: pre;
+    }
+    #nginx-profile-rows:empty::before {
+      content: "No custom listeners configured. Click '+ Add listener' above to create one.";
+      display: block;
+      padding: 16px;
+      text-align: center;
+      color: var(--asus-muted);
+      font-size: 12px;
+      background: #1a262e;
+      border: 1px dashed #2d414f;
+      border-radius: 6px;
+      margin-bottom: 8px;
+    }
+    #nginx-access-rows:empty::before {
+      content: "No custom access rules configured. Click '+ Add access rule' above to create one.";
+      display: block;
+      padding: 16px;
+      text-align: center;
+      color: var(--asus-muted);
+      font-size: 12px;
+      background: #1a262e;
+      border: 1px dashed #2d414f;
+      border-radius: 6px;
+      margin-bottom: 8px;
     }
 
     .nginx-reference-modal {
