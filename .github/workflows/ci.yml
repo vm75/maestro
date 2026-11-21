@@ -84,6 +84,9 @@ jobs:
       - name: Check formatting
         run: cargo +1.85.0 fmt --all -- --check
 
+      - name: Verify build-free UI composition and JavaScript
+        run: node scripts/test-web-ui.mjs
+
       - name: Set up supported nginx for integration tests
         uses: ./.github/actions/setup-nginx
 

@@ -117,6 +117,43 @@ async fn test_unauthenticated_endpoints() {
 }
 
 #[tokio::test]
+async fn test_modules_discovery_is_authenticated_and_platform_scoped() {
+    let (app, _state, _temp) = setup_test_app().await;
+
+    let anonymous = Request::builder()
+        .uri("/api/modules")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(anonymous).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let authorized = Request::builder()
+        .uri("/api/modules")
+        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(authorized).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(result["platform"], "asuswrt");
+    let modules = result["modules"].as_array().unwrap();
+    let nginx = modules
+        .iter()
+        .find(|module| module["id"] == "nginx")
+        .unwrap();
+    assert_eq!(nginx["ui"][0]["tab"], "web");
+    let router_upgrade = modules
+        .iter()
+        .find(|module| module["id"] == "router_upgrade")
+        .unwrap();
+    assert_eq!(router_upgrade["availability"], "disabled");
+    assert!(!result.to_string().contains("router-hub-test-token"));
+}
+
+#[tokio::test]
 async fn test_standalone_ui_endpoint() {
     let (app, _state, _temp) = setup_test_app().await;
 

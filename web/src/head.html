@@ -1,0 +1,1556 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <link rel="shortcut icon" href="__ROUTER_HUB_LOGO_DATA_URI__" type="image/svg+xml">
+  <link rel="icon" href="__ROUTER_HUB_LOGO_DATA_URI__" type="image/svg+xml">
+  <title>Router Hub</title>
+  <style>
+    /* ── Standalone-mode base (ASUS owns the outer page when this body is embedded) ── */
+    body.rh-page {
+      margin: 0;
+      background: #14171a;
+      color: #fff;
+      font: 13px/1.5 Arial, Helvetica, sans-serif
+    }
+
+    body.rh-page .rh-shell {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 16px 20px 40px;
+    }
+
+    .rh-hero-banner {
+      display: none;
+    }
+
+    body.rh-page .rh-hero-banner {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      background: linear-gradient(135deg, #1e2938 0%, #111823 100%);
+      border: 1px solid #2a3a4e;
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    }
+
+    .rh-hero-logo {
+      width: 44px;
+      height: 44px;
+      border-radius: 6px;
+      object-fit: contain;
+    }
+
+    .rh-hero-title {
+      font-size: 20px;
+      font-weight: bold;
+      color: #fff;
+      letter-spacing: 0.5px;
+      line-height: 1.2;
+    }
+
+    .rh-hero-sub {
+      font-size: 12px;
+      color: #8b9bb0;
+      margin-top: 2px;
+    }
+
+    /* ── Mode pill (replaces plain rh-badge for the mode indicator) ── */
+    .rh-mode-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .03em;
+      background: linear-gradient(135deg, #1a3a4e 0%, #0d2230 100%);
+      border: 1px solid #2e6080;
+      color: #7ecfee;
+      box-shadow: 0 0 8px rgba(49,215,220,.15);
+      white-space: nowrap;
+    }
+
+    .rh-mode-pill::before {
+      content: '';
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #31d7dc;
+      box-shadow: 0 0 4px #31d7dc;
+    }
+
+    .rh-shell,
+    .rh-shell *,
+    .rh-overlay,
+    .rh-overlay * {
+      box-sizing: border-box
+    }
+
+    .rh-shell button,
+    .rh-shell input,
+    .rh-shell select,
+    .rh-shell textarea,
+    .rh-overlay button,
+    .rh-overlay input,
+    .rh-overlay select,
+    .rh-overlay textarea {
+      font: inherit
+    }
+
+    .rh-shell button,
+    .rh-overlay button {
+      cursor: pointer
+    }
+
+    /* ── ASUS palette tokens ── */
+    :root {
+      --asus-header: #4D595D;
+      --asus-dark: #2F3A3E;
+      --asus-row: #32393B;
+      --asus-border: #6b8fa3;
+      --asus-text: #FFFFFF;
+      --asus-muted: #B0BEC5;
+      --asus-tab: #2F3A3E;
+      --asus-tab-active: #4D595D;
+      --asus-btn-bg: linear-gradient(#233438 0%, #0F1011 100%);
+      --asus-btn-hover: linear-gradient(#09639C 0%, #003047 100%);
+      --green: #4cdb98;
+      --red: #ff6b76;
+      --amber: #ffcb66;
+      --cyan: #31d7dc;
+      --shadow: 0 4px 16px rgba(0, 0, 0, .4)
+    }
+
+    /* ── Tab navigation: exact ASUS .tab / .tabClicked from index_style.css ── */
+    /* These are redefined here for standalone; ASUS CSS wins in embedded mode */
+    .rh-tabs {
+      margin-bottom: -10px;
+      max-width: 760px
+    }
+
+    .rh-tabs::after {
+      content: "";
+      display: table;
+      clear: both
+    }
+
+    .rh-tab {
+      cursor: pointer;
+      color: #fff;
+      float: left;
+      height: 35px;
+      padding: 5px 12px;
+      margin-left: 0;
+      margin-right: 3px;
+      text-align: center;
+      text-decoration: none;
+      font: 12px/35px Verdana, "MS UI Gothic", "MS P Gothic", "Microsoft Yahei UI", sans-serif;
+      border-radius: 5px 5px 0 0;
+      display: flex;
+      align-items: center;
+      gap: 6px
+    }
+
+    .rh-tab.tab {
+      background: #2F3A3E
+    }
+
+    .rh-tab.tab:hover {
+      background: #4D595D
+    }
+
+    .rh-tab.tabClicked {
+      background: #4D595D
+    }
+
+
+
+    /* ── ASUS form typography: exact matches from form_style.css ── */
+    .rh-shell .formfonttitle {
+      text-shadow: 1px 1px 0 #000;
+      font: bold 16px/1.3 Arial, Helvetica, "MS UI Gothic", "MS P Gothic", "Microsoft Yahei UI", sans-serif;
+      color: #fff;
+      margin-left: 5px;
+      margin-bottom: 10px
+    }
+
+    .rh-shell .formfontdesc {
+      font: 13px/1.4 Arial, Helvetica, "MS UI Gothic", "MS P Gothic", "Microsoft Yahei UI", sans-serif;
+      color: #fff;
+      margin-left: 5px;
+      margin-bottom: 10px
+    }
+
+    .rh-shell .splitLine {
+      background: linear-gradient(#32393B 0%, #32393B 20%, #667881 80%, #667881 100%);
+      height: 2px;
+      margin: 8px 0
+    }
+
+    /* ── Title row (formfonttitle + right-side brand elements, Bandwidth Monitor pattern) ── */
+    .rh-title-row {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: auto
+    }
+
+    .rh-title-row .title-cell {
+      vertical-align: middle;
+      white-space: nowrap;
+      margin: 0;
+      padding-left: 5px
+    }
+
+    .rh-title-row .brand-cell {
+      text-align: right;
+      vertical-align: middle;
+      white-space: nowrap
+    }
+
+    .rh-brand-info {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px
+    }
+
+    .rh-brand-info > .rh-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-sizing: border-box;
+      height: 34px;
+      min-height: 34px;
+      padding: 0 10px;
+      border: 1px solid #3b5361;
+      border-radius: 6px;
+      background: #1f2d35;
+      box-shadow: inset 0 1px rgba(255, 255, 255, .04);
+      color: #c9dde8;
+      font-size: 11px;
+      line-height: 1;
+      white-space: nowrap;
+      vertical-align: middle
+    }
+
+    .rh-brand-info > .btn {
+      box-sizing: border-box;
+      height: 34px;
+      min-height: 34px
+    }
+
+    .rh-brand-info > .btn:focus-visible {
+      outline: 2px solid var(--cyan);
+      outline-offset: 2px
+    }
+
+    .rh-logo {
+      width: 22px;
+      height: 22px;
+      border-radius: 4px;
+      background: transparent;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      overflow: hidden
+    }
+
+    .rh-badge-copy {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px
+    }
+
+    .rh-model {
+      color: #fff;
+      font-size: 12px
+    }
+
+    .rh-version {
+      font-size: 11px;
+      color: var(--asus-muted)
+    }
+
+    .rh-conn {
+      font-size: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px
+    }
+
+    .rh-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--amber);
+      display: inline-block
+    }
+
+    .rh-conn.ok .rh-dot {
+      background: var(--green)
+    }
+
+    .rh-conn.bad .rh-dot {
+      background: var(--red)
+    }
+
+    /* ── Shell ── */
+    .rh-shell {
+      padding: 4px 5px 12px
+    }
+
+    .rh-tab-pane {
+      padding-top: 2px
+    }
+
+    /* ── Views ── */
+    .view {
+      display: none
+    }
+
+    .view.active {
+      display: block
+    }
+
+    /* ── Grid ── */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px
+    }
+
+    .span-4 {
+      grid-column: span 4
+    }
+
+    .span-6 {
+      grid-column: span 6
+    }
+
+    .span-8 {
+      grid-column: span 8
+    }
+
+    /* ── Cards (FormTable-inspired) ── */
+    .card {
+      grid-column: span 12;
+      border: 1px solid var(--asus-border);
+      margin-bottom: 12px;
+      background: #2a3a42
+    }
+
+    .card.pad {
+      padding: 14px
+    }
+
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 10px;
+      background: #1F2D35;
+      border-bottom: 1px solid #222
+    }
+
+    .card-head h2 {
+      font-size: 13px;
+      margin: 0;
+      font-weight: bold;
+      color: #fff
+    }
+
+    /* Metric cards */
+    .metric {
+      grid-column: span 3;
+      padding: 14px;
+      background: #2a3a42;
+      border: 1px solid var(--asus-border)
+    }
+
+    .metric .label {
+      color: var(--asus-muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .06em
+    }
+
+    .metric .value {
+      font-size: 26px;
+      font-weight: bold;
+      margin: 4px 0;
+      color: #fff
+    }
+
+    .metric .sub {
+      color: var(--asus-muted);
+      font-size: 12px
+    }
+
+    /* ── Sidebar and toggle: hidden everywhere except mobile standalone ── */
+    #rh-sidebar,
+    #rh-sidebar-toggle {
+      display: none
+    }
+
+
+    /* ── Tables ── */
+    .table-wrap {
+      overflow: auto
+    }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px
+    }
+
+    .table th {
+      background: #1F2D35;
+      color: #fff;
+      padding: 7px 10px;
+      text-align: left;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      border: 1px solid #222;
+      font-weight: normal
+    }
+
+    .table-sort {
+      color: inherit;
+      background: none;
+      border: 0;
+      padding: 0;
+      font: inherit;
+      text-transform: inherit;
+      letter-spacing: inherit;
+      cursor: pointer
+    }
+
+    .table-sort:hover {
+      color: var(--asus-accent)
+    }
+
+    .table-sort-indicator {
+      display: inline-block;
+      width: 1em;
+      margin-left: 3px;
+      color: var(--asus-accent)
+    }
+
+    .table td {
+      padding: 8px 10px;
+      border-bottom: 1px solid #2a3a42;
+      vertical-align: top;
+      color: #dde8ee
+    }
+
+    .table tr:last-child td {
+      border-bottom: 0
+    }
+
+    .table tr:hover td {
+      background: rgba(255, 255, 255, .04)
+    }
+
+    /* ── Status badges ── */
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      border: 1px solid
+    }
+
+    .status.ok {
+      color: #88f2bd;
+      border-color: #277452;
+      background: #143f31
+    }
+
+    .status.off {
+      color: #b0bdc8;
+      border-color: #415565;
+      background: #1d2b36
+    }
+
+    .status.warn {
+      color: #ffe09a;
+      border-color: #7a6127;
+      background: #3a311d
+    }
+
+    .status.bad {
+      color: #ffabb2;
+      border-color: #7d3340;
+      background: #3b1e28
+    }
+
+    /* ── Buttons (button_gen style) ── */
+    .btn {
+      font-weight: bold;
+      text-shadow: 1px 1px 0 #000;
+      background: linear-gradient(#233438 0%, #0F1011 100%);
+      border-radius: 6px;
+      border: 0;
+      color: #fff;
+      height: 28px;
+      font: 12px Verdana, "MS UI Gothic", sans-serif;
+      padding: 0 10px;
+      cursor: pointer;
+      outline: none;
+      white-space: nowrap
+    }
+
+    .btn:hover {
+      background: linear-gradient(#09639C 0%, #003047 100%)
+    }
+
+    .btn.primary {
+      background: linear-gradient(#0a6ab5 0%, #003d6e 100%)
+    }
+
+    .btn.primary:hover {
+      background: linear-gradient(#0e7dcf 0%, #004f90 100%)
+    }
+
+    .btn.danger {
+      background: linear-gradient(#6b2030 0%, #3a0f1a 100%);
+      color: #ffb8bf
+    }
+
+    .btn.danger:hover {
+      background: linear-gradient(#8b2535 0%, #500f20 100%)
+    }
+
+    .btn.action {
+      background: linear-gradient(#0e7490 0%, #155e75 100%);
+      color: #67e8f9
+    }
+
+    .btn.action:hover {
+      background: linear-gradient(#06b6d4 0%, #0e7490 100%);
+      color: #ffffff
+    }
+
+    .btn.small {
+      height: 24px;
+      padding: 0 7px;
+      font-size: 11px
+    }
+
+    .btn.small.action {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1
+    }
+
+    .btn.small.action svg {
+      display: block;
+      width: 14px;
+      height: 14px
+    }
+
+    .btn:disabled {
+      cursor: not-allowed;
+      opacity: .5
+    }
+
+    .actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center
+    }
+
+    .protection-setting {
+      display: flex;
+      align-items: end;
+      gap: 8px
+    }
+
+    .protection-setting .field {
+      flex: 1;
+      min-width: 0
+    }
+
+    .protection-setting .btn {
+      flex-shrink: 0
+    }
+
+    .protection-actions {
+      display: grid;
+      gap: 8px
+    }
+
+    .manual-ban {
+      display: flex;
+      gap: 6px
+    }
+
+    .manual-ban .input {
+      min-width: 0;
+      flex: 1
+    }
+
+    /* Ban Shield follows the compact section styling used by Nginx settings. */
+    #view-firewall { --shield-gap: 16px }
+    #view-firewall .card { border-radius: 6px; overflow: hidden; margin-bottom: 16px; min-width: 0 }
+    #view-firewall > .grid { grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr); gap: var(--shield-gap); align-items: stretch }
+    #view-firewall > .grid > .card { grid-column: auto }
+    #view-firewall h2, #view-firewall h3 { color: #fff }
+    #view-firewall .card-head { padding: 12px 14px; border-bottom-color: #273b47 }
+    #view-firewall .input { width: 100%; min-width: 0; box-sizing: border-box }
+    #view-firewall .btn { flex-shrink: 0; white-space: nowrap }
+    #view-firewall .shield-input-row { display: flex; flex-wrap: nowrap; gap: 8px }
+    #view-firewall .shield-input-row .input { flex: 1 }
+    #allow-list { display: flex; flex-wrap: wrap; gap: 6px; overflow-wrap: anywhere }
+    #allow-list .tag { max-width: 100%; box-sizing: border-box }
+    #view-firewall .toolbar { flex-wrap: wrap; gap: 12px; align-items: flex-start }
+    #view-firewall .toolbar > div:first-child { flex: 1; min-width: 240px }
+    #view-firewall .toolbar .hint { margin-top: 5px; line-height: 1.5 }
+    #view-firewall .toolbar .actions { justify-content: flex-end }
+    #fw-tuning-source { font-size: 11px }
+    #firewall-settings-form { display: grid; gap: 14px }
+    .shield-tuning-section { margin: 0; min-width: 0; padding: 14px; border: 1px solid var(--asus-border); border-radius: 6px; background: #23313a }
+    .shield-tuning-section legend { padding: 0 8px; color: #7ecfee; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase }
+    #firewall-settings-form .form-grid { gap: 14px 16px; align-items: start }
+    #firewall-settings-form .field { min-width: 0; display: flex; flex-direction: column }
+    #firewall-settings-form label { min-height: 28px; display: flex; align-items: flex-end; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; line-height: 1.4 }
+    #firewall-settings-form .hint { line-height: 1.5 }
+    #firewall-settings-form > .actions { justify-content: flex-end; padding-top: 12px; border-top: 1px solid #3b4f5b }
+    .shield-health-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px }
+    .shield-health-heading h2 { margin: 0; font-size: 13px }
+    .shield-health-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 16px }
+    .shield-health-grid p { margin: 0; line-height: 1.6; overflow-wrap: anywhere }
+    .shield-health-label { display: block; color: var(--asus-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; margin-bottom: 4px }
+    #fw-health { background: linear-gradient(135deg, #182832, #23313a); border-left: 3px solid var(--cyan) }
+    #fw-health > .hint { margin: 12px 0 0; line-height: 1.5 }
+    @media (max-width: 1050px) {
+      #view-firewall > .grid { grid-template-columns: minmax(0, 1fr) }
+    }
+    @media (max-width: 600px) {
+      #firewall-settings-form .form-grid, .shield-health-grid { grid-template-columns: minmax(0, 1fr) }
+      #firewall-settings-form label { min-height: 0 }
+      #view-firewall .toolbar .actions { justify-content: flex-start }
+    }
+
+    /* ── Form inputs ── */
+    .input {
+      border: 1px solid #4a6070;
+      border-radius: 4px;
+      background: #1a2a34;
+      color: #e8f4ff;
+      padding: 5px 8px;
+      outline: none;
+      font: 12px Arial, sans-serif
+    }
+
+    .input:focus {
+      border-color: var(--cyan)
+    }
+
+    textarea.input {
+      min-height: 80px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace
+    }
+
+    .form {
+      display: grid;
+      gap: 10px
+    }
+
+    #wireguard-form {
+      padding: 14px;
+      box-sizing: border-box
+    }
+
+    #wireguard-form .field {
+      min-width: 0
+    }
+
+    #wireguard-form .input {
+      box-sizing: border-box;
+      width: 100%;
+      min-width: 0
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px
+    }
+
+    .field {
+      display: grid;
+      gap: 4px
+    }
+
+    .field.full {
+      grid-column: 1/-1
+    }
+
+    .field label {
+      color: var(--asus-muted);
+      font-size: 11px
+    }
+
+    .hint {
+      color: var(--asus-muted);
+      font-size: 11px
+    }
+
+    [hidden] {
+      display: none !important
+    }
+
+    /* ── Toolbar ── */
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px
+    }
+
+    .toolbar .input {
+      max-width: 280px
+    }
+
+    /* ── Notice ── */
+    .notice {
+      padding: 9px 11px;
+      border: 1px solid #315775;
+      background: #1a3244;
+      color: #a9cadf;
+      margin-bottom: 10px;
+      font-size: 12px
+    }
+
+    .notice.warn {
+      border-color: #745e2c;
+      background: #2e2a1c;
+      color: #ffe2a2
+    }
+
+    /* ── Split layout ── */
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(240px, .5fr);
+      gap: 12px
+    }
+
+    .split>.card {
+      grid-column: auto
+    }
+
+    /* ── Compact nginx workspace ── */
+    .nginx-card {
+      margin-bottom: 10px
+    }
+
+    .nginx-summary-card {
+      margin-bottom: 10px
+    }
+
+    .nginx-summary-card .muted {
+      margin: 10px;
+    }
+
+    .certificate-http-card {
+      margin-bottom: 12px;
+    }
+
+    .certificate-http-card .certificate-http-body {
+      padding: 10px 12px;
+    }
+
+    #certificate-http-status {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .nginx-card .table td {
+      padding: 6px 8px;
+      vertical-align: middle
+    }
+
+    .nginx-domain-row td {
+      border-top: 1px solid #456170
+    }
+
+    .nginx-child-row td:first-child {
+      padding-left: 28px;
+      position: relative
+    }
+
+    .nginx-child-row td:first-child::before {
+      color: var(--asus-muted);
+      content: '└';
+      left: 11px;
+      position: absolute
+    }
+
+    .nginx-status-line {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap
+    }
+
+    .nginx-accordion>summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 10px;
+      background: #1F2D35;
+      color: #fff;
+      cursor: pointer;
+      font-size: 13px
+    }
+
+    .nginx-accordion>summary::before {
+      content: '+';
+      color: var(--cyan);
+      font-weight: bold
+    }
+
+    .nginx-accordion[open]>summary::before {
+      content: '−'
+    }
+
+    .nginx-accordion>summary span:first-child {
+      margin-right: auto
+    }
+
+    .nginx-accordion-body {
+      padding: 0
+    }
+
+    /* ── Modal ── */
+    .modal {
+      border: 1px solid var(--asus-border);
+      border-radius: 6px;
+      background: #1e2d35;
+      color: #fff;
+      width: min(760px, calc(100vw - 20px));
+      max-height: 90vh;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, .6);
+      padding: 0
+    }
+
+    .nginx-field-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px 8px
+    }
+
+    .nginx-help-toggle {
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border: 1px solid var(--asus-border);
+      border-radius: 50%;
+      background: transparent;
+      color: var(--asus-muted);
+      cursor: pointer;
+      font: inherit
+    }
+
+    .nginx-help-toggle:hover,
+    .nginx-help-toggle[aria-expanded="true"] {
+      color: #fff;
+      border-color: currentColor
+    }
+
+    .nginx-help-toggle:focus-visible {
+      outline: 2px solid var(--cyan);
+      outline-offset: 2px
+    }
+
+    .nginx-field-help {
+      flex-basis: 100%;
+      line-height: 1.5
+    }
+
+    .nginx-site-editor { width: min(980px, calc(100vw - 20px)) }
+    .nginx-site-editor .modal-body { padding: 12px }
+    .nginx-site-editor .form { gap: 12px }
+    .nginx-site-editor .form-grid { gap: 8px 12px }
+    .nginx-site-editor .field { min-width: 0; gap: 3px }
+    .nginx-site-editor .input { width: 100%; box-sizing: border-box; min-width: 0 }
+    .nginx-site-editor .nginx-field-heading { gap: 5px; min-height: 20px }
+    .nginx-site-editor .nginx-help-toggle { width: 18px; height: 18px; font-size: 10px; flex-shrink: 0 }
+    .nginx-site-editor textarea[name="server_names"] { min-height: 48px; height: 48px }
+    .nginx-site-editor .site-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px }
+    .site-options { border-top: 1px solid #2a4050; padding-top: 10px }
+    .site-options h4 { margin: 0 0 8px; font-size: 12px; color: var(--asus-muted) }
+    .nginx-site-editor .site-policy-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) }
+    .site-routes { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px }
+    .route-policy-modal { width: min(980px, calc(100vw - 20px)) }
+    .route-policy-modal .modal-body { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 16px; height: min(65vh, 560px); max-height: none }
+    .route-policy-draft { display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0 }
+    .route-policy-draft textarea { flex: 1; min-height: 200px; resize: none; tab-size: 2; line-height: 1.5 }
+    .route-policy-guide { overflow: auto; min-width: 0; color: #c3d5e3; font-size: 12px; line-height: 1.6 }
+    .route-policy-guide h4 { margin: 0 0 6px; color: #fff; font-size: 12px }
+    .route-policy-guide p { margin: 0 0 12px }
+    .route-policy-guide pre { overflow: auto; padding: 10px; background: #15232c; border: 1px solid #2a4050; border-radius: 4px; font-size: 11px; line-height: 1.5 }
+    .route-policy-error { color: #ffabb2; margin: 0; font-size: 12px }
+    @media (max-width: 640px) {
+      .route-policy-modal .modal-body { grid-template-columns: minmax(0, 1fr); overflow: auto }
+      .route-policy-draft { min-height: 280px }
+      .route-policy-guide { overflow: visible }
+    }
+    .nginx-help-modal { width: min(420px, calc(100vw - 32px)) }
+    .nginx-help-modal .modal-body { line-height: 1.6; color: #c3d5e3 }
+    @media (max-width: 760px) {
+      .nginx-site-editor .site-policy-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) }
+    }
+    @media (max-width: 480px) {
+      .nginx-site-editor .site-policy-grid { grid-template-columns: minmax(0, 1fr) }
+    }
+
+    /* ── Nginx Listeners and Access Settings Modal ── */
+    .nginx-settings-editor { width: min(980px, calc(100vw - 20px)) }
+    .nginx-settings-editor .modal-body { padding: 16px; max-height: calc(90vh - 110px); overflow-y: auto }
+    #nginx-settings-form { display: flex; flex-direction: column; gap: 16px }
+    #nginx-settings-form .field { min-width: 0; gap: 4px }
+    #nginx-settings-form .input { width: 100%; box-sizing: border-box; min-width: 0 }
+    #nginx-settings-form label { color: #9cb2c0; font-size: 11px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; display: block }
+    .nginx-settings-editor .nginx-field-heading { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 20px }
+    .nginx-settings-editor .nginx-help-toggle { width: 18px; height: 18px; font-size: 10px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center }
+    .nginx-settings-editor .nginx-field-help { font-size: 11px; color: #7ecfee; background: #14222a; border: 1px solid #234557; border-radius: 4px; padding: 6px 8px; margin-top: 4px; line-height: 1.45 }
+
+    .nginx-settings-intro {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px 16px;
+      background: linear-gradient(135deg, #182832 0%, #131f28 100%);
+      border: 1px solid #284455;
+      border-left: 3px solid var(--cyan);
+      border-radius: 6px;
+      color: #c9dde8;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .nginx-intro-icon { color: var(--cyan); flex-shrink: 0; margin-top: 2px }
+    .nginx-intro-icon svg { display: block }
+    .nginx-intro-text { flex: 1 }
+
+    .nginx-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 8px;
+      margin-bottom: -4px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #273b47;
+    }
+    .nginx-section-title { display: inline-flex; align-items: center; gap: 8px }
+    .nginx-section-title h3 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #fff }
+    .nginx-section-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .05em;
+      padding: 2px 7px;
+      border-radius: 4px;
+      background: #143240;
+      border: 1px solid #23556e;
+      color: #7ecfee;
+      text-transform: uppercase;
+    }
+    .nginx-section-card {
+      margin-bottom: 0;
+      border-radius: 6px;
+      border: 1px solid var(--asus-border);
+      background: #23313a;
+      padding: 14px;
+    }
+    .nginx-mode-hint { grid-column: 1 / -1; margin: 0 0 2px }
+    .nginx-mode-hint .hint {
+      padding: 8px 12px;
+      background: #17242c;
+      border: 1px solid #263b47;
+      border-radius: 4px;
+      color: #8faec0;
+      margin: 0;
+      line-height: 1.45;
+    }
+    .nginx-wan-notice {
+      margin: 14px 0 0;
+      padding: 10px 12px;
+      font-size: 11px;
+      line-height: 1.5;
+      border-radius: 4px;
+      border-color: #2b4555;
+      background: #16242c;
+      color: #9ab4c4;
+    }
+
+    details.nginx-settings-accordion {
+      border: 1px solid var(--asus-border);
+      background: #23313a;
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 0;
+      transition: border-color .15s ease;
+    }
+    details.nginx-settings-accordion[open] { border-color: #3b5a6c }
+    details.nginx-settings-accordion > summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: #1a2830;
+      color: #e2eff7;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+      list-style: none;
+      border-bottom: 1px solid transparent;
+      outline: none;
+    }
+    details.nginx-settings-accordion > summary::-webkit-details-marker { display: none }
+    details.nginx-settings-accordion > summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px }
+    details.nginx-settings-accordion[open] > summary { border-bottom: 1px solid #273b47; background: #1d2d37 }
+    details.nginx-settings-accordion > summary::after { content: '▼'; font-size: 9px; color: var(--cyan); transition: transform .2s ease }
+    details.nginx-settings-accordion:not([open]) > summary::after { content: '▶'; color: var(--asus-muted) }
+    .nginx-accordion-content { padding: 14px; background: #212e37 }
+
+    .nginx-item-card {
+      margin-bottom: 12px;
+      border: 1px solid var(--asus-border);
+      border-radius: 6px;
+      background: #23313a;
+      overflow: hidden;
+    }
+    .nginx-item-card .card-head {
+      padding: 8px 12px;
+      background: #1a2830;
+      border-bottom: 1px solid #283e4d;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .nginx-item-card .card-head h4 { margin: 0; font-size: 13px; font-weight: 600; color: #fff }
+    .nginx-item-card .card-title-group { display: inline-flex; align-items: center; gap: 8px; min-width: 0 }
+    .nginx-item-card .card-title-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #133842;
+      border: 1px solid #235c6b;
+      color: #67e8f9;
+      flex-shrink: 0;
+    }
+    .nginx-item-card .card-title-badge.access { background: #2a2c1a; border-color: #555b2a; color: #e5e985 }
+    .nginx-item-card .card-body { padding: 14px; display: flex; flex-direction: column; gap: 12px }
+    .nginx-profile-header-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+      gap: 12px;
+      align-items: flex-end;
+    }
+    @media (max-width: 640px) {
+      .nginx-profile-header-grid { grid-template-columns: minmax(0, 1fr) }
+    }
+
+    .nginx-usage-details {
+      border: 1px solid #283e4d;
+      background: #17232b;
+      border-radius: 4px;
+      overflow: hidden;
+      width: 100%;
+    }
+    .nginx-usage-summary {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 8px;
+      font-size: 11px;
+      cursor: pointer;
+      color: #a2b7c4;
+      user-select: none;
+      list-style: none;
+    }
+    .nginx-usage-summary::-webkit-details-marker { display: none }
+    .nginx-usage-summary::after { content: '▼'; margin-left: auto; font-size: 8px; color: var(--asus-muted) }
+    .nginx-usage-details:not([open]) .nginx-usage-summary::after { content: '▶' }
+    .nginx-usage-pill {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: #22343f;
+      color: #7ecfee;
+      border: 1px solid #334e5f;
+    }
+    .nginx-usage-pill.active { background: #153c30; color: #6ee7b7; border-color: #276749 }
+    .nginx-usage-label { color: #8da4b3; font-size: 11px }
+    .nginx-usage-content {
+      padding: 8px 10px;
+      border-top: 1px solid #233642;
+      background: #121c22;
+      font-size: 11px;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    .nginx-usage-content .hint { margin: 0; line-height: 1.5 }
+
+    .nginx-endpoints-wrapper {
+      background: #1a262e;
+      border: 1px solid #2a3c47;
+      border-radius: 5px;
+      padding: 12px;
+    }
+    .nginx-endpoints-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .endpoints-heading {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      color: #9cb2c0;
+    }
+    .nginx-endpoint-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      padding: 8px 10px;
+      background: #141f26;
+      border: 1px solid #263844;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      transition: border-color .15s;
+    }
+    .nginx-endpoint-row:last-child { margin-bottom: 0 }
+    .nginx-endpoint-row:hover { border-color: #385264 }
+    .endpoint-proto-badge {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .05em;
+      padding: 4px 8px;
+      border-radius: 4px;
+      align-self: flex-end;
+      min-width: 52px;
+      text-align: center;
+      flex-shrink: 0;
+      height: 28px;
+      line-height: 20px;
+      box-sizing: border-box;
+    }
+    .endpoint-proto-badge.https { background: #133842; border: 1px solid #235c6b; color: #67e8f9 }
+    .endpoint-proto-badge.http { background: #332b17; border: 1px solid #6b5523; color: #ffd166 }
+    .endpoint-field-address { flex: 1; min-width: 130px }
+    .endpoint-field-port { width: 95px; flex-shrink: 0 }
+    .endpoint-field-action { flex-shrink: 0 }
+    .endpoint-remove-btn { height: 28px; display: inline-flex; align-items: center; gap: 4px }
+    @media (max-width: 560px) {
+      .nginx-endpoint-row { flex-wrap: wrap }
+      .endpoint-field-address { min-width: 100% }
+    }
+
+    .nginx-card-options {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-top: 4px;
+      border-top: 1px solid #273b47;
+    }
+    .checkbox-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      color: #ddebf4;
+      user-select: none;
+    }
+    .checkbox-label input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-color: var(--cyan) }
+    .nginx-card-options .hint { margin: 0; color: #8da4b3 }
+    .nginx-mono-textarea {
+      min-height: 84px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.45;
+      tab-size: 2;
+      white-space: pre;
+    }
+    #nginx-profile-rows:empty::before {
+      content: "No custom listeners configured. Click '+ Add listener' above to create one.";
+      display: block;
+      padding: 16px;
+      text-align: center;
+      color: var(--asus-muted);
+      font-size: 12px;
+      background: #1a262e;
+      border: 1px dashed #2d414f;
+      border-radius: 6px;
+      margin-bottom: 8px;
+    }
+    #nginx-access-rows:empty::before {
+      content: "No custom access rules configured. Click '+ Add access rule' above to create one.";
+      display: block;
+      padding: 16px;
+      text-align: center;
+      color: var(--asus-muted);
+      font-size: 12px;
+      background: #1a262e;
+      border: 1px dashed #2d414f;
+      border-radius: 6px;
+      margin-bottom: 8px;
+    }
+
+    .nginx-reference-modal {
+      width: min(980px, calc(100vw - 20px))
+    }
+
+    .nginx-reference-modal h4 {
+      margin: 18px 0 8px;
+      font-size: 14px
+    }
+
+    .nginx-reference-modal li {
+      margin: 6px 0
+    }
+
+    .nginx-reference-table .table {
+      min-width: 640px
+    }
+
+    .nginx-reference-table th[scope="row"] {
+      text-align: left;
+      white-space: normal
+    }
+
+    .nginx-reference-example {
+      border-top: 1px solid var(--asus-border);
+      padding: 12px 0
+    }
+
+    .nginx-reference-example summary {
+      cursor: pointer;
+      font-weight: 600
+    }
+
+    .bans-modal {
+      width: min(900px, calc(100vw - 20px))
+    }
+
+    .rewrites-modal {
+      width: min(980px, calc(100vw - 20px))
+    }
+
+    .bans-modal .modal-body {
+      padding: 0;
+      overflow: hidden
+    }
+
+    .bans-table-wrap {
+      max-height: calc(90vh - 120px);
+      overflow: auto
+    }
+
+    .bans-table-wrap .table th {
+      position: sticky;
+      top: 0;
+      z-index: 1
+    }
+
+    .modal::backdrop {
+      background: rgba(0, 0, 0, .7)
+    }
+
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 11px 14px;
+      border-bottom: 1px solid #2a4050;
+      background: #1F2D35
+    }
+
+    .modal-head h3 {
+      margin: 0;
+      font-size: 14px
+    }
+
+    .modal-body {
+      padding: 14px;
+      overflow: auto;
+      max-height: calc(90vh - 110px)
+    }
+
+    .modal-foot {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 10px 14px;
+      border-top: 1px solid #2a4050
+    }
+
+    /* ── Log pre ── */
+    .log {
+      white-space: pre-wrap;
+      background: #0a1018;
+      border: 1px solid #2a4050;
+      border-radius: 4px;
+      padding: 10px;
+      max-height: 55vh;
+      overflow: auto;
+      color: #b9d8e8;
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace
+    }
+
+    /* ── Tags & misc ── */
+    .row-actions {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap
+    }
+
+    .tag {
+      display: inline-block;
+      margin: 2px 3px 2px 0;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #1a3a4a;
+      color: #aee0f7;
+      font-size: 11px;
+      border: 1px solid #2a5570
+    }
+
+    .toast {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      z-index: 50;
+      max-width: 380px;
+      padding: 9px 12px;
+      border-radius: 6px;
+      background: #1F2D35;
+      border: 1px solid var(--asus-border);
+      box-shadow: var(--shadow);
+      transform: translateY(24px);
+      opacity: 0;
+      pointer-events: none;
+      transition: .2s;
+      font-size: 12px
+    }
+
+    .toast.show {
+      transform: none;
+      opacity: 1
+    }
+
+    .toast.error {
+      border-color: #7d3340;
+      background: #3b1e28
+    }
+
+    .danger-zone {
+      border-color: #713542
+    }
+
+    .muted {
+      color: var(--asus-muted)
+    }
+
+    code {
+      color: #9ce8e8;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace
+    }
+
+    .empty {
+      padding: 20px;
+      color: var(--asus-muted);
+      text-align: center;
+      font-size: 12px
+    }
+
+    /* ── Responsive ── */
+    @media(max-width:1050px) {
+      .metric {
+        grid-column: span 6
+      }
+
+      .split {
+        grid-template-columns: 1fr
+      }
+    }
+
+    /* ── Standalone mobile: sidebar + 2×2 metric grid ── */
+    @media(max-width:760px) {
+      #rh-sidebar {
+        display: none;
+        width: 100%;
+        background: #1a2530;
+        border-bottom: 1px solid #2a3a4e;
+        margin-bottom: 8px;
+        overflow: hidden
+      }
+
+      #rh-sidebar.open {
+        display: block
+      }
+
+      #rh-sidebar .rh-tab {
+        float: none;
+        height: auto;
+        margin: 0;
+        border-radius: 0;
+        display: flex;
+        align-items: center;
+        padding: 10px 14px;
+        font-size: 12px;
+        line-height: 1.4;
+        border-bottom: 1px solid #243040;
+        text-align: left
+      }
+
+      #rh-sidebar .rh-tab:last-child {
+        border-bottom: 0
+      }
+
+      #rh-sidebar .rh-tab.tab {
+        background: transparent
+      }
+
+      #rh-sidebar .rh-tab.tab:hover {
+        background: #253545
+      }
+
+      #rh-sidebar .rh-tab.tabClicked {
+        background: #1e4060;
+        border-left: 3px solid #31d7dc;
+        color: #7ecfee
+      }
+
+      #rh-sidebar-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 10px 14px;
+        background: #1a2530;
+        border: none;
+        border-bottom: 1px solid #2a3a4e;
+        border-radius: 6px 6px 0 0;
+        color: #7ecfee;
+        font: 12px Verdana, sans-serif;
+        cursor: pointer;
+        text-align: left;
+        margin-bottom: 8px
+      }
+
+      #rh-sidebar-toggle svg {
+        flex-shrink: 0;
+        transition: transform .2s
+      }
+
+      #rh-sidebar-toggle.open svg:last-child {
+        transform: rotate(180deg)
+      }
+
+      .rh-tabs {
+        display: none
+      }
+
+      .span-4,
+      .span-6,
+      .span-8 {
+        grid-column: span 12
+      }
+
+      .rh-shell {
+        padding: 4px 2px 8px
+      }
+
+      /* 2×2 metric grid on narrow screens */
+      .metric {
+        grid-column: span 6;
+        padding: 10px 12px
+      }
+
+      .metric .value {
+        font-size: 20px
+      }
+
+      .metric .label {
+        font-size: 10px
+      }
+
+      .metric .sub {
+        font-size: 11px
+      }
+
+      .form-grid {
+        grid-template-columns: 1fr
+      }
+
+      .field.full {
+        grid-column: auto
+      }
+
+      .table th,
+      .table td {
+        padding: 7px
+      }
+
+      .hide-mobile {
+        display: none
+      }
+
+      .rh-title-row .brand-cell {
+        display: none
+      }
+    }
+
+    /* Grouped navigation: one tab per feature area, with accessible section entries. */
+    .rh-group { float: left; position: relative; }
+    .rh-group > .rh-tab { float: none; margin-left: 0; }
+    .rh-group-menu { display: none; position: absolute; top: 100%; left: 0; z-index: 50;
+      min-width: 170px; padding: 5px; background: #23333a; border: 1px solid var(--asus-border);
+      box-shadow: var(--shadow); }
+    .rh-group:hover .rh-group-menu, .rh-group:focus-within .rh-group-menu { display: block; }
+    .rh-group-menu [data-view] { display: block; width: 100%; padding: 8px 10px;
+      color: #fff; background: transparent; border: none; text-align: left; cursor: pointer; }
+    .rh-group-menu [data-view]:hover, .rh-group-menu .tabClicked { background: #4D595D; }
+    #rh-sidebar .rh-group { float: none; width: 100%; }
+    #rh-sidebar .rh-group-menu { display: block; position: static; background: transparent;
+      box-shadow: none; border: 0; padding: 0 0 5px 15px; }
+    #rh-sidebar .rh-group > .rh-tab { width: 100%; }
+    .metric[data-dashboard-widget] { cursor: pointer; }
+    .metric[data-widget-state="unavailable"] .value { color: var(--amber); font-size: 18px; }
+  </style>
+</head>
+

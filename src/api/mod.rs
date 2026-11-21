@@ -32,6 +32,8 @@ use crate::{
 };
 
 pub fn app(state: AppState) -> anyhow::Result<Router> {
+    crate::core::modules::validate_registry(crate::core::modules::module_specs())
+        .map_err(anyhow::Error::msg)?;
     let api = router().route_layer(axum::middleware::from_fn_with_state(
         state.clone(),
         require_auth,
@@ -77,6 +79,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/auth/check", get(auth_check))
         .route("/runtime", get(runtime))
+        .route("/modules", get(modules))
         .route("/dashboard", get(dashboard))
         .route("/system/usage", get(system::usage))
         .route("/services", get(services::list))
@@ -221,6 +224,10 @@ pub async fn runtime(State(state): State<AppState>) -> Json<RuntimeInfo> {
         },
         test_mode: state.config.test_mode,
     })
+}
+
+pub async fn modules(State(state): State<AppState>) -> Json<crate::core::modules::Discovery> {
+    Json(crate::core::modules::discover(&state.config))
 }
 
 pub async fn auth_check() -> Json<ApiMessage> {

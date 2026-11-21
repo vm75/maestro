@@ -1,0 +1,198 @@
+    </div><!-- .rh-tab-pane -->
+  </div><!-- .rh-shell -->
+
+  <div class="rh-overlay">
+    <dialog class="modal" id="editor">
+      <div class="modal-head">
+        <h3 id="editor-title">Edit</h3><button class="btn small" onclick="closeEditor()">✕</button>
+      </div>
+      <div class="modal-body" id="editor-body"></div>
+      <div class="modal-foot"><button class="btn" onclick="closeEditor()">Cancel</button><button class="btn primary"
+          id="editor-save">Save</button></div>
+    </dialog>
+    <dialog class="modal route-policy-modal" id="nginx-routes-modal" aria-labelledby="nginx-routes-title">
+      <form onsubmit="applyNginxRoutes(event)">
+        <div class="modal-head"><h3 id="nginx-routes-title">Route policies</h3><button type="button" class="btn small" aria-label="Close route policies" onclick="document.getElementById('nginx-routes-modal').close()">✕</button></div>
+        <div class="modal-body">
+          <div class="route-policy-draft">
+            <label for="nginx-route-draft">Policies (JSON array)</label>
+            <textarea class="input" id="nginx-route-draft" spellcheck="false" aria-describedby="nginx-route-inheritance nginx-route-error" placeholder='[{"path":"/admin","enable_lanonly":true}]'></textarea>
+            <p class="hint" id="nginx-route-inheritance"></p>
+            <p class="route-policy-error" id="nginx-route-error" role="alert" hidden></p>
+          </div>
+          <aside class="route-policy-guide" aria-label="Route policy help and examples">
+            <h4>Override settings for part of an app</h4>
+            <p>Each object selects a path and overrides only the settings you provide. Other values inherit the site's effective settings. For a subfolder mounted at <code>/music/</code>, a policy for <code>/api</code> applies to <code>/music/api</code>.</p>
+            <h4>Assign a request budget</h4><p>Define named limit policies in Global settings, then set <code>"limit_policy":"assets"</code> on a route. Omission inherits from the parent, including nested children; <code>"default"</code> restores the original Ban Shield budget. A policy replaces both base limits. Different names use independent per-IP accounting; the same name shares a budget across sites. The existing <code>rate_limit</code> still adds a supplemental request limit only where specified.</p>
+            <h4>Choose how a path matches</h4>
+            <p><code>match</code> defaults to <code>"prefix"</code> and covers paths starting with the supplied path. Use <code>"exact"</code> for one URL, <code>"regex"</code> for a case-sensitive pattern, or <code>"regex_i"</code> for a case-insensitive pattern. Query strings are not part of the path match.</p>
+            <h4>Keep administration on the LAN</h4>
+            <p>Allow only clients in your global IP/CIDR allowlist. An empty allowlist denies everyone.</p>
+            <pre>[{
+  "path": "/admin/",
+  "enable_lanonly": true,
+  "spa_fallback": ""
+}]</pre>
+            <h4>Keep API errors out of the SPA shell</h4>
+            <p>Return the backend's API responses instead of serving the SPA fallback. Disable caching for these responses.</p>
+            <pre>[{
+  "path": "/api/",
+  "cache_policy": "no_cache",
+  "spa_fallback": ""
+}]</pre>
+            <h4>Stream server-sent events</h4>
+            <p>Use SSE transport for an event endpoint. This streams responses without buffering and uses extended connection timeouts.</p>
+            <pre>[{
+  "path": "/events",
+  "match": "exact",
+  "proxy_transport": "sse",
+  "cache_policy": "no_cache"
+}]</pre>
+            <p>Combine these objects in one array to use several policies. Explicit <code>false</code> and <code>0</code> override inherited values. Nested <code>children</code> inherit their parent policy; their paths are still relative to the app mount.</p>
+          </aside>
+        </div>
+        <div class="modal-foot"><button type="button" class="btn" onclick="document.getElementById('nginx-routes-modal').close()">Cancel</button><button type="submit" class="btn primary">Use policies</button></div>
+      </form>
+    </dialog>
+    <dialog class="modal nginx-help-modal" id="nginx-help-modal" aria-labelledby="nginx-help-title">
+      <div class="modal-head"><h3 id="nginx-help-title">Setting help</h3><button type="button" class="btn small" aria-label="Close setting help" onclick="document.getElementById('nginx-help-modal').close()">✕</button></div>
+      <div class="modal-body" id="nginx-help-content"></div>
+      <div class="modal-foot"><button type="button" class="btn" onclick="document.getElementById('nginx-help-modal').close()">Got it</button></div>
+    </dialog>
+    <dialog class="modal nginx-reference-modal" id="nginx-reference-modal" aria-labelledby="nginx-reference-title">
+      <div class="modal-head"><h3 id="nginx-reference-title">Nginx setup quick reference</h3><button type="button" class="btn small" aria-label="Close setup quick reference" onclick="document.getElementById('nginx-reference-modal').close()">✕</button></div>
+      <div class="modal-body">
+        <p class="muted">Starting points for managed sites. Use the field names below in the site editor; set explicit values when your global defaults differ.</p>
+        <h4>Connect the app</h4>
+        <ol>
+          <li>Choose a domain, subdomain, or subfolder and set <strong>Upstream URL</strong> to the app's internal HTTP/HTTPS address.</li>
+          <li>Choose <strong>LAN only</strong>. A public site needs <strong>No</strong>; a private site needs an allowlist in Global settings. A child cannot remove its parent domain's LAN restriction.</li>
+          <li>For a domain that serves an app, set <strong>Return 404 at domain root</strong> to <strong>No</strong>. Enable subfolders only when needed. Enable a child's parent domain before enabling the child, and configure its TLS certificate.</li>
+        </ol>
+        <h4>Choose a profile</h4>
+        <div class="table-wrap nginx-reference-table" tabindex="0" role="region" aria-label="Site profiles; scroll horizontally on small screens">
+          <table class="table">
+            <thead><tr><th scope="col">Use case</th><th scope="col">Cache policy</th><th scope="col">Stream responses</th><th scope="col">Byte ranges</th><th scope="col">Long-lived connections</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">PWA without media</th><td><code>pwa</code></td><td>No</td><td>No</td><td>No</td></tr>
+              <tr><th scope="row">PWA with media</th><td><code>pwa</code></td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+              <tr><th scope="row">WordPress without media</th><td><code>inherit</code></td><td>No</td><td>No</td><td>No</td></tr>
+              <tr><th scope="row">WordPress with photos</th><td><code>inherit</code></td><td>No</td><td>No</td><td>No</td></tr>
+              <tr><th scope="row">WordPress with video/audio</th><td><code>inherit</code></td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+              <tr><th scope="row">Media server: video, photo, audio, books</th><td><code>inherit</code></td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="hint">Set <strong>Cache policy</strong> explicitly as shown. PWA profiles need versioned static asset URLs because they receive long-lived cache headers. <code>inherit</code> adds no cache policy; the app's headers still apply. Use <code>no_cache</code> on private/authentication routes. For small photo/book libraries, streaming and long-lived connections are optional; byte ranges help seeking and PDF/download resumes.</p>
+        <h4>Uploads, playback, and authentication</h4>
+        <ul>
+          <li><strong>Body size limit</strong> caps request uploads, not downloads. <code>128M</code> is a starting upload cap; match it to the app's needs.</li>
+          <li>For big media/library uploads, set <strong>Large uploads = Yes</strong> and choose <strong>Large upload limit</strong>, for example <code>1G</code>. This separate limit replaces Body size limit while enabled. Match backend/PHP upload limits too.</li>
+          <li><strong>Stream responses</strong> delivers data without response buffering. <strong>Byte ranges</strong> supports seeking/resuming. Long-lived connections and large uploads use <strong>Session timeout</strong> (default <code>3600s</code>); large uploads also use <strong>Upload idle timeout</strong> (default <code>3600s</code>).</li>
+          <li>WebSockets work with the default <strong>Transport = websocket</strong>. Use <code>sse</code> only on an event-stream route. For backends needing HTTP authentication passthrough, such as Calibre, set <strong>Backend authentication = Yes</strong>.</li>
+        </ul>
+        <details class="nginx-reference-example">
+          <summary>PWA / SPA: keep API errors real and admin pages private</summary>
+          <p>Only if the app uses client-side routes, set <strong>SPA fallback URI</strong> to <code>/index.html</code>. Exclude its API/auth paths from that fallback. In <strong>Route policies (JSON, optional)</strong>, adapt these paths and merge with any existing routes:</p>
+          <pre class="log" data-nginx-route-example="spa">[
+  {"path":"/api/","spa_fallback":"","cache_policy":"no_cache","enable_byte_ranges":false},
+  {"path":"/admin","enable_lanonly":true,"spa_fallback":"","cache_policy":"no_cache","enable_byte_ranges":false}
+]</pre>
+          <p class="hint">Do not use SPA fallback for WordPress. A mounted app must support its public subfolder/base URL. Route paths are relative to the app: use <code>/admin</code>, not <code>/myapp/admin</code>.</p>
+        </details>
+        <details class="nginx-reference-example">
+          <summary>WordPress: uncached admin/login and login rate limiting</summary>
+          <p>Set <strong>Cache policy = inherit</strong>. Add these entries to <strong>Route policies (JSON, optional)</strong>; the bundled login zone is ready to use:</p>
+          <pre class="log" data-nginx-route-example="wordpress">[
+  {"path":"/wp-admin/","cache_policy":"no_cache","enable_byte_ranges":false},
+  {"path":"/wp-login.php","match":"exact","cache_policy":"no_cache","enable_byte_ranges":false,"rate_limit":{"zone":"wplogin","burst":3}}
+]</pre>
+          <p class="hint">Normal pages follow the backend's cache headers. Login/admin routes get no-store headers. Configure actual user authentication in WordPress.</p>
+        </details>
+        <details class="nginx-reference-example">
+          <summary>Live updates: add an SSE route</summary>
+          <p>If the app exposes an SSE endpoint, adapt its path and merge this entry into <strong>Route policies (JSON, optional)</strong>:</p>
+          <pre class="log" data-nginx-route-example="sse">[
+  {"path":"/api/updates","proxy_transport":"sse","cache_policy":"no_cache","enable_byte_ranges":false,"spa_fallback":"","proxy_session_timeout":"300s"}
+]</pre>
+          <p class="hint">This clears Connection and disables response buffering on that route. Other routes retain WebSocket support. Keep <strong>Clear Origin header = No</strong> unless the backend specifically requires otherwise.</p>
+        </details>
+      </div>
+      <div class="modal-foot"><button type="button" class="btn" onclick="document.getElementById('nginx-reference-modal').close()">Close</button></div>
+    </dialog>
+    <dialog class="modal rewrites-modal" id="dnsmasq-hosts-modal">
+      <div class="modal-head"><h3>DHCP reservations</h3><button class="btn small" onclick="closeDnsmasqHosts()">✕</button></div>
+      <div class="modal-body"><p class="hint">Only <code>dhcp-host</code> lines are managed. Interfaces, comments, and other directives are kept in <code>/jffs/configs/dnsmasq.conf.add</code> but are not shown here.</p><div class="table-wrap"><table class="table"><thead><tr><th><button class="table-sort" data-sort-table="dnsmasq" data-sort-key="mac" onclick="sortTable('dnsmasq','mac')">MAC address <span class="table-sort-indicator">↕</span></button></th><th><button class="table-sort" data-sort-table="dnsmasq" data-sort-key="hostname" onclick="sortTable('dnsmasq','hostname')">Hostname <span class="table-sort-indicator">↕</span></button></th><th><button class="table-sort" data-sort-table="dnsmasq" data-sort-key="ip" onclick="sortTable('dnsmasq','ip')">IP address <span class="table-sort-indicator">↕</span></button></th><th>Actions</th></tr></thead><tbody id="dnsmasq-hosts-body"></tbody></table></div><div style="margin-top:12px"><button class="btn" onclick="addDnsmasqHost()">Add DHCP reservation</button></div></div>
+      <div class="modal-foot"><button class="btn" onclick="closeDnsmasqHosts()">Cancel</button><button class="btn primary" onclick="saveDnsmasqHosts()">Save and restart dnsmasq</button></div>
+    </dialog>
+    <dialog class="modal" id="log-modal">
+      <div class="modal-head">
+        <h3 id="log-title">Output</h3><button class="btn small"
+          onclick="document.getElementById('log-modal').close()">✕</button>
+      </div>
+      <div class="modal-body">
+        <pre class="log" id="log-content"></pre>
+      </div>
+    </dialog>
+    <dialog class="modal" id="notes-modal">
+      <div class="modal-head">
+        <h3 id="notes-title">Notes</h3><button class="btn small"
+          onclick="document.getElementById('notes-modal').close()">✕</button>
+      </div>
+      <div class="modal-body" id="notes-content"></div>
+    </dialog>
+    <dialog class="modal bans-modal" id="bans-modal">
+      <div class="modal-head">
+        <h3>Active bans</h3><button class="btn small" onclick="closeActiveBans()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="bans-table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th><button class="table-sort" data-sort-table="bans" data-sort-key="network" onclick="sortTable('bans','network')">IP / subnet <span class="table-sort-indicator">↕</span></button></th>
+                <th><button class="table-sort" data-sort-table="bans" data-sort-key="reason" onclick="sortTable('bans','reason')">Reason <span class="table-sort-indicator">↕</span></button></th>
+                <th><button class="table-sort" data-sort-table="bans" data-sort-key="expires" onclick="sortTable('bans','expires')">Expires <span class="table-sort-indicator">↕</span></button></th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="bans-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </dialog>
+    <dialog class="modal rewrites-modal" id="rewrites-modal">
+      <div class="modal-head">
+        <h3>AdGuard DNS rewrites</h3><button class="btn small" onclick="closeAdguardRewrites()">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="hint">These are rewrites not managed by Router Hub’s nginx integration. Changes stay local until you save.</p>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th><button class="table-sort" data-sort-table="rewrites" data-sort-key="domain" onclick="sortTable('rewrites','domain')">Domain / site alias <span class="table-sort-indicator">↕</span></button></th><th><button class="table-sort" data-sort-table="rewrites" data-sort-key="answer" onclick="sortTable('rewrites','answer')">Answer <span class="table-sort-indicator">↕</span></button></th><th>Actions</th></tr></thead>
+            <tbody id="adguard-rewrites-body"></tbody>
+          </table>
+        </div>
+        <div style="margin-top:12px"><button class="btn" onclick="addAdguardRewrite()">Add rewrite</button></div>
+      </div>
+      <div class="modal-foot"><button class="btn" onclick="closeAdguardRewrites()">Cancel</button><button class="btn primary" onclick="saveAdguardRewrites()">Save rewrites</button></div>
+    </dialog>
+    <dialog class="modal rewrites-modal" id="hosts-modal">
+      <div class="modal-head">
+        <h3>AdGuard host management</h3><button class="btn small" onclick="closeAdguardHosts()">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="hint">Entries are written to <code>/jffs/configs/hosts.add</code>. Put multiple hostnames in the same row separated by spaces.</p>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th><button class="table-sort" data-sort-table="hosts" data-sort-key="ip" onclick="sortTable('hosts','ip')">IP address <span class="table-sort-indicator">↕</span></button></th><th><button class="table-sort" data-sort-table="hosts" data-sort-key="hostnames" onclick="sortTable('hosts','hostnames')">Hostnames <span class="table-sort-indicator">↕</span></button></th><th>Actions</th></tr></thead>
+            <tbody id="adguard-hosts-body"></tbody>
+          </table>
+        </div>
+        <div style="margin-top:12px"><button class="btn" onclick="addAdguardHost()">Add host mapping</button></div>
+      </div>
+      <div class="modal-foot"><button class="btn" onclick="closeAdguardHosts()">Cancel</button><button class="btn primary" onclick="saveAdguardHosts()">Save and restart dnsmasq</button></div>
+    </dialog>
+    <div class="toast" id="toast"></div>
+  </div>
+  <script>

@@ -1,0 +1,63 @@
+      <section class="view" id="view-wireguard">
+        <div class="card">
+          <div class="card-head">
+            <h2>WireGuard Interface</h2>
+            <div class="actions">
+              <span id="wireguard-status-badge"></span>
+              <button class="btn primary" onclick="toggleWireguard(true)">UP</button>
+              <button class="btn danger" onclick="toggleWireguard(false)">DOWN</button>
+            </div>
+          </div>
+          <form id="wireguard-form" class="form" onsubmit="saveWireguardSettings(event)">
+            <div class="form-grid">
+              <div class="field full">
+                <label>Private Key</label>
+                <input class="input" type="password" name="private_key">
+              </div>
+              <div class="field">
+                <label>Address</label>
+                <input class="input" name="address" placeholder="10.0.0.1/24">
+              </div>
+              <div class="field">
+                <label>Listen Port</label>
+                <input class="input" name="listen_port" type="number" placeholder="51820">
+              </div>
+              <div class="field">
+                <label>PostUp</label>
+                <input class="input" name="post_up">
+              </div>
+              <div class="field">
+                <label>PostDown</label>
+                <input class="input" name="post_down">
+              </div>
+            </div>
+            <div style="margin-top:14px">
+              <button type="submit" class="btn primary">Save Interface</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>WireGuard Peers</h2>
+            <div class="actions">
+              <button class="btn" onclick="addWireguardPeer()">Add Peer</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Public Key</th>
+                  <th>Allowed IPs</th>
+                  <th>Endpoint</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="wireguard-peers-body">
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+

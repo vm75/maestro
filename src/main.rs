@@ -1,5 +1,5 @@
-mod adguard;
 mod api;
+#[path = "platforms/asus_ui.rs"]
 mod asus_ui;
 mod auth;
 mod backup;
@@ -7,18 +7,20 @@ mod ban_attack;
 mod certificate_http;
 mod command;
 mod config;
-mod firewall;
+mod core;
 mod models;
-mod nginx;
+mod modules;
 mod nginx_ingress;
 mod nginx_mutation;
 mod nginx_render;
-mod nginx_sites;
+#[path = "platforms/nginx_upgrade.rs"]
 mod nginx_upgrade;
+mod platforms;
 mod restore;
 mod state;
 mod storage;
 mod system;
+#[path = "platforms/upgrade.rs"]
 mod upgrade;
 mod util;
 
@@ -33,6 +35,9 @@ use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
+
+// Stable crate-root aliases while domain sources move beneath modules/.
+use modules::{adguard, firewall, nginx, nginx_sites};
 
 use crate::{
     asus_ui::{install_menu_entry, render_ui_file},

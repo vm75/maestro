@@ -1,0 +1,42 @@
+      <section class="view" id="view-certificates">
+        <div class="card certificate-http-card">
+          <div class="card-head">
+            <h2>HTTP certificate access</h2>
+            <button class="btn small" onclick="closeCertificateHttpAccess()">Retry closure</button>
+          </div>
+          <div class="certificate-http-body">
+            <p id="certificate-http-status" aria-live="polite">Loading…</p>
+          </div>
+        </div>
+        <div class="notice warn">Certificates use the dehydrated script and hooks in the configured data directory.
+          HTTP challenges use the configured dehydrated <code>acme-challenge</code> directory; DNS certificates require
+          an installed hook (or the default data-directory hook) and its environment values. Existing matching
+          <code>.cfg</code>/<code>.txt</code> pairs are imported when Router Hub starts.</div>
+        <div class="notice warn" id="certificate-lock-notice" hidden>
+          <span id="certificate-lock-message"></span>
+          <code id="certificate-lock-path" hidden></code>
+          <button class="btn small danger" id="certificate-lock-clear" onclick="clearDehydratedLock()" hidden>Clear lock</button>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2>Let's Encrypt certificates</h2>
+            <div class="actions"><button class="btn" onclick="updateDehydrated()">Update dehydrated</button><button
+                class="btn primary" onclick="editCertificate()">Add certificate</button></div>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Domains</th>
+                  <th>Method</th>
+                  <th>Expiry</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="certs-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+

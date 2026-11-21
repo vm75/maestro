@@ -5,9 +5,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 use crate::config::AppConfig;
 
-const UI: &str = include_str!("../web/index.html");
-const ASP_TEMPLATE: &str = include_str!("../config/asus-wrt.asp.template");
-const LOGO_SVG: &str = include_str!("../router-hub.svg");
+const UI: &str = include_str!("../../web/index.html");
+const ASP_TEMPLATE: &str = include_str!("../../config/asus-wrt.asp.template");
+const LOGO_SVG: &str = include_str!("../../router-hub.svg");
 
 pub fn render_ui(config: &AppConfig) -> String {
     render_ui_with_token(config, None)
@@ -174,6 +174,26 @@ mod tests {
         assert!(!standalone.contains(">Start nginx<"));
         assert!(!standalone.contains(">Stop nginx<"));
 
+        assert_eq!(standalone.matches("<script>").count(), 1);
+        assert_eq!(standalone.matches("<style>").count(), 1);
+        assert!(standalone.contains("rhNavigationGroups"));
+        assert!(standalone.contains("rhLoadModules"));
+        assert!(standalone.contains("data-dashboard-widget"));
+        for view in [
+            "dashboard",
+            "services",
+            "nginx",
+            "certificates",
+            "wol",
+            "firewall",
+            "adguard",
+            "wireguard",
+        ] {
+            assert!(standalone.contains(&format!("id=\"view-{view}\"")));
+        }
+        assert!(!standalone.contains("<script src="));
+        assert!(!standalone.contains("<link rel=\"stylesheet\""));
+
         let rendered = render_asus_ui(&config);
         assert!(rendered.contains("my-secret-token"));
         assert!(!rendered.contains("<!-- contents -->"));
@@ -191,6 +211,8 @@ mod tests {
         );
         assert!(rendered.contains("new MutationObserver"));
         assert!(rendered.contains("rhInstallAsusTabs(asusTabs)"));
+        assert!(rendered.contains("rhNavigationGroups"));
+        assert!(!rendered.contains("<script src="));
     }
 
     #[test]

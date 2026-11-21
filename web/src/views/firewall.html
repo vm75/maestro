@@ -1,0 +1,84 @@
+      <section class="view" id="view-firewall">
+        <div class="card pad" id="fw-health" style="margin-bottom:12px">
+          <h2 style="margin-top:0;font-size:13px">Ban shield performance</h2>
+          <p>Loading firewall health…</p>
+        </div>
+        <div class="grid">
+          <div class="card pad span-4">
+            <h2 style="margin-top:0;font-size:13px">Protection</h2>
+            <div class="notice" id="fw-ban-summary">Active bans: — subnet · — IP</div>
+            <div class="protection-setting">
+              <label class="field" for="fw-enabled"><span>Engine</span><select id="fw-enabled" class="input">
+                  <option value="false">Disabled</option>
+                  <option value="true">Enabled</option>
+                </select></label>
+              <button class="btn primary" onclick="saveFirewallToggle()">Save</button>
+            </div>
+            <hr style="border:0;border-top:1px solid #2a4050;margin:14px 0">
+            <h3 style="font-size:13px">Allowlist</h3>
+            <div class="shield-input-row"><input class="input" aria-label="Network to allow" id="allow-network" placeholder="192.168.1.0/24"><button
+                class="btn" onclick="addAllowlist()">Add</button></div>
+            <div id="allow-list" style="margin-top:8px"></div>
+            <hr style="border:0;border-top:1px solid #2a4050;margin:14px 0">
+            <h3 style="font-size:13px">Quick actions</h3>
+            <div class="protection-actions">
+              <button class="btn" onclick="showActiveBans()">Active bans</button>
+              <div class="manual-ban"><input class="input" aria-label="Network to ban for one hour" id="manual-ban" placeholder="203.0.113.4/32"><button
+                  class="btn danger" onclick="manualBan()">Ban 1 hour</button></div>
+            </div>
+          </div>
+          <div class="card span-8">
+            <div class="card-head">
+              <h2>Detection rules</h2><button class="btn primary" onclick="editRule()">Add rule</button>
+            </div>
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Weight / threshold</th>
+                    <th>Hits / bans</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="rules-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="card pad">
+          <div class="toolbar">
+            <div><strong>Security tuning</strong><div class="hint">Adjust detection thresholds, retention, and ban durations. Changes apply immediately when saved.</div></div>
+            <div class="actions"><span class="muted" id="fw-tuning-source"></span><button type="button" class="btn" onclick="applyStrictFirewallPreset()">Load strict preset</button></div>
+          </div>
+          <div class="notice warn">Score retention and subnet promotion memory must outlast the minimum subnet ban; reputation retention must outlast the maximum ban. The strict preset is intentionally less forgiving and may block shared hosting or carrier networks when multiple clients share a subnet.</div>
+          <form id="firewall-settings-form" class="form" onsubmit="saveFirewallSettings(event)">
+            <fieldset class="shield-tuning-section"><legend>Detection thresholds</legend>
+              <div class="form-grid">
+              <div class="field"><label for="fw-ip_failures">IP failure threshold</label><input class="input" type="number" min="1" id="fw-ip_failures" name="ip_failures" required></div>
+              <div class="field"><label for="fw-subnet_failures">Subnet score threshold</label><input class="input" type="number" min="1" id="fw-subnet_failures" name="subnet_failures" required></div>
+              <div class="field"><label for="fw-promote_after_banned_ips">Distinct IPs for subnet promotion</label><input class="input" type="number" min="2" id="fw-promote_after_banned_ips" name="promote_after_banned_ips" required></div>
+              <div class="field"><label for="fw-reputation_repromote_after_offenses">Prior subnet offenses before fast re-promotion</label><input class="input" type="number" min="1" id="fw-reputation_repromote_after_offenses" name="reputation_repromote_after_offenses" required><span class="hint">1 means a previously promoted subnet is re-banned when one address reaches the IP threshold.</span></div>
+              </div>
+            </fieldset>
+            <fieldset class="shield-tuning-section"><legend>Memory and retention</legend>
+              <div class="form-grid">
+              <div class="field"><label for="fw-score_retention_days">Score retention (days)</label><input class="input" type="number" min="1" id="fw-score_retention_days" name="score_retention_days" required></div>
+              <div class="field"><label for="fw-subnet_promotion_window_days">Subnet promotion memory (days)</label><input class="input" type="number" min="1" id="fw-subnet_promotion_window_days" name="subnet_promotion_window_days" required></div>
+              <div class="field"><label for="fw-reputation_retention_days">Reputation retention (days)</label><input class="input" type="number" min="1" id="fw-reputation_retention_days" name="reputation_retention_days" required></div>
+              </div>
+            </fieldset>
+            <fieldset class="shield-tuning-section"><legend>Ban durations</legend>
+              <div class="form-grid">
+              <div class="field"><label for="fw-subnet_ban_days">Minimum subnet ban (days)</label><input class="input" type="number" min="1" id="fw-subnet_ban_days" name="subnet_ban_days" required></div>
+              <div class="field"><label for="fw-first_ban_days">First ban (days)</label><input class="input" type="number" min="1" id="fw-first_ban_days" name="first_ban_days" required></div>
+              <div class="field"><label for="fw-second_ban_days">Second ban (days)</label><input class="input" type="number" min="1" id="fw-second_ban_days" name="second_ban_days" required></div>
+              <div class="field"><label for="fw-third_ban_days">Third ban (days)</label><input class="input" type="number" min="1" id="fw-third_ban_days" name="third_ban_days" required></div>
+              <div class="field"><label for="fw-max_ban_days">Maximum ban (days)</label><input class="input" type="number" min="1" id="fw-max_ban_days" name="max_ban_days" required></div>
+              </div>
+            </fieldset>
+            <div class="actions" style="margin-top:12px"><button type="submit" class="btn primary">Save security tuning</button></div>
+          </form>
+        </div>
+      </section>
+
