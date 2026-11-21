@@ -93,6 +93,9 @@ jobs:
       - name: Run tests
         run: cargo +1.85.0 test --locked
 
+      - name: Validate AArch64 lab scripts with mocked QEMU
+        run: bash tests/test_lab_aarch64.sh
+
       - name: Run Clippy
         run: cargo +1.85.0 clippy --all-targets --locked -- -D warnings
 

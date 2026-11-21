@@ -324,7 +324,7 @@ The installer:
 2. creates `/opt/etc/maestro/maestro.toml` and a random authentication
    token on first install;
 3. installs Maestro's main nginx configuration, saving a different existing
-   file as `nginx.conf.before-router-hub-<unique-id>` and printing its path;
+   file as `nginx.conf.before-maestro-<unique-id>` and printing its path;
    preserves saved inputs and existing shared/custom files, creates missing
    bundled files and runtime/data directories;
 4. configures Mosquitto credentials in `/opt/etc/mosquitto/passwd` if `--mosquitto-user` and `--mosquitto-pass` (or `MOSQUITTO_USER` / `MOSQUITTO_PASS` env vars) are supplied;

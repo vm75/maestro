@@ -259,7 +259,7 @@ current set entries.
 
 The production backend manages IPv4 and IPv6 `hash:net` ipsets and owned
 `ROUTER_HUB_INPUT`/`ROUTER_HUB_FORWARD` chains. Owned rules carry the
-`router-hub:ban-attack` comment, and disabling the policy removes only Router
+`router-hub:ban-attack` comment, and disabling the policy removes only legacy Router
 Hub's parent hooks; administrator or other-tool rules are not removed. The
 application path currently supplies a 65,536-entry ipset capacity; the lower
 level engine type accepts a configurable capacity, but there is not yet an

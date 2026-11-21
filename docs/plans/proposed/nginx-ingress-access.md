@@ -28,7 +28,7 @@ Host checks executed during implementation:
   combinations, 16 legacy variants and live routing/WebSocket checks.
 - `make test-linux`: passed using the repository Python environment and a
   temporary real-nginx lab, with firewall enforcement disabled.
-- `node scripts/test-nginx-ui.mjs target/debug/router-hub /usr/sbin/chromium`:
+- `node scripts/test-nginx-ui.mjs target/debug/maestro /usr/sbin/chromium`:
   passed normal controls, path blocks, retained drafts/advanced routes, stale
   preview handling, container-only controls, narrow layout, keyboard and offline
   failure behavior. No npm/frontend build chain added.
@@ -215,7 +215,7 @@ Show this relationship in the UI rather than adding competing HTTP toggles.
   HTTP-01 operations fail with an actionable configuration error. DNS-01 remains
   available and never opens HTTP access.
 - **Certificate validation only:** close managed nginx HTTP listeners and WAN
-  access on Router Hub startup, before starting automatic renewal work. Open
+  access on Maestro startup, before starting automatic renewal work. Open
   them temporarily only for actual HTTP-01 issuance/renewal, then close them
   when the batch completes. Normal HTTP-to-HTTPS redirects are unavailable.
 - **Always on with redirects:** preserve explicitly configured public HTTP
@@ -231,7 +231,7 @@ to DNS-01 rather than temporarily changing their DNS or exposing private apps.
 
 The controller owns only declared managed HTTP endpoints and its own temporary
 WAN rules. Do not stop nginx, modify HTTPS listeners, or disable unrelated HTTP
-services such as the Router Hub API or firmware UI. Inventory custom nginx
+services such as the Maestro API or firmware UI. Inventory custom nginx
 listeners and other WAN/NAT rules before enabling renewal-only mode; reject or
 report conflicts instead of claiming the port is closed while another listener
 or rule still exposes it. Disabling the redirect vhost alone is insufficient:
@@ -298,7 +298,7 @@ require their own verified lifecycle integration.
 Startup cleanup and ordinary error handling do not close access while Router
 Hub is dead. Persist only enough session ownership/state for recovery, and
 include an independent bounded expiry/cleanup mechanism before claiming
-crash-safe closure. A background timer in the same Router Hub process is not
+crash-safe closure. A background timer in the same Maestro process is not
 independent. On expiry, terminate managed validation work as needed and close
 access; a later retry starts a new session. Select a finite batch window that
 allows multi-certificate validation and retries, rather than assuming the

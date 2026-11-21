@@ -61,3 +61,7 @@ Stop `S99maestro`, uninstall its IPK, and reinstall the previously verified Rout
 ## Phase 1.5 validation gate
 
 Before merging/releasing, run `cargo fmt --all -- --check`, `cargo test --locked`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo build --release --locked`, `make test-ui`, `make test-ipk`, `make test-linux` and router hardware verification. Test clean install, legacy IPK migration, reboot, backup/restore and rollback on a disposable router/lab. Phase 2 begins only after the M1.5 gate is accepted.
+
+## Compatibility identifiers retained deliberately
+
+Until the GitHub repository is separately renamed, release/update endpoints and source links still use `vm75/router-hub`. The IPK retains the legacy CLI symlink and explicit package conflict; the API retains old static-asset aliases and browser-token fallback. Existing firewall chain names (`ROUTER_HUB_*`), rule ownership comments, and stored nginx settings markers stay readable to avoid orphaning deployed resources or altering persisted site inputs. Existing QEMU guest disks can still mount the legacy `router-hub` 9p tag, while newly provisioned guests use `maestro` and `/mnt/maestro`. Old installation paths remain readable only for migration, rollback, or tests of those paths.
