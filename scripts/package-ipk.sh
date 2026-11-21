@@ -49,7 +49,7 @@ Maintainer: Maestro contributors
 Section: admin
 Priority: optional
 Installed-Size: $(du -sk "$DATA" | cut -f1)
-Source: https://github.com/vm75/maestro
+Source: https://github.com/vm75/router-hub
 Description: Maestro management UI and services for Asuswrt-Merlin
 EOF
 cat > "$CONTROL/postinst" <<'EOF'

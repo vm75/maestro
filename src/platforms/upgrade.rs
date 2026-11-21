@@ -18,8 +18,8 @@ use crate::{
     config::{AppConfig, Platform},
 };
 
-const RELEASE_API: &str = "https://api.github.com/repos/vm75/maestro/releases/latest";
-const RELEASE_BASE: &str = "https://github.com/vm75/maestro/releases/download";
+const RELEASE_API: &str = "https://api.github.com/repos/vm75/router-hub/releases/latest";
+const RELEASE_BASE: &str = "https://github.com/vm75/router-hub/releases/download";
 const ARCH: &str = "aarch64-3.10";
 const OPKG: &str = "/opt/bin/opkg";
 const MAX_IPK_BYTES: u64 = 64 * 1024 * 1024;

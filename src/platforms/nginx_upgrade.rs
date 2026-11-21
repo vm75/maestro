@@ -29,7 +29,7 @@ use crate::{
     config::{AppConfig, Platform},
 };
 
-pub const RELEASES_API: &str = "https://api.github.com/repos/vm75/maestro/releases?per_page=100";
+pub const RELEASES_API: &str = "https://api.github.com/repos/vm75/router-hub/releases?per_page=100";
 const MAX_RELEASE_PAGES: usize = 10;
 const OPKG_TIMEOUT: Duration = Duration::from_secs(300);
 const RELOAD_TIMEOUT: Duration = Duration::from_secs(20);
@@ -42,8 +42,8 @@ const MODULE_FILES: [&str; 4] = [
     "ngx_stream_module.so",
     "ngx_http_headers_more_filter_module.so",
 ];
-pub const TAG_API_BASE: &str = "https://api.github.com/repos/vm75/maestro/releases/tags";
-pub const RELEASE_BASE: &str = "https://github.com/vm75/maestro/releases/download";
+pub const TAG_API_BASE: &str = "https://api.github.com/repos/vm75/router-hub/releases/tags";
+pub const RELEASE_BASE: &str = "https://github.com/vm75/router-hub/releases/download";
 pub const ARCH: &str = "aarch64-3.10";
 pub const OPKG: &str = "/opt/bin/opkg";
 pub const MAX_IPK_BYTES: u64 = 64 * 1024 * 1024;
