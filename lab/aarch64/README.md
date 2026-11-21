@@ -67,10 +67,12 @@ and `AARCH64_UEFI` for a firmware path. Both scripts use these defaults regardle
 of the host working directory. Direct launcher calls also accept `--disk`,
 `--iso`, and `--uefi`.
 
+QEMU also exports the old `router-hub` 9p mount tag read-only so existing guest disks can still boot. New installs and reprovisioned guests use only `/mnt/maestro`; the legacy guest mount is replaced on reprovision.
+
 ## 3. Install Alpine Linux in the Guest
 
 `make init-lab` automatically loads `9pnet_virtio`, mounts the repository at
-`/mnt/router-hub`, and runs `setup-alpine` with the supplied answer file before
+`/mnt/maestro`, and runs `setup-alpine` with the supplied answer file before
 the login prompt. Erasure of the newly created `/dev/vda` is automatically
 confirmed using Alpine's `ERASE_DISKS` option.
 
@@ -79,9 +81,9 @@ installation error, log in as root and run these commands manually:
 
 ```sh
 modprobe 9pnet_virtio
-mkdir -p /mnt/router-hub
-mount -t 9p -o trans=virtio,version=9p2000.L,ro router-hub /mnt/router-hub
-setup-alpine -f /mnt/router-hub/lab/aarch64/setup-alpine.answers
+mkdir -p /mnt/maestro
+mount -t 9p -o trans=virtio,version=9p2000.L,ro maestro /mnt/maestro
+setup-alpine -f /mnt/maestro/lab/aarch64/setup-alpine.answers
 ```
 
 The answers select hostname `router.emu`, DHCP on `eth0`, automatic IPv6,
@@ -89,7 +91,7 @@ timezone `PST8PDT`, BusyBox NTP, the first CDN mirror, no additional user,
 Dropbear SSH, and a **sys** install on `/dev/vda`. The lab-only root password
 is `abcd1234`. Manual invocation still asks for disk-erasure confirmation.
 Alpine installs into `/mnt/router-lab`, keeping its recursive mount cleanup
-separate from the live repository at `/mnt/router-hub`.
+separate from the live repository at `/mnt/maestro`.
 After Alpine installs, the installer mounts `/dev/vda3`, prepares a chroot with
 DNS, temporary runtime filesystems and the project share, and runs provisioning
 against the installed disk. It then unmounts those filesystems and powers off.
@@ -136,9 +138,9 @@ Run these commands as root inside the VM (omit the mount commands if already mou
 
 ```sh
 modprobe 9pnet_virtio
-mkdir -p /mnt/router-hub
-mount -t 9p -o trans=virtio,version=9p2000.L,ro router-hub /mnt/router-hub
-sh /mnt/router-hub/lab/aarch64/provision.sh
+mkdir -p /mnt/maestro
+mount -t 9p -o trans=virtio,version=9p2000.L,ro maestro /mnt/maestro
+sh /mnt/maestro/lab/aarch64/provision.sh
 ```
 
 Provisioning selects the most recently modified Maestro IPK in the shared
@@ -146,8 +148,8 @@ Provisioning selects the most recently modified Maestro IPK in the shared
 package when needed:
 
 ```sh
-PACKAGE=/mnt/router-hub/dist/maestro_VERSION-1_aarch64-3.10.ipk \
-  sh /mnt/router-hub/lab/aarch64/provision.sh
+PACKAGE=/mnt/maestro/dist/maestro_VERSION-1_aarch64-3.10.ipk \
+  sh /mnt/maestro/lab/aarch64/provision.sh
 ```
 
 Replace `VERSION` with the packaged version. Provisioning records the mount in

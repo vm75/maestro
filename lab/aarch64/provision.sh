@@ -42,7 +42,7 @@ COMMUNITY_REPO=$(sed -n 's|^\(https\{0,1\}://.*/\)main/*$|\1community|p' /etc/ap
 apk add --no-cache --repository "$COMMUNITY_REPO" stunnel
 
 # The installer or guest console mounted the repository. Retain it across reboots.
-if [ "$LAB_OFFLINE" = 1 ] || mountpoint -q /mnt/router-hub; then
+if [ "$LAB_OFFLINE" = 1 ] || mountpoint -q /mnt/maestro; then
     sh "$SCRIPT_DIR/configure-share.sh"
 fi
 

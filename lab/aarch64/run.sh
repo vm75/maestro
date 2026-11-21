@@ -169,6 +169,8 @@ QEMU_CMD=(
     -nographic
     -bios "$AARCH64_UEFI"
     -drive "file=$DISK,format=qcow2,if=virtio"
+    -virtfs "local,path=$REPO_DIR,mount_tag=maestro,security_model=none,readonly=on"
+    # Legacy read-only tag keeps existing guest disks mountable until reprovisioning.
     -virtfs "local,path=$REPO_DIR,mount_tag=router-hub,security_model=none,readonly=on"
     -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:${PORT_HTTP}-:8080,hostfwd=tcp:127.0.0.1:${PORT_HTTPS}-:8443,hostfwd=tcp:127.0.0.1:${PORT_API}-:3030"
 )
@@ -210,7 +212,7 @@ if [[ -n "$ISO" ]]; then
 else
     echo "  Mode:     Normal guest boot"
 fi
-echo "  Share:    $REPO_DIR (read-only, mount at /mnt/router-hub)"
+echo "  Share:    $REPO_DIR (read-only, mount at /mnt/maestro)"
 
 echo ""
 echo "Press Ctrl+A then X to exit QEMU."
