@@ -48,18 +48,19 @@ impl ServiceManager for InitScriptServiceManager {
         name: String,
         action: String,
     ) -> Result<CommandResult, ApiError> {
-        Ok(crate::platforms::init_scripts::action(
-            State(state),
-            AxumPath((name, action)),
+        Ok(
+            crate::platforms::init_scripts::action(State(state), AxumPath((name, action)))
+                .await?
+                .0,
         )
-        .await?
-        .0)
     }
 
     async fn logs(&self, state: AppState, name: String) -> Result<ApiMessage, ApiError> {
-        Ok(crate::platforms::init_scripts::logs(State(state), AxumPath(name))
-            .await?
-            .0)
+        Ok(
+            crate::platforms::init_scripts::logs(State(state), AxumPath(name))
+                .await?
+                .0,
+        )
     }
 }
 

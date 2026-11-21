@@ -10,12 +10,12 @@ mod config;
 mod core;
 mod models;
 mod modules;
-mod platforms;
 mod nginx_ingress;
 mod nginx_mutation;
 mod nginx_render;
 #[path = "platforms/nginx_upgrade.rs"]
 mod nginx_upgrade;
+mod platforms;
 mod restore;
 mod state;
 mod storage;

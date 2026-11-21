@@ -194,7 +194,10 @@ pub fn validate_registry(specs: &[ModuleSpec]) -> Result<(), String> {
     for spec in specs {
         for dependency in spec.dependencies {
             let required = by_id.get(dependency).ok_or_else(|| {
-                format!("module {} requires missing dependency {dependency}", spec.id)
+                format!(
+                    "module {} requires missing dependency {dependency}",
+                    spec.id
+                )
             })?;
             for target in spec.targets {
                 if !required.targets.contains(target) {
@@ -248,9 +251,7 @@ pub fn discover(config: &AppConfig) -> Discovery {
                 "asus_menu" if !config.asus_ui.enabled || config.test_mode => {
                     Availability::Disabled
                 }
-                "router_upgrade" | "nginx_upgrade" if config.test_mode => {
-                    Availability::Disabled
-                }
+                "router_upgrade" | "nginx_upgrade" if config.test_mode => Availability::Disabled,
                 "adguard" if !config.adguard.enabled => Availability::Disabled,
                 "services" if !config.services.init_dir.is_dir() => Availability::Unavailable,
                 "nginx" if !config.nginx.config_path.exists() => Availability::Unavailable,

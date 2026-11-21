@@ -140,7 +140,10 @@ async fn test_modules_discovery_is_authenticated_and_platform_scoped() {
     let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(result["platform"], "asuswrt");
     let modules = result["modules"].as_array().unwrap();
-    let nginx = modules.iter().find(|module| module["id"] == "nginx").unwrap();
+    let nginx = modules
+        .iter()
+        .find(|module| module["id"] == "nginx")
+        .unwrap();
     assert_eq!(nginx["ui"][0]["tab"], "web");
     let router_upgrade = modules
         .iter()
