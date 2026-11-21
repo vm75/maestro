@@ -81,16 +81,16 @@ impl AppConfig {
         self.test_mode = true;
         self.server.bind = "127.0.0.1".into();
         self.server.port = 3030;
-        self.server.auth_token = "router-hub-test-token".into();
+        self.server.auth_token = "maestro-test-token".into();
         self.server.allowed_origins = vec!["*".into()];
         let fixture_root = config_path
             .ancestors()
             .find(|path| path.file_name() == Some("test-fixtures".as_ref()))
             .map(Path::to_path_buf)
             .unwrap_or_else(|| root.join("test-fixtures"));
-        self.paths.data_dir = fixture_root.join("etc/router-hub");
+        self.paths.data_dir = fixture_root.join("etc/maestro");
         self.paths.runtime_dir = fixture_root.join("var/run");
-        self.paths.log_file = fixture_root.join("var/log/router-hub.log");
+        self.paths.log_file = fixture_root.join("var/log/maestro.log");
         self.paths.hosts_add = fixture_root.join("router/hosts.add");
         self.paths.dnsmasq_conf_add = fixture_root.join("router/dnsmasq.add");
         self.paths.jffs_scripts_dir = fixture_root.join("router/scripts");
@@ -103,7 +103,7 @@ impl AppConfig {
         self.services.init_dir = fixture_root.join("etc/init.d");
         self.services.log_dirs = vec![fixture_root.join("var/log")];
         self.nginx.root_dir = fixture_root.join("etc/nginx");
-        self.nginx.inputs_dir = fixture_root.join("etc/router-hub/nginx");
+        self.nginx.inputs_dir = fixture_root.join("etc/maestro/nginx");
         self.nginx.config_path = fixture_root.join("etc/nginx/nginx.conf");
         self.nginx.pid_path = fixture_root.join("var/run/nginx.pid");
         self.nginx.domains_available_dir = fixture_root.join("etc/nginx/domains-available");
@@ -122,7 +122,7 @@ impl AppConfig {
         self.certificates.certs_dir = fixture_root.join("certs");
         self.certificates.dns01_hook = fixture_root.join("certs/dehydrated-dns01-hook.sh");
         self.asus_ui.enabled = false;
-        self.asus_ui.rendered_page = fixture_root.join("router/router-hub.asp");
+        self.asus_ui.rendered_page = fixture_root.join("router/maestro.asp");
         Ok(())
     }
 
@@ -769,7 +769,7 @@ mod tests {
         assert!(config.test_mode);
         assert_eq!(config.server.bind, "127.0.0.1");
         assert_eq!(config.server.port, 3030);
-        assert_eq!(config.server.auth_token, "router-hub-test-token");
+        assert_eq!(config.server.auth_token, "maestro-test-token");
         assert!(!config.asus_ui.enabled);
         assert!(config.validate().is_ok());
     }
@@ -777,14 +777,14 @@ mod tests {
     #[test]
     fn test_load_resolves_relative_paths_against_config_directory() {
         let temp = tempfile::tempdir().unwrap();
-        let config_path = temp.path().join("etc/router-hub/router-hub.toml");
+        let config_path = temp.path().join("etc/maestro/maestro.toml");
         fs::create_dir_all(config_path.parent().unwrap()).unwrap();
         fs::write(
             &config_path,
             r#"
                 [paths]
                 data_dir = "."
-                log_file = "../../var/log/router-hub.log"
+                log_file = "../../var/log/maestro.log"
                 [services]
                 log_dirs = ["../../var/log"]
                 [firewall]
@@ -802,7 +802,7 @@ mod tests {
         assert_eq!(config.paths.data_dir, config_path.parent().unwrap());
         assert_eq!(
             config.paths.log_file,
-            temp.path().join("var/log/router-hub.log")
+            temp.path().join("var/log/maestro.log")
         );
         assert_eq!(config.services.log_dirs, vec![temp.path().join("var/log")]);
         assert_eq!(
@@ -812,7 +812,7 @@ mod tests {
         assert_eq!(config.nginx.root_dir, temp.path().join("etc/nginx"));
         assert_eq!(
             config.nginx.inputs_dir,
-            temp.path().join("etc/router-hub/nginx")
+            temp.path().join("etc/maestro/nginx")
         );
         assert_eq!(
             config.nginx.config_path,
@@ -900,7 +900,7 @@ mod tests {
     #[test]
     fn test_dehydrated_and_hook_config_overrides() {
         let temp = tempfile::tempdir().unwrap();
-        let config_path = temp.path().join("router-hub.toml");
+        let config_path = temp.path().join("maestro.toml");
         fs::write(
             &config_path,
             r#"
@@ -920,7 +920,7 @@ mod tests {
             Path::new("/custom/bin/dns01-hook.sh")
         );
 
-        let config_path2 = temp.path().join("router-hub2.toml");
+        let config_path2 = temp.path().join("maestro2.toml");
         fs::write(
             &config_path2,
             r#"

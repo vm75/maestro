@@ -36,7 +36,7 @@ async fn setup() -> (tempfile::TempDir, AppState) {
         .apply_test_mode(
             &temp
                 .path()
-                .join("test-fixtures/etc/router-hub/router-hub.toml"),
+                .join("test-fixtures/etc/maestro/maestro.toml"),
         )
         .unwrap();
     config.ensure_directories().unwrap();
@@ -60,7 +60,7 @@ async fn request(
             Request::builder()
                 .method(method)
                 .uri(format!("/api{route}"))
-                .header("Authorization", "Bearer router-hub-test-token")
+                .header("Authorization", "Bearer maestro-test-token")
                 .header("Content-Type", "application/json")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
@@ -418,7 +418,7 @@ async fn processor(state: &AppState, delay: f32) -> (AppState, ProbeServer) {
                     .unwrap_or("");
                 let ready =
                     fs::read_to_string(http_file).is_ok_and(|content| content.contains("listen"));
-                let body = if ready && token.starts_with("router-hub-probe-") {
+                let body = if ready && token.starts_with("maestro-probe-") {
                     fs::read(token_dir.join(token)).unwrap_or_default()
                 } else {
                     vec![]
@@ -1762,7 +1762,7 @@ async fn failed_challenge_readiness_cleans_up_before_running_acme() {
             .unwrap()
             .file_name()
             .to_string_lossy()
-            .starts_with("router-hub-probe-")
+            .starts_with("maestro-probe-")
     }));
 }
 

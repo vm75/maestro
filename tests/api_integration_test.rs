@@ -11,7 +11,7 @@ use tower::ServiceExt;
 async fn setup_test_app() -> (axum::Router, AppState, tempfile::TempDir) {
     let temp = tempdir().unwrap();
     let root = std::env::current_dir().unwrap();
-    let config_path = root.join("test-fixtures/etc/router-hub/router-hub.toml");
+    let config_path = root.join("test-fixtures/etc/maestro/maestro.toml");
     let mut config = AppConfig::default();
     config.apply_test_mode(&config_path).unwrap();
     config.paths.data_dir = temp.path().join("data");
@@ -20,7 +20,7 @@ async fn setup_test_app() -> (axum::Router, AppState, tempfile::TempDir) {
     config.certificates.certs_dir = temp.path().join("dehydrated/certs");
     config.certificates.dns01_hook = temp.path().join("dehydrated/dehydrated-dns01-hook.sh");
     config.nginx.root_dir = temp.path().join("nginx");
-    config.nginx.inputs_dir = temp.path().join("router-hub/nginx");
+    config.nginx.inputs_dir = temp.path().join("maestro/nginx");
     config.nginx.config_path = config.nginx.root_dir.join("nginx.conf");
     config.nginx.pid_path = config.nginx.root_dir.join("nginx.pid");
     config.nginx.domains_available_dir = config.nginx.root_dir.join("domains-available");
@@ -129,7 +129,7 @@ async fn test_modules_discovery_is_authenticated_and_platform_scoped() {
 
     let authorized = Request::builder()
         .uri("/api/modules")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(authorized).await.unwrap();
@@ -150,7 +150,7 @@ async fn test_modules_discovery_is_authenticated_and_platform_scoped() {
         .find(|module| module["id"] == "router_upgrade")
         .unwrap();
     assert_eq!(router_upgrade["availability"], "disabled");
-    assert!(!result.to_string().contains("router-hub-test-token"));
+    assert!(!result.to_string().contains("maestro-test-token"));
 }
 
 #[tokio::test]
@@ -187,7 +187,7 @@ async fn test_auth_protection() {
     // Valid Bearer token -> 200
     let req = Request::builder()
         .uri("/api/auth/check")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -195,7 +195,7 @@ async fn test_auth_protection() {
 
     // Query tokens are deliberately not accepted.
     let req = Request::builder()
-        .uri("/api/auth/check?token=router-hub-test-token")
+        .uri("/api/auth/check?token=maestro-test-token")
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -208,7 +208,7 @@ async fn test_dashboard_endpoint() {
 
     let req = Request::builder()
         .uri("/api/dashboard")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -225,7 +225,7 @@ async fn test_dashboard_endpoint() {
 #[tokio::test]
 async fn test_dehydrated_certificate_api_and_files() {
     let (app, _state, temp) = setup_test_app().await;
-    let auth_header = ("authorization", "Bearer router-hub-test-token");
+    let auth_header = ("authorization", "Bearer maestro-test-token");
     let payload = serde_json::json!({
         "name": "example_test",
         "domains": ["example.test"],
@@ -366,7 +366,7 @@ async fn test_dehydrated_certificate_api_and_files() {
 #[tokio::test]
 async fn test_dns_certificate_uses_default_dns01_hook_from_config() {
     let (app, state, _temp) = setup_test_app().await;
-    let auth_header = ("authorization", "Bearer router-hub-test-token");
+    let auth_header = ("authorization", "Bearer maestro-test-token");
     let payload = serde_json::json!({
         "name": "example_dns_default",
         "domains": ["example.test"],
@@ -416,7 +416,7 @@ async fn test_dns_certificate_uses_default_dns01_hook_from_config() {
 #[tokio::test]
 async fn test_wol_crud_api() {
     let (app, _state, _temp) = setup_test_app().await;
-    let auth_header = ("authorization", "Bearer router-hub-test-token");
+    let auth_header = ("authorization", "Bearer maestro-test-token");
 
     // 1. GET /api/wol (empty list)
     let req = Request::builder()
@@ -495,7 +495,7 @@ async fn test_wol_crud_api() {
 #[tokio::test]
 async fn test_firewall_policy_api() {
     let (app, state, temp) = setup_test_app().await;
-    let auth_header = ("authorization", "Bearer router-hub-test-token");
+    let auth_header = ("authorization", "Bearer maestro-test-token");
 
     let log_file = temp.path().join("auth.log");
     std::fs::write(&log_file, "").unwrap();
@@ -598,7 +598,7 @@ async fn test_firewall_policy_api() {
 #[tokio::test]
 async fn test_services_api() {
     let (app, state, _temp) = setup_test_app().await;
-    let auth_header = ("authorization", "Bearer router-hub-test-token");
+    let auth_header = ("authorization", "Bearer maestro-test-token");
 
     std::fs::write(
         state.config.services.init_dir.join("S80nginx"),
@@ -696,7 +696,7 @@ async fn nginx_request(
     let request = Request::builder()
         .method(method)
         .uri(format!("/api/nginx{path}"))
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
         .unwrap();
@@ -1015,12 +1015,12 @@ async fn test_nginx_settings_validation_failure_restores_all_files() {
         test_mode: false,
         ..Default::default()
     };
-    config.server.auth_token = "router-hub-test-token-that-is-long-enough".into();
+    config.server.auth_token = "maestro-test-token-that-is-long-enough".into();
     config.paths.data_dir = temp.path().join("data");
     config.certificates.certs_dir = temp.path().join("dehydrated/certs");
     config.paths.runtime_dir = temp.path().join("runtime");
     config.nginx.root_dir = temp.path().join("nginx");
-    config.nginx.inputs_dir = temp.path().join("router-hub/nginx");
+    config.nginx.inputs_dir = temp.path().join("maestro/nginx");
     config.nginx.config_path = config.nginx.root_dir.join("nginx.conf");
     config.nginx.pid_path = config.nginx.root_dir.join("nginx.pid");
     config.nginx.domains_available_dir = config.nginx.root_dir.join("domains-available");
@@ -1039,7 +1039,7 @@ async fn test_nginx_settings_validation_failure_restores_all_files() {
         .join("conf.d/04_subfolder_upstream_map.conf");
     config.nginx.http_forwarder_path = config.nginx.root_dir.join("conf.d/05-http-to-https.conf");
     config.nginx.log_dir = temp.path().join("logs/nginx");
-    config.asus_ui.rendered_page = temp.path().join("router-hub.asp");
+    config.asus_ui.rendered_page = temp.path().join("maestro.asp");
     config.commands.nginx = "/bin/false".into();
     config.ensure_directories().unwrap();
     std::fs::write(&config.nginx.config_path, "original").unwrap();
@@ -1062,7 +1062,7 @@ async fn test_nginx_settings_validation_failure_restores_all_files() {
         .uri("/api/nginx/settings")
         .header(
             header::AUTHORIZATION,
-            "Bearer router-hub-test-token-that-is-long-enough",
+            "Bearer maestro-test-token-that-is-long-enough",
         )
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
@@ -1116,7 +1116,7 @@ async fn test_adguard_config_api() {
     // GET /api/adguard/config
     let req = Request::builder()
         .uri("/api/adguard/config")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -1139,7 +1139,7 @@ async fn test_adguard_config_api() {
     let req = Request::builder()
         .method("PUT")
         .uri("/api/adguard/config")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(update_payload.to_string()))
         .unwrap();
@@ -1149,7 +1149,7 @@ async fn test_adguard_config_api() {
     // GET again to verify launch_url returns the custom alias
     let req = Request::builder()
         .uri("/api/adguard/config")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -1171,7 +1171,7 @@ async fn test_adguard_filtering_and_protection_api() {
     let req = Request::builder()
         .method("PUT")
         .uri("/api/adguard/config")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
             serde_json::json!({
@@ -1193,7 +1193,7 @@ async fn test_adguard_filtering_and_protection_api() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/adguard/filtering")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
             serde_json::json!({
@@ -1215,7 +1215,7 @@ async fn test_adguard_filtering_and_protection_api() {
     let req = Request::builder()
         .method("PUT")
         .uri("/api/adguard/config")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
             serde_json::json!({
@@ -1236,7 +1236,7 @@ async fn test_adguard_filtering_and_protection_api() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/adguard/filtering")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
             serde_json::json!({
@@ -1252,7 +1252,7 @@ async fn test_adguard_filtering_and_protection_api() {
     // GET /api/adguard/status when disabled
     let req = Request::builder()
         .uri("/api/adguard/status")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -1270,7 +1270,7 @@ async fn test_adguard_rewrites_require_enabled_integration() {
     let req = Request::builder()
         .method("PUT")
         .uri("/api/adguard/config")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
             serde_json::json!({
@@ -1290,7 +1290,7 @@ async fn test_adguard_rewrites_require_enabled_integration() {
 
     let req = Request::builder()
         .uri("/api/adguard/rewrites")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
@@ -1306,7 +1306,7 @@ async fn test_adguard_hosts_are_saved_and_read_back() {
     let req = Request::builder()
         .method("PUT")
         .uri("/api/adguard/hosts")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(payload.to_string()))
         .unwrap();
@@ -1319,7 +1319,7 @@ async fn test_adguard_hosts_are_saved_and_read_back() {
 
     let req = Request::builder()
         .uri("/api/adguard/hosts")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
@@ -1343,7 +1343,7 @@ async fn test_dnsmasq_hosts_manage_only_dhcp_host_lines() {
     .unwrap();
     let req = Request::builder()
         .uri("/api/adguard/dnsmasq-hosts")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -1361,7 +1361,7 @@ async fn test_dnsmasq_hosts_manage_only_dhcp_host_lines() {
     let req = Request::builder()
         .method("PUT")
         .uri("/api/adguard/dnsmasq-hosts")
-        .header(header::AUTHORIZATION, "Bearer router-hub-test-token")
+        .header(header::AUTHORIZATION, "Bearer maestro-test-token")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
             serde_json::json!([
@@ -1638,7 +1638,7 @@ async fn emulated_fixture_sites_survive_shared_settings_regeneration() {
     let settings_dir = state.config.nginx.inputs_dir.clone();
     std::fs::create_dir_all(&settings_dir).unwrap();
     std::fs::copy(
-        fixture.join("../router-hub/nginx/sites.toml"),
+        fixture.join("../maestro/nginx/sites.toml"),
         settings_dir.join("sites.toml"),
     )
     .unwrap();

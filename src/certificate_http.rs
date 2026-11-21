@@ -437,7 +437,7 @@ async fn verify_listener(state: &AppState, global: &GlobalSettings) -> Result<()
     use std::os::unix::fs::OpenOptionsExt;
     let session =
         active(&state.config)?.context("HTTP validation window expired before readiness check")?;
-    let token = format!("router-hub-probe-{}", uuid::Uuid::new_v4().simple());
+    let token = format!("maestro-probe-{}", uuid::Uuid::new_v4().simple());
     let probe = state
         .config
         .certificates
@@ -1528,7 +1528,7 @@ mod tests {
             .apply_test_mode(
                 &temp
                     .path()
-                    .join("test-fixtures/etc/router-hub/router-hub.toml"),
+                    .join("test-fixtures/etc/maestro/maestro.toml"),
             )
             .unwrap();
         config.ensure_directories().unwrap();
