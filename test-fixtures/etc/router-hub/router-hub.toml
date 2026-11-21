@@ -39,6 +39,7 @@ log_dir = "../../var/log/nginx"
 
 [certificates]
 certs_dir = "../../certs"
+dns01_hook = "../../certs/dehydrated-dns01-hook.sh"
 
 [firewall]
 log_dirs = ["../../var/log/nginx"]

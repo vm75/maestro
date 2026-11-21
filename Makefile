@@ -1,4 +1,4 @@
-.PHONY: check test test-linux test-nginx test-ipk run fmt clippy release
+.PHONY: check test test-linux test-nginx test-ipk test-lab run fmt clippy release ipk init-lab run-lab
 check:
 	cargo check --all-targets
 
@@ -14,6 +14,9 @@ test-ipk:
 test-linux:
 	bash scripts/test-linux-integration.sh
 
+test-lab:
+	bash tests/test_lab_aarch64.sh
+
 run:
 	cargo run -- --config ./test-fixtures/etc/router-hub/router-hub.toml --test-mode serve
 
@@ -25,3 +28,12 @@ clippy:
 
 release:
 	./scripts/build-release.sh aarch64-unknown-linux-musl
+
+ipk: release
+	./scripts/package-ipk.sh "v$$(awk -F '"' '/^version = / { print $$2; exit }' Cargo.toml)" aarch64-unknown-linux-musl
+
+init-lab:
+	./lab/aarch64/init.sh
+
+run-lab:
+	./lab/aarch64/run.sh

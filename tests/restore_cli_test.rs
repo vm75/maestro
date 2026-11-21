@@ -53,3 +53,27 @@ fn restore_works_with_corrupt_configuration_and_test_mode_leaves_destination_unt
         contents
     );
 }
+
+#[test]
+fn update_dehydrated_cli_simulates_in_test_mode() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("router-hub.toml");
+    fs::write(
+        &config,
+        "[commands]\ndehydrated = \"/opt/var/lib/router-hub/dehydrated/dehydrated\"\n",
+    )
+    .unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_router-hub"));
+    command
+        .arg("--config")
+        .arg(&config)
+        .arg("--test-mode")
+        .arg("update-dehydrated");
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("simulated download of dehydrated"));
+}

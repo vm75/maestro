@@ -2,6 +2,41 @@
 
 Router Hub follows [Semantic Versioning](https://semver.org/).
 
+## 0.10.5
+
+### Added
+
+- Install `dehydrated-dns01-hook.sh` along with Router Hub at
+  `/opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh`, default DNS-01
+  challenge configuration to that hook, and support user overrides in
+  configuration (`[certificates].dns01_hook` or `[commands].dehydrated_dns01_hook`)
+  or per-certificate.
+- Download the latest dehydrated executable to
+  `/opt/var/lib/router-hub/dehydrated/dehydrated` during installation, and add
+  the `update-dehydrated` CLI command.
+- Add `make ipk` to build and package the AArch64 musl Entware IPK and checksum
+  using the version in `Cargo.toml`.
+- Add an AArch64 QEMU lab with Entware, simulated ASUS firmware interfaces and
+  WireGuard support. The mock ASUS UI uses HTTP 8080 and HTTPS 8443, leaving
+  ports 80 and 443 available for NGINX. `make init-lab` caches a checksum-verified
+  Alpine installer and creates a missing disk in `data/lab/`; `make run-lab`
+  reuses that disk. `init-lab` exits immediately for an existing disk; for a new
+  disk it automatically mounts the project share, runs the Alpine answer file,
+  confirms erasure of that new disk, and provisions the installed system in a
+  chroot before powering off. Services start on the installed guest's first boot.
+  Root's interactive shell displays saved credentials and browser links. Alpine
+  installs into a separate mount directory so cleanup preserves the project share.
+
+### Fixed
+
+- Take over the main nginx configuration during installation and `init-nginx`,
+  saving a different existing file as a unique backup while preserving saved
+  inputs and other existing shared/custom files.
+- Allow IPK installation and removal when Router Hub is already stopped.
+- Allow NGINX upgrades with an empty PID file created by `nginx -t` when
+  process inspection confirms NGINX is stopped; retain checks for malformed
+  PID files and unverified running processes.
+
 ## 0.10.4
 
 ### Added

@@ -1234,7 +1234,7 @@ dependencies = [
 
 [[package]]
 name = "router-hub"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "anyhow",
  "axum",

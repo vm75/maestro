@@ -108,8 +108,9 @@ Prepare the replacement tree in a lab or staging location with suitable paths.
 Validate with `router-hub --config <config-path> check-config` and nginx's `-t`
 using the intended configuration. Check HTTP redirects, ACME challenge routing,
 TLS, upstreams, access restrictions, cache headers, and custom routes before
-activating it. `init-nginx` only bootstraps a missing configuration; it does not
-upgrade an existing tree.
+activating it. `init-nginx` takes over the main configuration and saves a
+different existing file as `nginx.conf.before-router-hub-<unique-id>`. It preserves
+existing shared/custom files and saved inputs; it does not convert their contents.
 
 ## After upgrading
 

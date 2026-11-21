@@ -1,0 +1,7 @@
+#!/sbin/openrc-run
+depend() { need localmount net; }
+start() {
+    mkdir -p /tmp/var/wwwext || return 1
+    /opt/etc/init.d/rc.unslung start
+}
+stop() { /opt/etc/init.d/rc.unslung stop; }

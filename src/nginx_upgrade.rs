@@ -753,8 +753,9 @@ fn nginx_master_identity(pid: i32, nginx_binary: &Path) -> Result<NginxMasterIde
     nginx_master_identity_at(Path::new("/proc"), pid, nginx_binary)
 }
 
-/// A missing PID file means NGINX was stopped; a *present but invalid* PID
-/// file is an error, never permission to signal an arbitrary live process.
+/// nginx -t creates an empty PID file when stopped. Accept that only when
+/// procfs confirms no NGINX process exists; malformed nonempty files still fail.
+/// Never use an unverified PID to signal a process.
 fn nginx_master_from_pid_file_at(
     pid_path: &Path,
     nginx_binary: &Path,
@@ -765,6 +766,27 @@ fn nginx_master_from_pid_file_at(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).context("cannot read NGINX PID file"),
     };
+    if contents.trim().is_empty() {
+        for entry in
+            fs::read_dir(proc_root).context("cannot inspect processes for empty NGINX PID file")?
+        {
+            let entry = entry.context("cannot inspect process directory")?;
+            if entry.file_name().to_string_lossy().parse::<u32>().is_err() {
+                continue;
+            }
+            let comm = match fs::read_to_string(entry.path().join("comm")) {
+                Ok(comm) => comm,
+                // Processes can exit during enumeration.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error).context("cannot inspect process name"),
+            };
+            ensure!(
+                comm.trim() != "nginx",
+                "NGINX PID file is empty but an NGINX process exists; refusing to assume it is stopped"
+            );
+        }
+        return Ok(None);
+    }
     let pid = contents
         .trim()
         .parse::<i32>()
@@ -1598,6 +1620,34 @@ ad87cc6f9b5b693e0c4bc2e6feda0915dce461e4a780d0d2e207730df826c50f  nginx-mod-brot
         .unwrap();
         fs::write(process.join("stat"), fake_stat(pid, start, "S")).unwrap();
         symlink(binary, process.join("exe")).unwrap();
+    }
+
+    #[test]
+    fn empty_pid_file_requires_no_nginx_processes() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("nginx");
+        let proc_root = dir.path().join("proc");
+        let pid_file = dir.path().join("nginx.pid");
+        fs::create_dir(&proc_root).unwrap();
+        fs::write(&binary, "nginx executable").unwrap();
+        for contents in ["", " \n"] {
+            fs::write(&pid_file, contents).unwrap();
+            assert!(
+                nginx_master_from_pid_file_at(&pid_file, &binary, &proc_root)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        create_fake_master(&proc_root, 43210, &binary, 12345);
+        assert!(nginx_master_from_pid_file_at(&pid_file, &binary, &proc_root).is_err());
+        fs::write(proc_root.join("43210/comm"), "httpd\n").unwrap();
+        assert!(
+            nginx_master_from_pid_file_at(&pid_file, &binary, &proc_root)
+                .unwrap()
+                .is_none()
+        );
+        fs::remove_dir_all(&proc_root).unwrap();
+        assert!(nginx_master_from_pid_file_at(&pid_file, &binary, &proc_root).is_err());
     }
 
     #[test]

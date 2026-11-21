@@ -1,0 +1,10 @@
+#!/sbin/openrc-run
+description="Router Lab mock ASUS HTTPS"
+command="/usr/bin/stunnel"
+command_args="/etc/router-lab/httpds.conf"
+command_background="yes"
+pidfile="/run/router-lab-httpds.pid"
+
+depend() {
+    need net router-lab-httpd
+}

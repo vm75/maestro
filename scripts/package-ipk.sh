@@ -30,10 +30,12 @@ DATA="$TMP/data"
 CONTROL="$TMP/control"
 META="$TMP/meta"
 mkdir -p "$DATA/opt/bin" "$DATA/opt/etc/init.d" "$DATA/opt/libexec/router-hub" \
-  "$DATA/opt/share/router-hub" "$CONTROL" "$META" dist
+  "$DATA/opt/share/router-hub" "$DATA/opt/var/lib/router-hub/dehydrated" "$CONTROL" "$META" dist
 install -m 0755 "$BINARY" "$DATA/opt/bin/router-hub"
 install -m 0755 scripts/S99router-hub "$DATA/opt/etc/init.d/S99router-hub"
 install -m 0755 scripts/setup-merlin.sh "$DATA/opt/libexec/router-hub/setup-merlin.sh"
+install -m 0755 scripts/dehydrated-dns01-hook.sh "$DATA/opt/share/router-hub/dehydrated-dns01-hook.sh"
+install -m 0755 scripts/dehydrated-dns01-hook.sh "$DATA/opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh"
 install -m 0644 config/router-hub.example.toml "$DATA/opt/share/router-hub/router-hub.example.toml"
 install -m 0644 config/firewall-policy.example.json "$DATA/opt/share/router-hub/firewall-policy.example.json"
 cat > "$CONTROL/control" <<EOF

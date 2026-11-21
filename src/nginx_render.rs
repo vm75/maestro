@@ -1217,15 +1217,17 @@ pub fn migrate_inputs(config: &crate::config::AppConfig) -> Result<usize> {
     Ok(count)
 }
 
-/// Initialize only a missing nginx configuration using the current bundle.
-/// Existing installations are never converted or overwritten.
+/// Install the bundled main configuration, backing up an existing different file.
+/// Saved inputs and other existing shared files are preserved.
 pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
-    use std::{fs, os::unix::fs::PermissionsExt, time::Duration};
+    use std::{
+        fs,
+        io::Write,
+        os::unix::fs::{OpenOptionsExt, PermissionsExt},
+        time::Duration,
+    };
     let root = &config.nginx.root_dir;
     nginx::ensure_no_symlink_ancestors(root, &config.nginx.config_path)?;
-    if fs::symlink_metadata(&config.nginx.config_path).is_ok() {
-        return Ok(false);
-    }
     if config.test_mode {
         bail!(
             "init-nginx requires a real openssl invocation; use an isolated Linux config for testing"
@@ -1243,14 +1245,23 @@ pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
         .entry("var_dir")
         .or_insert_with(|| var_dir.to_string_lossy().into_owned().into());
     let mut files = shared_files(config, &global)?;
+    let previous_main = backup_file(&config.nginx.config_path)?;
+    if previous_main
+        .as_ref()
+        .is_some_and(|previous| previous.bytes == files[&config.nginx.config_path].as_bytes())
+    {
+        return Ok(false);
+    }
     for (name, content) in [
         ("mime.types", include_str!("../config/nginx/mime.types")),
         ("dhparams.pem", include_str!("../config/nginx/dhparams.pem")),
     ] {
         files.insert(root.join(name), content.into());
     }
-    // Keep every pre-existing shared file, including administrator settings.
-    files.retain(|path, _| fs::symlink_metadata(path).is_err());
+    // Take ownership of the main configuration while retaining saved inputs
+    // and administrator-authored shared fragments.
+    files
+        .retain(|path, _| path == &config.nginx.config_path || fs::symlink_metadata(path).is_err());
     for directory in [
         &config.nginx.domains_available_dir,
         &config.nginx.domains_enabled_dir,
@@ -1326,11 +1337,47 @@ pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
         files.insert(key.clone(), key_content);
         files.insert(certificate, certificate_content);
     }
+    // Save the original before atomically replacing it. Keeping the original
+    // path present also lets FileTransaction roll it back on any write failure.
+    let backup = if let Some(previous) = previous_main {
+        let mut name = config
+            .nginx
+            .config_path
+            .file_name()
+            .ok_or_else(|| anyhow::anyhow!("nginx config path has no filename"))?
+            .to_os_string();
+        name.push(format!(
+            ".before-router-hub-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let backup = config.nginx.config_path.with_file_name(name);
+        ensure_managed_path(config, &backup)?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(previous.permissions.mode())
+            .open(&backup)?;
+        let result = (|| -> std::io::Result<()> {
+            file.set_permissions(previous.permissions)?;
+            file.write_all(&previous.bytes)?;
+            file.sync_all()
+        })();
+        if let Err(error) = result {
+            let _ = fs::remove_file(&backup);
+            return Err(error.into());
+        }
+        Some(backup)
+    } else {
+        None
+    };
     let transaction = FileTransaction::apply(config, files)?;
     if key.exists() {
         fs::set_permissions(key, fs::Permissions::from_mode(0o600))?;
     }
     transaction.commit();
+    if let Some(backup) = backup {
+        println!("previous nginx configuration saved to {}", backup.display());
+    }
     Ok(true)
 }
 
@@ -1338,6 +1385,67 @@ pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn bootstrap_config(root: &std::path::Path) -> crate::config::AppConfig {
+        let mut config = crate::config::AppConfig::default();
+        config
+            .apply_test_mode(&root.join("test-fixtures/etc/router-hub/router-hub.toml"))
+            .unwrap();
+        config.test_mode = false;
+        // Existing certificate material avoids needing an external command in
+        // tests concerned only with filesystem ownership and rollback.
+        let certificates = config.nginx.root_dir.join("certs/default");
+        std::fs::create_dir_all(&certificates).unwrap();
+        std::fs::write(certificates.join("privkey.pem"), "test key").unwrap();
+        std::fs::write(certificates.join("fullchain.pem"), "test certificate").unwrap();
+        config
+    }
+
+    #[tokio::test]
+    async fn bootstrap_restores_original_main_when_shared_file_install_fails() {
+        use std::{fs, os::unix::fs::PermissionsExt};
+        let temp = tempfile::tempdir().unwrap();
+        let config = bootstrap_config(temp.path());
+        fs::write(&config.nginx.config_path, b"original config\xff").unwrap();
+        fs::set_permissions(&config.nginx.config_path, fs::Permissions::from_mode(0o640)).unwrap();
+        // The output is missing, but its parent is an ordinary file: applying
+        // the shared outputs will fail after the original main was backed up.
+        fs::write(config.nginx.root_dir.join("snippets"), "blocked parent").unwrap();
+        assert!(bootstrap(&config).await.is_err());
+        assert_eq!(
+            fs::read(&config.nginx.config_path).unwrap(),
+            b"original config\xff"
+        );
+        assert_eq!(
+            fs::metadata(&config.nginx.config_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640
+        );
+    }
+
+    #[tokio::test]
+    async fn bootstrap_rejects_a_symlink_main_without_changing_its_target() {
+        use std::{fs, os::unix::fs::symlink};
+        let temp = tempfile::tempdir().unwrap();
+        let config = bootstrap_config(temp.path());
+        let target = temp.path().join("authored.conf");
+        fs::write(&target, "authored configuration").unwrap();
+        symlink(&target, &config.nginx.config_path).unwrap();
+        assert!(bootstrap(&config).await.is_err());
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            "authored configuration"
+        );
+        assert!(
+            fs::symlink_metadata(&config.nginx.config_path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
 
     fn migration_config(root: &std::path::Path) -> crate::config::AppConfig {
         let mut config = crate::config::AppConfig::default();

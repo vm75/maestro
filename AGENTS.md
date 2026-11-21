@@ -33,7 +33,7 @@ cargo build --release
 ```
 
 Useful repository shortcuts are `make check`, `make test`, `make run`,
-`make fmt`, `make clippy`, `make test-nginx`, and `make release`.
+`make fmt`, `make clippy`, `make test-nginx`, `make test-lab`, and `make release`.
 `make test-nginx` needs Python 3.11+, Jinja2, nginx, and OpenSSL and uses temporary
 files and loopback servers. `make run` starts x64 test mode
 with `test-fixtures/etc/router-hub/router-hub.toml`; it does not execute router commands or send
@@ -46,6 +46,8 @@ firewall enforcement, DNS providers, or router firmware. Keep real firewall
 tests in isolated network namespaces/VMs and always use lab-only paths.
 
 For a release artifact, use `./scripts/build-release.sh <rust-target>`.
+Use `make ipk` to build and package the AArch64 musl Entware IPK and checksum
+in `dist/`, deriving the package version from `Cargo.toml`.
 The `scripts/package-ipk.sh` helper and `scripts/test-package-ipk.sh` smoke test
 build and validate a static-musl AArch64 IPK without an Entware toolchain.
 The repository contains a helper default for `aarch64-unknown-linux-musl`,

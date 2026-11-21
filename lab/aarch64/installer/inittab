@@ -1,0 +1,8 @@
+# Boot the live environment completely before starting the interactive installer.
+::sysinit:/sbin/openrc sysinit
+::sysinit:/sbin/openrc boot
+::wait:/sbin/openrc default
+::wait:/bin/sh /etc/router-lab/install.sh
+::ctrlaltdel:/sbin/reboot
+::shutdown:/sbin/openrc shutdown
+# Alpine's initramfs adds the serial-console getty for the active console.

@@ -1,0 +1,35 @@
+# Alpine installer answers for the disposable AArch64 lab VM.
+# In the live guest, with the repository mounted at /mnt/router-hub, run:
+# setup-alpine -f /mnt/router-hub/lab/aarch64/setup-alpine.answers
+# Confirmation to erase /dev/vda remains interactive.
+
+# setup-alpine sources this file in the live guest before installing to disk.
+# Set the lab-only root password and skip its interactive password prompt.
+printf '%s\n' 'root:abcd1234' | chpasswd || exit 1
+empty_root_password=1
+
+# Keep the serial-console keyboard setup unchanged.
+KEYMAPOPTS=none
+HOSTNAMEOPTS=router.emu
+DEVDOPTS=mdev
+
+INTERFACESOPTS="auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+iface eth0 inet6 auto
+"
+
+# DNS comes from DHCP; do not hard-code the observed lease address.
+TIMEZONEOPTS=PST8PDT
+PROXYOPTS=none
+NTPOPTS=busybox
+APKREPOSOPTS="-1"
+USEROPTS=no
+SSHDOPTS=dropbear
+
+# Install only on the disposable VM disk. SSH host keys are generated afresh.
+DISKOPTS="-m sys /dev/vda"
+LBUOPTS=none
+APKCACHEOPTS=none

@@ -63,8 +63,11 @@ struct Cli {
 enum Command {
     Serve,
     CheckConfig,
-    /// Bootstrap an empty current-format nginx tree only when nginx.conf is missing.
+    /// Install the bundled nginx configuration, backing up a different nginx.conf.
     InitNginx,
+    /// Download or update the official dehydrated executable.
+    #[command(alias = "init-dehydrated")]
+    UpdateDehydrated,
     /// Move current-format nginx inputs into inputs_dir; run while the service is stopped.
     MigrateNginxInputs,
     RenderUi,
@@ -207,9 +210,31 @@ fn main() -> Result<()> {
             println!(
                 "{}",
                 if created {
-                    "initialized empty Jinja nginx configuration"
+                    "installed Router Hub nginx configuration"
                 } else {
-                    "existing nginx configuration preserved"
+                    "Router Hub nginx configuration is already current"
+                }
+            );
+            Ok(())
+        }
+        Command::UpdateDehydrated => {
+            let update = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(state::download_latest_dehydrated(&config))?;
+            println!(
+                "{}",
+                if update.simulated {
+                    format!(
+                        "simulated download of dehydrated to {}",
+                        update.path.display()
+                    )
+                } else {
+                    format!(
+                        "downloaded dehydrated ({} bytes) to {}",
+                        update.bytes,
+                        update.path.display()
+                    )
                 }
             );
             Ok(())

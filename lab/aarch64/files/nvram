@@ -1,0 +1,10 @@
+#!/bin/sh
+if [ "$#" -ne 2 ] || [ "$1" != get ]; then
+    echo 'usage: nvram get KEY' >&2
+    exit 2
+fi
+NVRAM_FILE="${NVRAM_FILE:-/etc/router-lab/nvram}"
+awk -v key="$2" '
+    index($0, key "=") == 1 { print substr($0, length(key) + 2); found=1; exit }
+    END { if (!found) print "" }
+' "$NVRAM_FILE"

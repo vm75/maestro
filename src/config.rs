@@ -120,6 +120,7 @@ impl AppConfig {
         self.firewall.log_dirs = vec![fixture_root.join("var/log/nginx")];
         self.commands.dehydrated = fixture_root.join("certs/dehydrated");
         self.certificates.certs_dir = fixture_root.join("certs");
+        self.certificates.dns01_hook = fixture_root.join("certs/dehydrated-dns01-hook.sh");
         self.asus_ui.enabled = false;
         self.asus_ui.rendered_page = fixture_root.join("router/router-hub.asp");
         Ok(())
@@ -188,8 +189,13 @@ impl AppConfig {
             &mut self.nginx.http_forwarder_path,
             &mut self.nginx.log_dir,
             &mut self.certificates.certs_dir,
+            &mut self.certificates.dns01_hook,
         ] {
             resolve(path);
+        }
+        if let Some(hook) = &mut self.commands.dehydrated_dns01_hook {
+            resolve(hook);
+            self.certificates.dns01_hook = hook.clone();
         }
         if let Some(prefix) = &mut self.nginx.prefix_path {
             resolve(prefix);
@@ -436,6 +442,8 @@ pub struct CommandsConfig {
     pub iptables: PathBuf,
     pub ip6tables: PathBuf,
     pub dehydrated: PathBuf,
+    #[serde(default, alias = "dns01_hook")]
+    pub dehydrated_dns01_hook: Option<PathBuf>,
     pub openssl: PathBuf,
     pub logread: PathBuf,
     pub nvram: PathBuf,
@@ -457,6 +465,7 @@ impl Default for CommandsConfig {
             iptables: "/usr/sbin/iptables".into(),
             ip6tables: "/usr/sbin/ip6tables".into(),
             dehydrated: "/opt/var/lib/router-hub/dehydrated/dehydrated".into(),
+            dehydrated_dns01_hook: None,
             openssl: "/usr/sbin/openssl".into(),
             logread: "/opt/sbin/logread".into(),
             nvram: "/bin/nvram".into(),
@@ -569,6 +578,16 @@ pub struct CertificatesConfig {
     pub renew_interval_hours: u64,
     pub renew_before_days: i64,
     pub command_timeout_seconds: u64,
+    #[serde(
+        default = "default_dns01_hook",
+        alias = "hook",
+        alias = "dehydrated_dns01_hook"
+    )]
+    pub dns01_hook: PathBuf,
+}
+
+fn default_dns01_hook() -> PathBuf {
+    "/opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh".into()
 }
 
 impl Default for CertificatesConfig {
@@ -578,6 +597,7 @@ impl Default for CertificatesConfig {
             renew_interval_hours: 12,
             renew_before_days: 30,
             command_timeout_seconds: 3600,
+            dns01_hook: default_dns01_hook(),
         }
     }
 }
@@ -711,6 +731,14 @@ mod tests {
         assert_eq!(config.platform, Platform::Asuswrt);
         assert_eq!(config.server.bind, "0.0.0.0");
         assert_eq!(config.server.port, 3030);
+        assert_eq!(
+            config.commands.dehydrated,
+            Path::new("/opt/var/lib/router-hub/dehydrated/dehydrated")
+        );
+        assert_eq!(
+            config.certificates.dns01_hook,
+            Path::new("/opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh")
+        );
         assert_eq!(config.firewall.subnet_prefix_v4, 24);
         assert_eq!(config.firewall.subnet_prefix_v6, 64);
         assert_eq!(config.firewall.reputation_repromote_after_offenses, 1);
@@ -867,5 +895,44 @@ mod tests {
 
         config.server.allowed_origins = vec!["invalid\nheader".into()];
         assert!(config.server.allowed_origin_values().is_err());
+    }
+
+    #[test]
+    fn test_dehydrated_and_hook_config_overrides() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_path = temp.path().join("router-hub.toml");
+        fs::write(
+            &config_path,
+            r#"
+                [commands]
+                dehydrated = "/custom/bin/dehydrated"
+                dehydrated_dns01_hook = "/custom/bin/dns01-hook.sh"
+            "#,
+        )
+        .unwrap();
+        let config = AppConfig::load(&config_path).unwrap();
+        assert_eq!(
+            config.commands.dehydrated,
+            Path::new("/custom/bin/dehydrated")
+        );
+        assert_eq!(
+            config.certificates.dns01_hook,
+            Path::new("/custom/bin/dns01-hook.sh")
+        );
+
+        let config_path2 = temp.path().join("router-hub2.toml");
+        fs::write(
+            &config_path2,
+            r#"
+                [certificates]
+                dns01_hook = "/custom/certs/hook.sh"
+            "#,
+        )
+        .unwrap();
+        let config2 = AppConfig::load(&config_path2).unwrap();
+        assert_eq!(
+            config2.certificates.dns01_hook,
+            Path::new("/custom/certs/hook.sh")
+        );
     }
 }

@@ -1,0 +1,6 @@
+#!/bin/sh
+if [ "$#" -eq 2 ] && [ "$1" = dnsmasq ] && [ "$2" = restart ]; then
+    exec logger -t router-lab 'mock: dnsmasq restart requested'
+fi
+echo 'unsupported router service action' >&2
+exit 2

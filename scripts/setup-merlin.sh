@@ -8,10 +8,12 @@ DATA_DIR="/opt/var/lib/router-hub"
 MOSQUITTO_USER="${MOSQUITTO_USER:-}"
 MOSQUITTO_PASS="${MOSQUITTO_PASS:-${MOSQUITTO_PASSWD:-}}"
 
+# The lab installer configures the installed disk in a chroot before first boot.
+# In that mode, complete setup while leaving all service lifecycle calls to boot.
 [ "$(id -u)" = "0" ] || { echo "Run as root on the router." >&2; exit 1; }
 [ -x /opt/bin/router-hub ] || { echo "/opt/bin/router-hub not installed" >&2; exit 1; }
-mkdir -p /opt/etc/init.d "$CONFIG_DIR" "$DATA_DIR" /opt/var/log/nginx /opt/var/run/router-hub
-if [ -x /opt/etc/init.d/S99router-hub ]; then
+mkdir -p /opt/etc/init.d "$CONFIG_DIR" "$DATA_DIR" "$DATA_DIR/dehydrated" /opt/var/log/nginx /opt/var/run/router-hub
+if [ "${ROUTER_HUB_DEFER_START:-0}" != 1 ] && [ -x /opt/etc/init.d/S99router-hub ]; then
     /opt/etc/init.d/S99router-hub stop
 fi
 
@@ -26,9 +28,44 @@ fi
 # Relocate current-format inputs while Router Hub is stopped.
 /opt/bin/router-hub --config "$CONFIG_DIR/router-hub.toml" migrate-nginx-inputs
 
-# Uses only embedded current Jinja policies and preserves existing runtime files.
-# The command preserves an existing nginx.conf and respects configured nginx paths.
+# Install the embedded main configuration, backing up a different nginx.conf.
+# Saved inputs, existing shared fragments, and configured nginx paths are retained.
 /opt/bin/router-hub --config "$CONFIG_DIR/router-hub.toml" init-nginx
+
+# Install default dehydrated DNS-01 challenge hook if not already installed.
+if [ ! -f "$DATA_DIR/dehydrated/dehydrated-dns01-hook.sh" ]; then
+    if [ -f "$EXAMPLES_DIR/dehydrated-dns01-hook.sh" ]; then
+        cp "$EXAMPLES_DIR/dehydrated-dns01-hook.sh" "$DATA_DIR/dehydrated/dehydrated-dns01-hook.sh"
+    elif [ -f "$EXAMPLES_DIR/../scripts/dehydrated-dns01-hook.sh" ]; then
+        cp "$EXAMPLES_DIR/../scripts/dehydrated-dns01-hook.sh" "$DATA_DIR/dehydrated/dehydrated-dns01-hook.sh"
+    fi
+fi
+if [ -f "$DATA_DIR/dehydrated/dehydrated-dns01-hook.sh" ]; then
+    chmod 0755 "$DATA_DIR/dehydrated/dehydrated-dns01-hook.sh"
+fi
+
+# Download the latest dehydrated executable on install.
+mkdir -p "$DATA_DIR/dehydrated"
+DEHYDRATED_BIN="$DATA_DIR/dehydrated/dehydrated"
+DEHYDRATED_URL="https://raw.githubusercontent.com/dehydrated-io/dehydrated/master/dehydrated"
+
+if ! /opt/bin/router-hub --config "$CONFIG_DIR/router-hub.toml" update-dehydrated 2>/dev/null || [ ! -s "$DEHYDRATED_BIN" ]; then
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$DEHYDRATED_URL" -o "$DEHYDRATED_BIN" 2>/dev/null || \
+            curl -fsSL -k "$DEHYDRATED_URL" -o "$DEHYDRATED_BIN" 2>/dev/null || true
+    fi
+    if [ ! -s "$DEHYDRATED_BIN" ] && command -v wget >/dev/null 2>&1; then
+        wget -q -O "$DEHYDRATED_BIN" "$DEHYDRATED_URL" 2>/dev/null || \
+            wget -q --no-check-certificate -O "$DEHYDRATED_BIN" "$DEHYDRATED_URL" 2>/dev/null || true
+    fi
+fi
+
+if [ -s "$DEHYDRATED_BIN" ]; then
+    chmod 0700 "$DEHYDRATED_BIN"
+    echo "Dehydrated executable installed at $DEHYDRATED_BIN."
+else
+    echo "Warning: Could not download latest dehydrated during install; use Certificates > Update dehydrated once connected." >&2
+fi
 
 if [ -n "$MOSQUITTO_USER" ] && [ -n "$MOSQUITTO_PASS" ]; then
     mkdir -p /opt/etc/mosquitto
@@ -95,5 +132,7 @@ EOF
 fi
 
 /opt/bin/router-hub --config "$CONFIG_DIR/router-hub.toml" check-config
-/opt/etc/init.d/S99router-hub restart
+if [ "${ROUTER_HUB_DEFER_START:-0}" != 1 ]; then
+    /opt/etc/init.d/S99router-hub restart
+fi
 printf '\nRouter Hub installed. Use the ASUS menu entry, or open http://<router-ip>:3030/#token=<auth-token>.\n'

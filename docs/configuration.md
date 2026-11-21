@@ -10,12 +10,15 @@ reference. The main sections are:
 - `[paths]` — persistent data, runtime, configurable `hosts.add` path, and
   `jffs_scripts_dir` for router backups;
 - `[commands]` — absolute paths to nginx, Entware utilities, firewall tools,
-  dehydrated, OpenSSL, NVRAM, network commands, and `tar` for backups;
+  dehydrated (defaults to `/opt/var/lib/router-hub/dehydrated/dehydrated`), OpenSSL,
+  NVRAM, network commands, and `tar` for backups;
 - `[asus_ui]` — extension-page rendering and ASUS menu integration;
 - `[services]` — Entware init directory, log roots, and timeouts;
 - `[nginx]` — nginx root/configuration, managed object trees, generated
   includes, and log limits;
-- `[certificates]` — dehydrated certificate directory and renewal policy;
+- `[certificates]` — dehydrated certificate directory, default DNS-01 hook
+  (`dns01_hook`, defaults to `/opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh`),
+  and renewal policy;
 - `[firewall]` — matching, scoring, retention, subnet promotion, resource
   bounds, and command limits.
 
@@ -91,9 +94,12 @@ definitions and deployed nginx certificates can be imported at startup.
 Port existing nginx configuration manually to the current
 [`config/nginx` bundle](../config/nginx/README.md) **before deploying Router Hub**.
 The service contains no legacy template renderer or old map migration.
-The installer runs `init-nginx` to bootstrap only a missing configuration,
-including an empty site tree and a self-signed fallback certificate. Existing
-configuration is preserved. For an existing installation, port the shared tree, `mime.types`,
+The installer runs `init-nginx` to install Router Hub's main configuration,
+saving a different existing file as `nginx.conf.before-router-hub-<unique-id>`.
+It creates missing shared files, site directories, and a self-signed fallback
+certificate. Re-running it leaves an identical main configuration unchanged.
+Saved inputs and other existing shared/custom files are preserved.
+For an existing installation, port the shared tree, `mime.types`,
 `dhparams.pem`, certificates, required modules, and writable runtime directories.
 Use the configured nginx prefix and paths for your installation.
 

@@ -67,6 +67,7 @@ fn inputs(config: &AppConfig, config_path: &Path) -> Result<Vec<PathBuf>> {
         config.nginx.http_forwarder_path.clone(),
         config.certificates.certs_dir.clone(),
         config.commands.dehydrated.clone(),
+        config.certificates.dns01_hook.clone(),
         config.services.init_dir.join("S99router-hub"),
     ];
     if config.platform == Platform::Asuswrt {

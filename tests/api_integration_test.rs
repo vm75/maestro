@@ -18,6 +18,7 @@ async fn setup_test_app() -> (axum::Router, AppState, tempfile::TempDir) {
     config.paths.dnsmasq_conf_add = temp.path().join("dnsmasq.conf.add");
     config.commands.dehydrated = temp.path().join("dehydrated/dehydrated");
     config.certificates.certs_dir = temp.path().join("dehydrated/certs");
+    config.certificates.dns01_hook = temp.path().join("dehydrated/dehydrated-dns01-hook.sh");
     config.nginx.root_dir = temp.path().join("nginx");
     config.nginx.inputs_dir = temp.path().join("router-hub/nginx");
     config.nginx.config_path = config.nginx.root_dir.join("nginx.conf");
@@ -323,6 +324,56 @@ async fn test_dehydrated_certificate_api_and_files() {
         .unwrap();
     let update: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(update["simulated"], true);
+}
+
+#[tokio::test]
+async fn test_dns_certificate_uses_default_dns01_hook_from_config() {
+    let (app, state, _temp) = setup_test_app().await;
+    let auth_header = ("authorization", "Bearer router-hub-test-token");
+    let payload = serde_json::json!({
+        "name": "example_dns_default",
+        "domains": ["example.test"],
+        "method": "dns",
+        "hook": null,
+        "hook_env": {},
+        "staging": false,
+        "auto_renew": true
+    });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/certificates")
+        .header(auth_header.0, auth_header.1)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let certificate_id = created["id"].as_str().unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/api/certificates/{certificate_id}/issue"))
+        .header(auth_header.0, auth_header.1)
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let config_file = state
+        .config
+        .certificates
+        .certs_dir
+        .join("example_dns_default.cfg");
+    let content = tokio::fs::read_to_string(&config_file).await.unwrap();
+    assert!(content.contains(&format!(
+        "HOOK='{}'",
+        state.config.certificates.dns01_hook.display()
+    )));
 }
 
 #[tokio::test]

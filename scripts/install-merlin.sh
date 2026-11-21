@@ -39,7 +39,7 @@ done
 [ "$(id -u)" = "0" ] || { echo "Run as root on the router." >&2; exit 1; }
 [ -f "$BINARY" ] || { echo "Binary not found: $BINARY" >&2; exit 1; }
 
-mkdir -p /opt/bin /opt/etc/init.d
+mkdir -p /opt/bin /opt/etc/init.d /opt/var/lib/router-hub/dehydrated
 if [ -x /opt/etc/init.d/S99router-hub ]; then
     /opt/etc/init.d/S99router-hub stop
 fi
@@ -47,6 +47,14 @@ if [ "$BINARY" != "/opt/bin/router-hub" ]; then
     cp "$BINARY" /opt/bin/router-hub
 fi
 chmod 0755 /opt/bin/router-hub
+if [ -f "$SCRIPT_DIR/dehydrated-dns01-hook.sh" ]; then
+    cp "$SCRIPT_DIR/dehydrated-dns01-hook.sh" /opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh
+    chmod 0755 /opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh
+fi
+if [ -f "$SCRIPT_DIR/dehydrated" ]; then
+    cp "$SCRIPT_DIR/dehydrated" /opt/var/lib/router-hub/dehydrated/dehydrated
+    chmod 0700 /opt/var/lib/router-hub/dehydrated/dehydrated
+fi
 cp "$SCRIPT_DIR/S99router-hub" /opt/etc/init.d/S99router-hub
 chmod 0755 /opt/etc/init.d/S99router-hub
 

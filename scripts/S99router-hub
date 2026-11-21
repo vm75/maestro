@@ -7,6 +7,12 @@ PREARGS=""
 DESC=$PROCS
 PATH=/opt/sbin:/opt/bin:/opt/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+# Entware rc.func returns 1 when stop finds no process. Package installation,
+# upgrades and removal must also succeed when the service is already stopped.
+if [ "${1:-}" = "stop" ] && ! pidof "$PROCS" >/dev/null 2>&1; then
+    exit 0
+fi
+
 if [ "${1:-}" = "reconcile" ]; then
     PID="$(pidof "$PROCS" 2>/dev/null || true)"
     [ -n "$PID" ] || exit 1

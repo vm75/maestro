@@ -229,6 +229,9 @@ NGINX **live binary upgrade** with SIGUSR2, waits for a different master PID
 running the new executable, and gracefully retires the old master with
 SIGQUIT. A configuration reload (SIGHUP) by itself cannot activate the
 replacement master binary. NGINX is left stopped if it was already stopped.
+An empty PID file left by `nginx -t` is accepted only when `/proc` confirms
+no NGINX processes exist. A malformed nonempty PID file or an empty file with
+NGINX processes still running blocks installation for administrator review.
 
 When opkg returns a definite failure or post-install verification fails,
 Router Hub attempts to restore the previous NGINX binary, modules and module
@@ -320,8 +323,10 @@ The installer:
    `/opt/etc/init.d/S99router-hub`;
 2. creates `/opt/etc/router-hub/router-hub.toml` and a random authentication
    token on first install;
-3. bootstraps an empty current Jinja nginx tree if nginx.conf is missing,
-   preserving existing configuration, and creates runtime/data directories;
+3. installs Router Hub's main nginx configuration, saving a different existing
+   file as `nginx.conf.before-router-hub-<unique-id>` and printing its path;
+   preserves saved inputs and existing shared/custom files, creates missing
+   bundled files and runtime/data directories;
 4. configures Mosquitto credentials in `/opt/etc/mosquitto/passwd` if `--mosquitto-user` and `--mosquitto-pass` (or `MOSQUITTO_USER` / `MOSQUITTO_PASS` env vars) are supplied;
 5. adds token-free reconciliation calls to `/jffs/scripts/post-mount` and
    `/jffs/scripts/firewall-start` (with a background retry loop);

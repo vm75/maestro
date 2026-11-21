@@ -147,8 +147,8 @@
       float: left;
       height: 35px;
       padding: 5px 12px;
-      margin-left: -3px;
-      margin-right: 2px;
+      margin-left: 0;
+      margin-right: 3px;
       text-align: center;
       text-decoration: none;
       font: 12px/35px Verdana, "MS UI Gothic", "MS P Gothic", "Microsoft Yahei UI", sans-serif;
@@ -156,11 +156,6 @@
       display: flex;
       align-items: center;
       gap: 6px
-    }
-
-    /* Keep the first tab aligned with the content table in ASUS embedded mode. */
-    .rh-tabs > .rh-tab:first-child {
-      margin-left: 0
     }
 
     .rh-tab.tab {
@@ -225,23 +220,42 @@
       gap: 8px
     }
 
-    .rh-badge {
+    .rh-brand-info > .rh-badge {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 8px;
-      min-height: 32px;
-      padding: 3px 9px 3px 4px;
-      border: 1px solid #527383;
+      box-sizing: border-box;
+      height: 34px;
+      min-height: 34px;
+      padding: 0 10px;
+      border: 1px solid #3b5361;
       border-radius: 6px;
-      background: #25353d;
-      box-shadow: inset 0 1px rgba(255, 255, 255, .06)
+      background: #1f2d35;
+      box-shadow: inset 0 1px rgba(255, 255, 255, .04);
+      color: #c9dde8;
+      font-size: 11px;
+      line-height: 1;
+      white-space: nowrap;
+      vertical-align: middle
+    }
+
+    .rh-brand-info > .btn {
+      box-sizing: border-box;
+      height: 34px;
+      min-height: 34px
+    }
+
+    .rh-brand-info > .btn:focus-visible {
+      outline: 2px solid var(--cyan);
+      outline-offset: 2px
     }
 
     .rh-logo {
-      width: 28px;
-      height: 28px;
-      border-radius: 6px;
-      background: #ffffff;
+      width: 22px;
+      height: 22px;
+      border-radius: 4px;
+      background: transparent;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -591,6 +605,48 @@
       flex: 1
     }
 
+    /* Ban Shield follows the compact section styling used by Nginx settings. */
+    #view-firewall { --shield-gap: 16px }
+    #view-firewall .card { border-radius: 6px; overflow: hidden; margin-bottom: 16px; min-width: 0 }
+    #view-firewall > .grid { grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr); gap: var(--shield-gap); align-items: stretch }
+    #view-firewall > .grid > .card { grid-column: auto }
+    #view-firewall h2, #view-firewall h3 { color: #fff }
+    #view-firewall .card-head { padding: 12px 14px; border-bottom-color: #273b47 }
+    #view-firewall .input { width: 100%; min-width: 0; box-sizing: border-box }
+    #view-firewall .btn { flex-shrink: 0; white-space: nowrap }
+    #view-firewall .shield-input-row { display: flex; flex-wrap: nowrap; gap: 8px }
+    #view-firewall .shield-input-row .input { flex: 1 }
+    #allow-list { display: flex; flex-wrap: wrap; gap: 6px; overflow-wrap: anywhere }
+    #allow-list .tag { max-width: 100%; box-sizing: border-box }
+    #view-firewall .toolbar { flex-wrap: wrap; gap: 12px; align-items: flex-start }
+    #view-firewall .toolbar > div:first-child { flex: 1; min-width: 240px }
+    #view-firewall .toolbar .hint { margin-top: 5px; line-height: 1.5 }
+    #view-firewall .toolbar .actions { justify-content: flex-end }
+    #fw-tuning-source { font-size: 11px }
+    #firewall-settings-form { display: grid; gap: 14px }
+    .shield-tuning-section { margin: 0; min-width: 0; padding: 14px; border: 1px solid var(--asus-border); border-radius: 6px; background: #23313a }
+    .shield-tuning-section legend { padding: 0 8px; color: #7ecfee; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase }
+    #firewall-settings-form .form-grid { gap: 14px 16px; align-items: start }
+    #firewall-settings-form .field { min-width: 0; display: flex; flex-direction: column }
+    #firewall-settings-form label { min-height: 28px; display: flex; align-items: flex-end; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; line-height: 1.4 }
+    #firewall-settings-form .hint { line-height: 1.5 }
+    #firewall-settings-form > .actions { justify-content: flex-end; padding-top: 12px; border-top: 1px solid #3b4f5b }
+    .shield-health-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px }
+    .shield-health-heading h2 { margin: 0; font-size: 13px }
+    .shield-health-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 16px }
+    .shield-health-grid p { margin: 0; line-height: 1.6; overflow-wrap: anywhere }
+    .shield-health-label { display: block; color: var(--asus-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; margin-bottom: 4px }
+    #fw-health { background: linear-gradient(135deg, #182832, #23313a); border-left: 3px solid var(--cyan) }
+    #fw-health > .hint { margin: 12px 0 0; line-height: 1.5 }
+    @media (max-width: 1050px) {
+      #view-firewall > .grid { grid-template-columns: minmax(0, 1fr) }
+    }
+    @media (max-width: 600px) {
+      #firewall-settings-form .form-grid, .shield-health-grid { grid-template-columns: minmax(0, 1fr) }
+      #firewall-settings-form label { min-height: 0 }
+      #view-firewall .toolbar .actions { justify-content: flex-start }
+    }
+
     /* ── Form inputs ── */
     .input {
       border: 1px solid #4a6070;
@@ -712,6 +768,20 @@
 
     .nginx-summary-card .muted {
       margin: 10px;
+    }
+
+    .certificate-http-card {
+      margin-bottom: 12px;
+    }
+
+    .certificate-http-card .certificate-http-body {
+      padding: 10px 12px;
+    }
+
+    #certificate-http-status {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.5;
     }
 
     .nginx-card .table td {
@@ -854,6 +924,310 @@
     }
     @media (max-width: 480px) {
       .nginx-site-editor .site-policy-grid { grid-template-columns: minmax(0, 1fr) }
+    }
+
+    /* ── Nginx Listeners and Access Settings Modal ── */
+    .nginx-settings-editor { width: min(980px, calc(100vw - 20px)) }
+    .nginx-settings-editor .modal-body { padding: 16px; max-height: calc(90vh - 110px); overflow-y: auto }
+    #nginx-settings-form { display: flex; flex-direction: column; gap: 16px }
+    #nginx-settings-form .field { min-width: 0; gap: 4px }
+    #nginx-settings-form .input { width: 100%; box-sizing: border-box; min-width: 0 }
+    #nginx-settings-form label { color: #9cb2c0; font-size: 11px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; display: block }
+    .nginx-settings-editor .nginx-field-heading { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 20px }
+    .nginx-settings-editor .nginx-help-toggle { width: 18px; height: 18px; font-size: 10px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center }
+    .nginx-settings-editor .nginx-field-help { font-size: 11px; color: #7ecfee; background: #14222a; border: 1px solid #234557; border-radius: 4px; padding: 6px 8px; margin-top: 4px; line-height: 1.45 }
+
+    .nginx-settings-intro {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px 16px;
+      background: linear-gradient(135deg, #182832 0%, #131f28 100%);
+      border: 1px solid #284455;
+      border-left: 3px solid var(--cyan);
+      border-radius: 6px;
+      color: #c9dde8;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .nginx-intro-icon { color: var(--cyan); flex-shrink: 0; margin-top: 2px }
+    .nginx-intro-icon svg { display: block }
+    .nginx-intro-text { flex: 1 }
+
+    .nginx-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 8px;
+      margin-bottom: -4px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #273b47;
+    }
+    .nginx-section-title { display: inline-flex; align-items: center; gap: 8px }
+    .nginx-section-title h3 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #fff }
+    .nginx-section-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .05em;
+      padding: 2px 7px;
+      border-radius: 4px;
+      background: #143240;
+      border: 1px solid #23556e;
+      color: #7ecfee;
+      text-transform: uppercase;
+    }
+    .nginx-section-card {
+      margin-bottom: 0;
+      border-radius: 6px;
+      border: 1px solid var(--asus-border);
+      background: #23313a;
+      padding: 14px;
+    }
+    .nginx-mode-hint { grid-column: 1 / -1; margin: 0 0 2px }
+    .nginx-mode-hint .hint {
+      padding: 8px 12px;
+      background: #17242c;
+      border: 1px solid #263b47;
+      border-radius: 4px;
+      color: #8faec0;
+      margin: 0;
+      line-height: 1.45;
+    }
+    .nginx-wan-notice {
+      margin: 14px 0 0;
+      padding: 10px 12px;
+      font-size: 11px;
+      line-height: 1.5;
+      border-radius: 4px;
+      border-color: #2b4555;
+      background: #16242c;
+      color: #9ab4c4;
+    }
+
+    details.nginx-settings-accordion {
+      border: 1px solid var(--asus-border);
+      background: #23313a;
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 0;
+      transition: border-color .15s ease;
+    }
+    details.nginx-settings-accordion[open] { border-color: #3b5a6c }
+    details.nginx-settings-accordion > summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: #1a2830;
+      color: #e2eff7;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+      list-style: none;
+      border-bottom: 1px solid transparent;
+      outline: none;
+    }
+    details.nginx-settings-accordion > summary::-webkit-details-marker { display: none }
+    details.nginx-settings-accordion > summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px }
+    details.nginx-settings-accordion[open] > summary { border-bottom: 1px solid #273b47; background: #1d2d37 }
+    details.nginx-settings-accordion > summary::after { content: '▼'; font-size: 9px; color: var(--cyan); transition: transform .2s ease }
+    details.nginx-settings-accordion:not([open]) > summary::after { content: '▶'; color: var(--asus-muted) }
+    .nginx-accordion-content { padding: 14px; background: #212e37 }
+
+    .nginx-item-card {
+      margin-bottom: 12px;
+      border: 1px solid var(--asus-border);
+      border-radius: 6px;
+      background: #23313a;
+      overflow: hidden;
+    }
+    .nginx-item-card .card-head {
+      padding: 8px 12px;
+      background: #1a2830;
+      border-bottom: 1px solid #283e4d;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .nginx-item-card .card-head h4 { margin: 0; font-size: 13px; font-weight: 600; color: #fff }
+    .nginx-item-card .card-title-group { display: inline-flex; align-items: center; gap: 8px; min-width: 0 }
+    .nginx-item-card .card-title-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #133842;
+      border: 1px solid #235c6b;
+      color: #67e8f9;
+      flex-shrink: 0;
+    }
+    .nginx-item-card .card-title-badge.access { background: #2a2c1a; border-color: #555b2a; color: #e5e985 }
+    .nginx-item-card .card-body { padding: 14px; display: flex; flex-direction: column; gap: 12px }
+    .nginx-profile-header-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+      gap: 12px;
+      align-items: flex-end;
+    }
+    @media (max-width: 640px) {
+      .nginx-profile-header-grid { grid-template-columns: minmax(0, 1fr) }
+    }
+
+    .nginx-usage-details {
+      border: 1px solid #283e4d;
+      background: #17232b;
+      border-radius: 4px;
+      overflow: hidden;
+      width: 100%;
+    }
+    .nginx-usage-summary {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 8px;
+      font-size: 11px;
+      cursor: pointer;
+      color: #a2b7c4;
+      user-select: none;
+      list-style: none;
+    }
+    .nginx-usage-summary::-webkit-details-marker { display: none }
+    .nginx-usage-summary::after { content: '▼'; margin-left: auto; font-size: 8px; color: var(--asus-muted) }
+    .nginx-usage-details:not([open]) .nginx-usage-summary::after { content: '▶' }
+    .nginx-usage-pill {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: #22343f;
+      color: #7ecfee;
+      border: 1px solid #334e5f;
+    }
+    .nginx-usage-pill.active { background: #153c30; color: #6ee7b7; border-color: #276749 }
+    .nginx-usage-label { color: #8da4b3; font-size: 11px }
+    .nginx-usage-content {
+      padding: 8px 10px;
+      border-top: 1px solid #233642;
+      background: #121c22;
+      font-size: 11px;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    .nginx-usage-content .hint { margin: 0; line-height: 1.5 }
+
+    .nginx-endpoints-wrapper {
+      background: #1a262e;
+      border: 1px solid #2a3c47;
+      border-radius: 5px;
+      padding: 12px;
+    }
+    .nginx-endpoints-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .endpoints-heading {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      color: #9cb2c0;
+    }
+    .nginx-endpoint-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      padding: 8px 10px;
+      background: #141f26;
+      border: 1px solid #263844;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      transition: border-color .15s;
+    }
+    .nginx-endpoint-row:last-child { margin-bottom: 0 }
+    .nginx-endpoint-row:hover { border-color: #385264 }
+    .endpoint-proto-badge {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .05em;
+      padding: 4px 8px;
+      border-radius: 4px;
+      align-self: flex-end;
+      min-width: 52px;
+      text-align: center;
+      flex-shrink: 0;
+      height: 28px;
+      line-height: 20px;
+      box-sizing: border-box;
+    }
+    .endpoint-proto-badge.https { background: #133842; border: 1px solid #235c6b; color: #67e8f9 }
+    .endpoint-proto-badge.http { background: #332b17; border: 1px solid #6b5523; color: #ffd166 }
+    .endpoint-field-address { flex: 1; min-width: 130px }
+    .endpoint-field-port { width: 95px; flex-shrink: 0 }
+    .endpoint-field-action { flex-shrink: 0 }
+    .endpoint-remove-btn { height: 28px; display: inline-flex; align-items: center; gap: 4px }
+    @media (max-width: 560px) {
+      .nginx-endpoint-row { flex-wrap: wrap }
+      .endpoint-field-address { min-width: 100% }
+    }
+
+    .nginx-card-options {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-top: 4px;
+      border-top: 1px solid #273b47;
+    }
+    .checkbox-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      color: #ddebf4;
+      user-select: none;
+    }
+    .checkbox-label input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-color: var(--cyan) }
+    .nginx-card-options .hint { margin: 0; color: #8da4b3 }
+    .nginx-mono-textarea {
+      min-height: 84px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.45;
+      tab-size: 2;
+      white-space: pre;
+    }
+    #nginx-profile-rows:empty::before {
+      content: "No custom listeners configured. Click '+ Add listener' above to create one.";
+      display: block;
+      padding: 16px;
+      text-align: center;
+      color: var(--asus-muted);
+      font-size: 12px;
+      background: #1a262e;
+      border: 1px dashed #2d414f;
+      border-radius: 6px;
+      margin-bottom: 8px;
+    }
+    #nginx-access-rows:empty::before {
+      content: "No custom access rules configured. Click '+ Add access rule' above to create one.";
+      display: block;
+      padding: 16px;
+      text-align: center;
+      color: var(--asus-muted);
+      font-size: 12px;
+      background: #1a262e;
+      border: 1px dashed #2d414f;
+      border-radius: 6px;
+      margin-bottom: 8px;
     }
 
     .nginx-reference-modal {
@@ -1212,7 +1586,7 @@
         <td class="title-cell formfonttitle">Router Hub &mdash; <span id="page-title">Dashboard</span></td>
         <td class="brand-cell">
           <div class="rh-brand-info">
-            <span class="rh-badge" style="padding:0 8px;">
+            <span class="rh-badge">
               <span class="rh-version" id="rh-version">v__ROUTER_HUB_VERSION__</span>
             </span>
             <span class="rh-badge">
@@ -1223,7 +1597,7 @@
                     id="connection">Checking</span></span>
               </span>
             </span>
-            <button class="btn" style="height:32px;" onclick="refreshCurrent()">Refresh</button>
+            <button class="btn primary" onclick="refreshCurrent()">Refresh</button>
           </div>
         </td>
       </tr>
@@ -1500,7 +1874,15 @@
       </section>
 
       <section class="view" id="view-certificates">
-        <div class="card"><div class="card-head"><h2>HTTP certificate access</h2><button class="btn small" onclick="closeCertificateHttpAccess()">Retry closure</button></div><p id="certificate-http-status" aria-live="polite">Loading…</p></div>
+        <div class="card certificate-http-card">
+          <div class="card-head">
+            <h2>HTTP certificate access</h2>
+            <button class="btn small" onclick="closeCertificateHttpAccess()">Retry closure</button>
+          </div>
+          <div class="certificate-http-body">
+            <p id="certificate-http-status" aria-live="polite">Loading…</p>
+          </div>
+        </div>
         <div class="notice warn">Certificates use the dehydrated script and hooks in the configured data directory.
           HTTP challenges use the configured dehydrated <code>acme-challenge</code> directory; DNS certificates require
           an installed hook (or the default data-directory hook) and its environment values. Existing matching
@@ -1573,14 +1955,14 @@
             </div>
             <hr style="border:0;border-top:1px solid #2a4050;margin:14px 0">
             <h3 style="font-size:13px">Allowlist</h3>
-            <div class="actions"><input class="input" id="allow-network" placeholder="192.168.1.0/24"><button
+            <div class="shield-input-row"><input class="input" aria-label="Network to allow" id="allow-network" placeholder="192.168.1.0/24"><button
                 class="btn" onclick="addAllowlist()">Add</button></div>
             <div id="allow-list" style="margin-top:8px"></div>
             <hr style="border:0;border-top:1px solid #2a4050;margin:14px 0">
             <h3 style="font-size:13px">Quick actions</h3>
             <div class="protection-actions">
               <button class="btn" onclick="showActiveBans()">Active bans</button>
-              <div class="manual-ban"><input class="input" id="manual-ban" placeholder="203.0.113.4/32"><button
+              <div class="manual-ban"><input class="input" aria-label="Network to ban for one hour" id="manual-ban" placeholder="203.0.113.4/32"><button
                   class="btn danger" onclick="manualBan()">Ban 1 hour</button></div>
             </div>
           </div>
@@ -1605,25 +1987,35 @@
         </div>
         <div class="card pad">
           <div class="toolbar">
-            <div><strong>Security tuning</strong><div class="hint">Saved in firewall-policy.json and applied live. Prefixes, backend commands, and resource caps remain in router-hub.toml.</div></div>
+            <div><strong>Security tuning</strong><div class="hint">Adjust detection thresholds, retention, and ban durations. Changes apply immediately when saved.</div></div>
             <div class="actions"><span class="muted" id="fw-tuning-source"></span><button type="button" class="btn" onclick="applyStrictFirewallPreset()">Load strict preset</button></div>
           </div>
           <div class="notice warn">Score retention and subnet promotion memory must outlast the minimum subnet ban; reputation retention must outlast the maximum ban. The strict preset is intentionally less forgiving and may block shared hosting or carrier networks when multiple clients share a subnet.</div>
           <form id="firewall-settings-form" class="form" onsubmit="saveFirewallSettings(event)">
-            <div class="form-grid">
-              <div class="field"><label>IP failure threshold</label><input class="input" type="number" min="1" name="ip_failures" required></div>
-              <div class="field"><label>Subnet score threshold</label><input class="input" type="number" min="1" name="subnet_failures" required></div>
-              <div class="field"><label>Distinct IPs for subnet promotion</label><input class="input" type="number" min="2" name="promote_after_banned_ips" required></div>
-              <div class="field"><label>Prior subnet offenses before fast re-promotion</label><input class="input" type="number" min="1" name="reputation_repromote_after_offenses" required><span class="hint">1 means a previously promoted subnet is re-banned when one address reaches the IP threshold.</span></div>
-              <div class="field"><label>Score retention (days)</label><input class="input" type="number" min="1" name="score_retention_days" required></div>
-              <div class="field"><label>Subnet promotion memory (days)</label><input class="input" type="number" min="1" name="subnet_promotion_window_days" required></div>
-              <div class="field"><label>Reputation retention (days)</label><input class="input" type="number" min="1" name="reputation_retention_days" required></div>
-              <div class="field"><label>Minimum subnet ban (days)</label><input class="input" type="number" min="1" name="subnet_ban_days" required></div>
-              <div class="field"><label>First ban (days)</label><input class="input" type="number" min="1" name="first_ban_days" required></div>
-              <div class="field"><label>Second ban (days)</label><input class="input" type="number" min="1" name="second_ban_days" required></div>
-              <div class="field"><label>Third ban (days)</label><input class="input" type="number" min="1" name="third_ban_days" required></div>
-              <div class="field"><label>Maximum ban (days)</label><input class="input" type="number" min="1" name="max_ban_days" required></div>
-            </div>
+            <fieldset class="shield-tuning-section"><legend>Detection thresholds</legend>
+              <div class="form-grid">
+              <div class="field"><label for="fw-ip_failures">IP failure threshold</label><input class="input" type="number" min="1" id="fw-ip_failures" name="ip_failures" required></div>
+              <div class="field"><label for="fw-subnet_failures">Subnet score threshold</label><input class="input" type="number" min="1" id="fw-subnet_failures" name="subnet_failures" required></div>
+              <div class="field"><label for="fw-promote_after_banned_ips">Distinct IPs for subnet promotion</label><input class="input" type="number" min="2" id="fw-promote_after_banned_ips" name="promote_after_banned_ips" required></div>
+              <div class="field"><label for="fw-reputation_repromote_after_offenses">Prior subnet offenses before fast re-promotion</label><input class="input" type="number" min="1" id="fw-reputation_repromote_after_offenses" name="reputation_repromote_after_offenses" required><span class="hint">1 means a previously promoted subnet is re-banned when one address reaches the IP threshold.</span></div>
+              </div>
+            </fieldset>
+            <fieldset class="shield-tuning-section"><legend>Memory and retention</legend>
+              <div class="form-grid">
+              <div class="field"><label for="fw-score_retention_days">Score retention (days)</label><input class="input" type="number" min="1" id="fw-score_retention_days" name="score_retention_days" required></div>
+              <div class="field"><label for="fw-subnet_promotion_window_days">Subnet promotion memory (days)</label><input class="input" type="number" min="1" id="fw-subnet_promotion_window_days" name="subnet_promotion_window_days" required></div>
+              <div class="field"><label for="fw-reputation_retention_days">Reputation retention (days)</label><input class="input" type="number" min="1" id="fw-reputation_retention_days" name="reputation_retention_days" required></div>
+              </div>
+            </fieldset>
+            <fieldset class="shield-tuning-section"><legend>Ban durations</legend>
+              <div class="form-grid">
+              <div class="field"><label for="fw-subnet_ban_days">Minimum subnet ban (days)</label><input class="input" type="number" min="1" id="fw-subnet_ban_days" name="subnet_ban_days" required></div>
+              <div class="field"><label for="fw-first_ban_days">First ban (days)</label><input class="input" type="number" min="1" id="fw-first_ban_days" name="first_ban_days" required></div>
+              <div class="field"><label for="fw-second_ban_days">Second ban (days)</label><input class="input" type="number" min="1" id="fw-second_ban_days" name="second_ban_days" required></div>
+              <div class="field"><label for="fw-third_ban_days">Third ban (days)</label><input class="input" type="number" min="1" id="fw-third_ban_days" name="third_ban_days" required></div>
+              <div class="field"><label for="fw-max_ban_days">Maximum ban (days)</label><input class="input" type="number" min="1" id="fw-max_ban_days" name="max_ban_days" required></div>
+              </div>
+            </fieldset>
             <div class="actions" style="margin-top:12px"><button type="submit" class="btn primary">Save security tuning</button></div>
           </form>
         </div>
@@ -1859,8 +2251,8 @@
     function sortTable(table, key) { const sort = tableSorts[table]; if (sort.key === key) sort.dir *= -1; else { sort.key = key; sort.dir = 1 } if (table === 'nginx') loadNginxObjects(); else if (table === 'bans') showActiveBans(); else if (table === 'rewrites') { state.adguardRewrites.sort((a, b) => sort.dir * compareTableValues(a, b, key)); renderAdguardRewrites() } else if (table === 'hosts') { state.adguardHosts.sort((a, b) => sort.dir * compareTableValues(a, b, key)); renderAdguardHosts() } else if (table === 'dnsmasq') { state.dnsmasqHosts.sort((a, b) => sort.dir * compareTableValues(a, b, key)); renderDnsmasqHosts() } updateSortHeaders(table) }
     function emptyRow(cols, text = 'No items configured') { return `<tr><td colspan="${cols}" class="empty">${esc(text)}</td></tr>` }
     function status(ok, on = 'Running', off = 'Stopped') { return `<span class="status ${ok ? 'ok' : 'off'}">${ok ? on : off}</span>` }
-    function openEditor(title, html, save) { document.getElementById('editor').classList.toggle('nginx-site-editor', html.includes('id="nginx-object-form"')); document.getElementById('editor-title').textContent = title; document.getElementById('editor-body').innerHTML = html; document.getElementById('editor-save').onclick = save; document.getElementById('editor').showModal() }
-    function closeEditor() { document.getElementById('editor').close() }
+    function openEditor(title, html, save) { const ed = document.getElementById('editor'); ed.classList.toggle('nginx-site-editor', html.includes('id="nginx-object-form"')); ed.classList.toggle('nginx-settings-editor', html.includes('id="nginx-settings-form"')); document.getElementById('editor-title').textContent = title; document.getElementById('editor-body').innerHTML = html; document.getElementById('editor-save').onclick = save; ed.showModal() }
+    function closeEditor() { const ed = document.getElementById('editor'); ed.close(); ed.classList.remove('nginx-site-editor', 'nginx-settings-editor') }
     function formObject(form) { return Object.fromEntries(new FormData(form).entries()) }
     function jsonLines(value) { return (value || '').split(/\r?\n/).map(v => v.trim()).filter(Boolean) }
     function envObject(value) { const result = {}; for (const line of jsonLines(value)) { const split = line.indexOf('='); if (split <= 0) throw new Error('Hook environment entries must use KEY=value'); result[line.slice(0, split).trim()] = line.slice(split + 1) } return result }
@@ -2223,17 +2615,95 @@
       }
     }
     function nginxEndpointRow(protocol, endpoint = {}) {
-      return `<div class="form-grid" data-nginx-endpoint="${protocol}"><div class="field"><label>${protocol.toUpperCase()} address<input class="input" data-endpoint-address value="${esc(endpoint.address || '127.0.0.1')}" placeholder="127.0.0.1" required></label></div><div class="field"><label>Port<input class="input" data-endpoint-port type="number" min="1" max="65535" value="${endpoint.port || (protocol === 'https' ? 8444 : 8080)}" required></label></div><div><button type="button" class="btn small" onclick="this.closest('[data-nginx-endpoint]').remove()">Remove address</button></div></div>`;
+      const isHttps = protocol === 'https';
+      return `<div class="nginx-endpoint-row" data-nginx-endpoint="${protocol}">
+        <span class="endpoint-proto-badge ${protocol}">${protocol.toUpperCase()}</span>
+        <div class="field endpoint-field-address">
+          <label>Listen address</label>
+          <input class="input" data-endpoint-address value="${esc(endpoint.address || '127.0.0.1')}" placeholder="127.0.0.1" required>
+        </div>
+        <div class="field endpoint-field-port">
+          <label>Port</label>
+          <input class="input" data-endpoint-port type="number" min="1" max="65535" value="${endpoint.port || (isHttps ? 8444 : 8080)}" required>
+        </div>
+        <div class="endpoint-field-action">
+          <button type="button" class="btn small danger endpoint-remove-btn" title="Remove address" onclick="this.closest('[data-nginx-endpoint]').remove()">✕ Remove</button>
+        </div>
+      </div>`;
     }
     function nginxUsageHint(type, name) {
       const rows = (state.nginxUsage || {})[`${type}:${name}`] || [];
-      return `<details><summary>${rows.length} reference${rows.length === 1 ? '' : 's'} affected by edits</summary><p class="hint">${rows.length ? rows.map(esc).join('<br>') : 'Not referenced by saved managed settings.'}</p></details>`;
+      const count = rows.length;
+      return `<details class="nginx-usage-details"><summary class="nginx-usage-summary"><span class="nginx-usage-pill ${count > 0 ? 'active' : ''}">${count} reference${count === 1 ? '' : 's'}</span><span class="nginx-usage-label">affected by edits</span></summary><div class="nginx-usage-content"><p class="hint">${count ? rows.map(esc).join('<br>') : 'Not referenced by saved managed settings.'}</p></div></details>`;
     }
     function nginxProfileCard(name = '', profile = {https:[{address:'127.0.0.1',port:8444}],http:[],http_redirect:false}) {
-      return `<fieldset class="card" data-nginx-profile><legend>Listener</legend><div class="field"><label>Name<input class="input" data-profile-name value="${esc(name)}" placeholder="internal" required pattern="[A-Za-z0-9_]{1,32}"></label></div>${nginxUsageHint('listener', name)}<div data-endpoints>${profile.https.map(e => nginxEndpointRow('https',e)).join('')}${profile.http.map(e => nginxEndpointRow('http',e)).join('')}</div><div class="actions"><button type="button" class="btn small" onclick="this.closest('[data-nginx-profile]').querySelector('[data-endpoints]').insertAdjacentHTML('beforeend', nginxEndpointRow('https'))">Add HTTPS address</button><button type="button" class="btn small" onclick="this.closest('[data-nginx-profile]').querySelector('[data-endpoints]').insertAdjacentHTML('beforeend', nginxEndpointRow('http'))">Add HTTP address</button></div><label><input type="checkbox" data-http-redirect ${profile.http_redirect ? 'checked' : ''}> HTTP redirects when shared HTTP mode is Always on</label><p class="hint">Use literal addresses; 0.0.0.0 means all IPv4 interfaces, :: means all IPv6 interfaces. Choose additional interfaces explicitly.</p><button type="button" class="btn small danger" onclick="this.closest('[data-nginx-profile]').remove()">Delete listener</button></fieldset>`;
+      return `<div class="card nginx-item-card" data-nginx-profile>
+        <div class="card-head">
+          <div class="card-title-group">
+            <span class="card-title-badge">Listener</span>
+            <h4 class="card-title-name" data-profile-title>${esc(name || 'New listener')}</h4>
+          </div>
+          <button type="button" class="btn small danger" onclick="this.closest('[data-nginx-profile]').remove()">Delete listener</button>
+        </div>
+        <div class="card-body">
+          <div class="form-grid nginx-profile-header-grid">
+            <div class="field">
+              <label>Listener name</label>
+              <input class="input" data-profile-name value="${esc(name)}" placeholder="internal" required pattern="[A-Za-z0-9_]{1,32}" oninput="const t=this.closest('[data-nginx-profile]').querySelector('[data-profile-title]'); if(t) t.textContent=this.value.trim() || 'New listener'">
+            </div>
+            <div class="field nginx-usage-field">
+              ${nginxUsageHint('listener', name)}
+            </div>
+          </div>
+          <div class="nginx-endpoints-wrapper">
+            <div class="nginx-endpoints-header">
+              <span class="endpoints-heading">Bound addresses &amp; ports</span>
+              <div class="actions">
+                <button type="button" class="btn small action" onclick="this.closest('[data-nginx-profile]').querySelector('[data-endpoints]').insertAdjacentHTML('beforeend', nginxEndpointRow('https'))">+ Add HTTPS</button>
+                <button type="button" class="btn small" onclick="this.closest('[data-nginx-profile]').querySelector('[data-endpoints]').insertAdjacentHTML('beforeend', nginxEndpointRow('http'))">+ Add HTTP</button>
+              </div>
+            </div>
+            <div data-endpoints>
+              ${profile.https.map(e => nginxEndpointRow('https',e)).join('')}
+              ${profile.http.map(e => nginxEndpointRow('http',e)).join('')}
+            </div>
+          </div>
+          <div class="nginx-card-options">
+            <label class="checkbox-label">
+              <input type="checkbox" data-http-redirect ${profile.http_redirect ? 'checked' : ''}>
+              <span>HTTP redirects when shared HTTP mode is Always on</span>
+            </label>
+            <p class="hint">Use literal addresses; 0.0.0.0 means all IPv4 interfaces, :: means all IPv6 interfaces. Choose additional interfaces explicitly.</p>
+          </div>
+        </div>
+      </div>`;
     }
     function nginxAccessCard(name = '', policy = {allow:[]}) {
-      return `<fieldset class="card" data-nginx-access><legend>Access rule</legend><div class="field"><label>Name<input class="input" data-access-name value="${esc(name)}" placeholder="trusted_clients" required pattern="[A-Za-z0-9_]{1,32}"></label></div>${nginxUsageHint('access',name)}<div class="field"><label>Allowed IPs / networks, one per line<textarea class="input" data-access-allow>${esc(policy.allow.join('\n'))}</textarea></label><p class="hint">Empty blocks all sources. Loopback identifies a forwarding process, not the individual users behind it.</p></div><button type="button" class="btn small danger" onclick="this.closest('[data-nginx-access]').remove()">Delete access rule</button></fieldset>`;
+      return `<div class="card nginx-item-card" data-nginx-access>
+        <div class="card-head">
+          <div class="card-title-group">
+            <span class="card-title-badge access">Access rule</span>
+            <h4 class="card-title-name" data-access-title>${esc(name || 'New rule')}</h4>
+          </div>
+          <button type="button" class="btn small danger" onclick="this.closest('[data-nginx-access]').remove()">Delete access rule</button>
+        </div>
+        <div class="card-body">
+          <div class="form-grid nginx-profile-header-grid">
+            <div class="field">
+              <label>Access rule name</label>
+              <input class="input" data-access-name value="${esc(name)}" placeholder="trusted_clients" required pattern="[A-Za-z0-9_]{1,32}" oninput="const t=this.closest('[data-nginx-access]').querySelector('[data-access-title]'); if(t) t.textContent=this.value.trim() || 'New rule'">
+            </div>
+            <div class="field nginx-usage-field">
+              ${nginxUsageHint('access', name)}
+            </div>
+          </div>
+          <div class="field full">
+            <label for="access-allow-${esc(name || 'new')}">Allowed IPs / networks (one per line)</label>
+            <textarea class="input nginx-mono-textarea" id="access-allow-${esc(name || 'new')}" data-access-allow placeholder="192.168.1.0/24&#10;10.0.0.1&#10;127.0.0.1">${esc(policy.allow.join('\n'))}</textarea>
+            <p class="hint">Empty blocks all sources. Loopback identifies a forwarding process, not the individual users behind it.</p>
+          </div>
+        </div>
+      </div>`;
     }
     function nginxReadCollections(form) {
       const listener_profiles = Object.create(null), access_policies = Object.create(null);
@@ -2260,7 +2730,7 @@
       return `<div class="field"><label for="${prefix}access-policy">Access rule</label><select class="input" name="${prefix}access_policy" id="${prefix}access-policy">${nginxAccessOptions(global,nginxSelectedAccess(settings),nginxSelectedAccess(global.site_defaults) || 'Existing configuration allowlist')}</select></div>`;
     }
     function nginxSessionPolicyControl(global,settings,prefix='') {
-      return `<div class="field"><label>Restricted Sessions access rule<select class="input" name="${prefix}restricted_sessions_policy">${nginxAccessOptions(global,settings.restricted_sessions_policy || '',global.site_defaults.restricted_sessions_policy || 'Existing configuration allowlist')}</select></label></div>`;
+      return `<div class="field"><label for="${prefix}restricted-sessions-policy">Restricted Sessions access rule</label><select class="input" name="${prefix}restricted_sessions_policy" id="${prefix}restricted-sessions-policy">${nginxAccessOptions(global,settings.restricted_sessions_policy || '',global.site_defaults.restricted_sessions_policy || 'Existing configuration allowlist')}</select></div>`;
     }
     function nginxListenerOptions(global, selected = '') {
       return [['','Use configured default'],['legacy','Existing configuration'],...Object.entries(global.listener_profiles || {}).map(([name,p]) => [name,`${name} · ${p.https.map(e => `${e.address}:${e.port}`).join(', ')}`])].map(([value,label]) => `<option value="${esc(value)}" ${value === selected ? 'selected' : ''}>${esc(label)}</option>`).join('');
@@ -2271,7 +2741,145 @@
         state.nginxUsage = usage;
         const http = settings.http_access || {mode:'always',window_seconds:3600,listener_profile:'legacy'}, profiles = settings.listener_profiles || {}, policies = settings.access_policies || {};
         const legacyFields = nginxSharedFields.filter(([key]) => ['router_ip','http_port','https_port'].includes(key)), advancedFields = nginxSharedFields.filter(([key]) => !legacyFields.some(([legacy]) => legacy === key));
-        openEditor('Nginx listeners and access', `<form id="nginx-settings-form" class="form"><p class="muted">Configure reusable listeners and source rules once, then select them for each site. Names do not configure VPN user permissions or general firewall policy.</p><h3>Public HTTP access</h3><div class="form-grid"><div class="field"><label for="nginx-http-mode">HTTP mode</label><select class="input" name="http_mode" id="nginx-http-mode"><option value="off" ${http.mode === 'off' ? 'selected' : ''}>Off</option><option value="renewal_only" ${http.mode === 'renewal_only' ? 'selected' : ''}>Certificate validation only</option><option value="always" ${http.mode === 'always' ? 'selected' : ''}>Always on with redirects</option></select><p class="hint">Validation only closes managed public HTTP outside actual HTTP-01 batches. Normal HTTP redirects are unavailable. DNS-01 never opens a window.</p></div><div class="field"><label for="nginx-http-listener">Challenge listener</label><select class="input" name="http_listener" id="nginx-http-listener">${nginxListenerOptions(settings,http.listener_profile)}</select></div><div class="field"><label for="nginx-http-window">Maximum validation window (seconds)</label><input class="input" name="http_window" id="nginx-http-window" type="number" min="60" max="86400" value="${http.window_seconds}"></div><div class="field"><label for="nginx-http-wan">Validation WAN access</label><select class="input" id="nginx-http-wan" name="http_wan"><option value="unconfigured">Not configured</option><option value="external" ${http.externally_managed_wan ? 'selected' : ''}>Externally managed</option><option value="managed" ${http.wan ? 'selected' : ''}>Managed IPv4 (firmware verification required)</option></select></div><div class="field"><label for="nginx-wan-interface">WAN interface</label><input class="input" id="nginx-wan-interface" name="wan_interface" value="${esc(http.wan?.interface || '')}" placeholder="Verified interface name"></div><div class="field"><label for="nginx-wan-target">Router IPv4 challenge address</label><input class="input" id="nginx-wan-target" name="wan_target" value="${esc(http.wan?.target || '')}" placeholder="Address bound by the challenge listener"></div></div><p class="hint">The experimental managed adapter controls only owned TCP-80 rules, requires iptables, ip6tables and ipset, and blocks WAN IPv6 TCP 80. Verify firmware rule ordering before deployment. Its timed kernel gate limits WAN access after a crash; local nginx cleanup requires Router Hub startup recovery. External mode does not toggle your WAN rules.</p><h3>Listeners</h3><details><summary>Existing configuration · legacy listener</summary><div class="form-grid">${nginxSettingsFields(legacyFields,settings.shared)}</div>${nginxUsageHint('listener','legacy')}</details><div id="nginx-profile-rows">${Object.entries(profiles).map(([name,p]) => nginxProfileCard(name,p)).join('')}</div><button class="btn" type="button" onclick="document.getElementById('nginx-profile-rows').insertAdjacentHTML('beforeend',nginxProfileCard())">Add listener</button><h3>Access rules</h3><details><summary>Existing configuration allowlist</summary><div class="field"><label>Allowed IPs / networks, one per line<textarea class="input" name="allowed_ips">${esc(settings.allowed_ips.join('\n'))}</textarea></label></div>${nginxUsageHint('access','legacy')}</details><div id="nginx-access-rows">${Object.entries(policies).map(([name,p]) => nginxAccessCard(name,p)).join('')}</div><button class="btn" type="button" onclick="document.getElementById('nginx-access-rows').insertAdjacentHTML('beforeend',nginxAccessCard())">Add access rule</button><details><summary>Default site settings</summary><p class="hint">Changes affect inheriting sites. Explicit site selections are retained.</p><div class="form-grid"><div class="field"><label>Default listener<select class="input" name="default_listener_profile">${nginxListenerOptions(settings,settings.site_defaults.listener_profile || '')}</select></label></div>${nginxAccessControl(settings,settings.site_defaults,'default_')}${nginxSettingsFields(nginxPolicyFields.filter(([key]) => key !== 'enable_lanonly'),settings.site_defaults,{},'default_')}${nginxSessionPolicyControl(settings,settings.site_defaults,'default_')}${nginxRoutesField(settings.site_defaults,'default_routes')}</div></details><details><summary>Advanced global settings</summary><div class="form-grid">${nginxSettingsFields(advancedFields,settings.shared)}</div><div class="field"><label>Request limit policies (JSON object)<textarea class="input" name="limit_policies">${esc(JSON.stringify(settings.limit_policies || {},null,2))}</textarea></label></div><div class="field"><label>Shared domain suffixes, one per line<textarea class="input" name="free_subdomains">${esc(settings.free_subdomains.join('\n'))}</textarea></label></div></details><p class="route-policy-error" role="alert" data-form-error hidden></p></form>`, async () => {
+        openEditor('Nginx listeners and access', `<form id="nginx-settings-form" class="form">
+          <div class="nginx-settings-intro">
+            <div class="nginx-intro-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+            </div>
+            <div class="nginx-intro-text">
+              Configure reusable listeners and source rules once, then select them for each site. Names do not configure VPN user permissions or general firewall policy.
+            </div>
+          </div>
+
+          <div class="nginx-section-header">
+            <div class="nginx-section-title">
+              <span class="nginx-section-badge">HTTP</span>
+              <h3>Public HTTP access</h3>
+            </div>
+          </div>
+          <div class="card pad nginx-section-card">
+            <div class="form-grid">
+              <div class="field">
+                <label for="nginx-http-mode">HTTP mode</label>
+                <select class="input" name="http_mode" id="nginx-http-mode">
+                  <option value="off" ${http.mode === 'off' ? 'selected' : ''}>Off</option>
+                  <option value="renewal_only" ${http.mode === 'renewal_only' ? 'selected' : ''}>Certificate validation only</option>
+                  <option value="always" ${http.mode === 'always' ? 'selected' : ''}>Always on with redirects</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="nginx-http-listener">Challenge listener</label>
+                <select class="input" name="http_listener" id="nginx-http-listener">${nginxListenerOptions(settings,http.listener_profile)}</select>
+              </div>
+              <div class="nginx-mode-hint">
+                <p class="hint">Validation only closes managed public HTTP outside actual HTTP-01 batches. Normal HTTP redirects are unavailable. DNS-01 never opens a window.</p>
+              </div>
+              <div class="field">
+                <label for="nginx-http-window">Maximum validation window (seconds)</label>
+                <input class="input" name="http_window" id="nginx-http-window" type="number" min="60" max="86400" value="${http.window_seconds}">
+              </div>
+              <div class="field">
+                <label for="nginx-http-wan">Validation WAN access</label>
+                <select class="input" id="nginx-http-wan" name="http_wan">
+                  <option value="unconfigured">Not configured</option>
+                  <option value="external" ${http.externally_managed_wan ? 'selected' : ''}>Externally managed</option>
+                  <option value="managed" ${http.wan ? 'selected' : ''}>Managed IPv4 (firmware verification required)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="nginx-wan-interface">WAN interface</label>
+                <input class="input" id="nginx-wan-interface" name="wan_interface" value="${esc(http.wan?.interface || '')}" placeholder="Verified interface name">
+              </div>
+              <div class="field">
+                <label for="nginx-wan-target">Router IPv4 challenge address</label>
+                <input class="input" id="nginx-wan-target" name="wan_target" value="${esc(http.wan?.target || '')}" placeholder="Address bound by the challenge listener">
+              </div>
+            </div>
+            <div class="notice nginx-wan-notice">
+              The experimental managed adapter controls only owned TCP-80 rules, requires iptables, ip6tables and ipset, and blocks WAN IPv6 TCP 80. Verify firmware rule ordering before deployment. Its timed kernel gate limits WAN access after a crash; local nginx cleanup requires Router Hub startup recovery. External mode does not toggle your WAN rules.
+            </div>
+          </div>
+
+          <div class="nginx-section-header">
+            <div class="nginx-section-title">
+              <span class="nginx-section-badge">Listeners</span>
+              <h3>Listeners</h3>
+            </div>
+            <button class="btn small action" type="button" onclick="document.getElementById('nginx-profile-rows').insertAdjacentHTML('beforeend',nginxProfileCard())">+ Add listener</button>
+          </div>
+          <details class="nginx-settings-accordion">
+            <summary><span>Existing configuration · legacy listener</span></summary>
+            <div class="nginx-accordion-content">
+              <div class="form-grid">${nginxSettingsFields(legacyFields,settings.shared)}</div>
+              <div style="margin-top: 10px;">${nginxUsageHint('listener','legacy')}</div>
+            </div>
+          </details>
+          <div id="nginx-profile-rows">${Object.entries(profiles).map(([name,p]) => nginxProfileCard(name,p)).join('')}</div>
+
+          <div class="nginx-section-header">
+            <div class="nginx-section-title">
+              <span class="nginx-section-badge">Access</span>
+              <h3>Access rules</h3>
+            </div>
+            <button class="btn small action" type="button" onclick="document.getElementById('nginx-access-rows').insertAdjacentHTML('beforeend',nginxAccessCard())">+ Add access rule</button>
+          </div>
+          <details class="nginx-settings-accordion">
+            <summary><span>Existing configuration allowlist</span></summary>
+            <div class="nginx-accordion-content">
+              <div class="field full">
+                <label for="nginx-allowed-ips">Allowed IPs / networks (one per line)</label>
+                <textarea class="input nginx-mono-textarea" id="nginx-allowed-ips" name="allowed_ips">${esc(settings.allowed_ips.join('\n'))}</textarea>
+              </div>
+              <div style="margin-top: 10px;">${nginxUsageHint('access','legacy')}</div>
+            </div>
+          </details>
+          <div id="nginx-access-rows">${Object.entries(policies).map(([name,p]) => nginxAccessCard(name,p)).join('')}</div>
+
+          <div class="nginx-section-header">
+            <div class="nginx-section-title">
+              <span class="nginx-section-badge">Defaults</span>
+              <h3>Default site settings</h3>
+            </div>
+          </div>
+          <details class="nginx-settings-accordion">
+            <summary><span>Default site settings (inherited by sites)</span></summary>
+            <div class="nginx-accordion-content">
+              <div class="notice" style="margin-bottom: 12px;">Changes affect inheriting sites. Explicit site selections are retained.</div>
+              <div class="form-grid">
+                <div class="field">
+                  <label for="default-listener-profile">Default listener</label>
+                  <select class="input" name="default_listener_profile" id="default-listener-profile">${nginxListenerOptions(settings,settings.site_defaults.listener_profile || '')}</select>
+                </div>
+                ${nginxAccessControl(settings,settings.site_defaults,'default_')}
+                ${nginxSettingsFields(nginxPolicyFields.filter(([key]) => key !== 'enable_lanonly'),settings.site_defaults,{},'default_')}
+                ${nginxSessionPolicyControl(settings,settings.site_defaults,'default_')}
+                ${nginxRoutesField(settings.site_defaults,'default_routes')}
+              </div>
+            </div>
+          </details>
+
+          <div class="nginx-section-header">
+            <div class="nginx-section-title">
+              <span class="nginx-section-badge">Advanced</span>
+              <h3>Advanced global settings</h3>
+            </div>
+          </div>
+          <details class="nginx-settings-accordion">
+            <summary><span>Advanced global settings</span></summary>
+            <div class="nginx-accordion-content">
+              <div class="form-grid">${nginxSettingsFields(advancedFields,settings.shared)}</div>
+              <div class="field full" style="margin-top: 12px;">
+                <label for="nginx-limit-policies">Request limit policies (JSON object)</label>
+                <textarea class="input nginx-mono-textarea" id="nginx-limit-policies" name="limit_policies">${esc(JSON.stringify(settings.limit_policies || {},null,2))}</textarea>
+              </div>
+              <div class="field full" style="margin-top: 12px;">
+                <label for="nginx-free-subdomains">Shared domain suffixes (one per line)</label>
+                <textarea class="input nginx-mono-textarea" id="nginx-free-subdomains" name="free_subdomains">${esc(settings.free_subdomains.join('\n'))}</textarea>
+              </div>
+            </div>
+          </details>
+          <p class="route-policy-error" role="alert" data-form-error hidden></p>
+        </form>`, async () => {
           const f = document.getElementById('nginx-settings-form');
           try {
             if (!f.reportValidity()) return;
@@ -2525,7 +3133,7 @@
           ? `<span class="status warn">Needs attention</span><div class="muted" style="margin-top:4px">${h.dropped_line_count.toLocaleString()} dropped log lines · ${h.command_timeout_count.toLocaleString()} command timeouts · ${h.error_count.toLocaleString()} errors${tuningNeedsHardening ? ' · Retention is not long enough to preserve hardening across configured bans; save updated tuning.' : ''}${h.last_error ? ' · Last error: ' + esc(h.last_error) : ''}</div>`
           : '<span class="status ok">Healthy</span><div class="muted" style="margin-top:4px">No dropped lines, timeouts, or errors reported</div>';
         health.style.borderColor = (h.state === 'degraded' || tuningNeedsHardening) ? '#7a6127' : '';
-        health.innerHTML = `<h2 style="margin-top:0;font-size:13px">Ban shield performance</h2><p><strong>Set usage:</strong> ${utilization}</p><p><strong>Engine:</strong> ${esc(h.state)} · ${healthSummary}</p><p class="muted">IP threshold ${t.ip_failures}; score memory ${t.score_retention_days}d; subnet ban minimum ${t.subnet_ban_days}d. Active-ban capacity is 8,192; investigate if usage reaches the thousands or health counters increase.</p>`;
+        health.innerHTML = `<div class="shield-health-heading"><h2>Ban Shield performance</h2><span class="status">${esc(h.state)}</span></div><div class="shield-health-grid"><p><span class="shield-health-label">Set usage</span>${utilization}</p><div><span class="shield-health-label">Engine health</span>${healthSummary}</div></div><p class="hint">IP threshold ${t.ip_failures}; score memory ${t.score_retention_days}d; subnet ban minimum ${t.subnet_ban_days}d. Active-ban capacity is 8,192; investigate if usage reaches the thousands or health counters increase.</p>`;
         document.getElementById('allow-list').innerHTML = p.allowlist.length ? p.allowlist.map(n => `<span class="tag">${esc(n)} <button class="btn small" onclick="removeAllowlist('${encodeURIComponent(n)}')">×</button></span>`).join('') : '<span class="muted">No allowlist entries</span>';
         document.getElementById('rules-body').innerHTML = p.rules.length ? p.rules.map(r => { const rs = (state.firewall.snapshot.rule_stats || []).find(([name]) => name === r.name); const matchCount = rs ? rs[1].match_count : null; const banCount = rs ? rs[1].ban_count : null; const statsHtml = matchCount !== null ? `${matchCount.toLocaleString()} hit(s) · ${banCount.toLocaleString()} ban(s)` : '<span class="muted">—</span>'; return `<tr><td><strong>${esc(r.name)}</strong> ${status(r.enabled, 'Enabled', 'Disabled')}</td><td>weight ${r.weight}<br><span class="muted">${Math.ceil(s.global_threshold / r.weight)} hit(s) from zero</span></td><td>${statsHtml}</td><td><div class="row-actions"><button class="btn small" onclick="editRule('${r.id}')">Edit</button><button class="btn small danger" onclick="deleteRule('${r.id}')">Delete</button></div></td></tr>`; }).join('') : emptyRow(4);
       } catch (e) { toast(e.message, true) }

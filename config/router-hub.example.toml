@@ -28,7 +28,9 @@ service = "/sbin/service"
 ipset = "/opt/sbin/ipset"
 iptables = "/usr/sbin/iptables"
 ip6tables = "/usr/sbin/ip6tables"
-dehydrated = "/opt/etc/router-hub/dehydrated"
+dehydrated = "/opt/var/lib/router-hub/dehydrated/dehydrated"
+# Optional DNS-01 hook script path override (defaults to /opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh)
+# dehydrated_dns01_hook = "/opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh"
 openssl = "/usr/sbin/openssl"
 logread = "/opt/sbin/logread"
 nvram = "/bin/nvram"
@@ -75,6 +77,7 @@ reload_timeout_seconds = 15
 
 [certificates]
 certs_dir = "/opt/var/lib/router-hub/dehydrated/certs"
+dns01_hook = "/opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh"
 renew_interval_hours = 12
 renew_before_days = 30
 # Allow for DNS provider propagation delays (NameSilo hook defaults to 600 seconds).

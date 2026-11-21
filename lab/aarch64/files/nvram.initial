@@ -1,0 +1,6 @@
+lan_ipaddr=10.0.2.15
+productid=QEMU-AARCH64-LAB
+odmpid=router-lab
+firmver=lab
+buildno=1
+extendno=qemu

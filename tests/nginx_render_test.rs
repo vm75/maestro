@@ -252,7 +252,7 @@ async fn native_jinja_output_passes_real_nginx_validation() {
 }
 
 #[tokio::test]
-async fn bootstrap_is_empty_current_format_and_preserves_existing_configuration() {
+async fn bootstrap_installs_current_format_and_backs_up_existing_main_configuration() {
     let (Some(nginx_bin), Some(openssl)) = (program("nginx"), program("openssl")) else {
         return;
     };
@@ -279,6 +279,7 @@ async fn bootstrap_is_empty_current_format_and_preserves_existing_configuration(
     )
     .unwrap();
     assert!(nginx_render::bootstrap(&config).await.unwrap());
+    assert!(!nginx_render::bootstrap(&config).await.unwrap());
     assert!(nginx::list_objects(&config, false).unwrap().is_empty());
     let main = fs::read_to_string(&config.nginx.config_path).unwrap();
     assert!(main.contains("daemon on;"));
@@ -317,11 +318,29 @@ async fn bootstrap_is_empty_current_format_and_preserves_existing_configuration(
     assert!(result.success, "{}", result.stderr);
     fs::write(&config.nginx.config_path, "administrator configuration").unwrap();
     fs::write(root.join("snippets/restrict.conf"), "administrator rules").unwrap();
-    assert!(!nginx_render::bootstrap(&config).await.unwrap());
+    let inputs = fs::read(nginx_render::global_path(&config)).unwrap();
+    assert!(nginx_render::bootstrap(&config).await.unwrap());
+    assert_eq!(fs::read_to_string(&config.nginx.config_path).unwrap(), main);
+    let backups = fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("nginx.conf.before-router-hub-")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(backups.len(), 1);
     assert_eq!(
-        fs::read_to_string(&config.nginx.config_path).unwrap(),
+        fs::read_to_string(&backups[0]).unwrap(),
         "administrator configuration"
     );
+    assert_eq!(
+        fs::read(nginx_render::global_path(&config)).unwrap(),
+        inputs
+    );
+    assert!(!nginx_render::bootstrap(&config).await.unwrap());
     assert_eq!(
         fs::read_to_string(root.join("snippets/restrict.conf")).unwrap(),
         "administrator rules"

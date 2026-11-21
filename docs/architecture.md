@@ -78,8 +78,10 @@ emits a temporary challenge-only server from certificate names.
 The shipped domain roots and templates do not declare a second port-80 server.
 Existing upstream data entries not owned by the edited site are retained.
 Configurations are manually ported before deployment; the service has no legacy
-include migration. The installer can bootstrap a missing nginx.conf from the
-empty current bundle, preserving an existing configuration.
+include migration. The installer installs the bundled nginx.conf, saving a
+different existing main configuration as a unique backup. Saved inputs and
+other existing shared/custom files are preserved; missing bundled files are
+created. An identical main configuration is left unchanged.
 
 ## Data and control flow
 
@@ -121,9 +123,12 @@ operations until an authenticated clear action removes the lock. Issuance writes
 command; Router Hub's loop replaces a separate cron installation. Successful
 standard dehydrated output is deployed into nginx's certificate directory under
 the nginx mutation lock. Validation and reload failures restore the previous
-deployed files; custom hooks without standard output retain deployment ownership. An explicit
-management action can atomically replace the dehydrated executable with the
-official GitHub raw script; hook files are left untouched.
+deployed files; custom hooks without standard output retain deployment ownership. The default
+DNS-01 hook script (`dehydrated-dns01-hook.sh`) is installed along with Router Hub at
+`/opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh` and can be overridden globally
+in configuration or per certificate. On install, the latest official dehydrated executable is downloaded
+to `/opt/var/lib/router-hub/dehydrated/dehydrated`. An explicit management action (or `update-dehydrated` CLI)
+can atomically replace the dehydrated executable with the official GitHub raw script; hook files are left untouched.
 
 ## Ban-attack engine
 

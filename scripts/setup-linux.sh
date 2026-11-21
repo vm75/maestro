@@ -24,7 +24,16 @@ nginx_bin=$(command -v nginx)
 dehydrated_bin=$(command -v dehydrated || true)
 if [[ -z "$dehydrated_bin" ]]; then
     dehydrated_bin="$lab/certs/dehydrated"
-    echo "Dehydrated is not installed. Use Certificates > Update dehydrated after setup."
+    mkdir -p "$lab/certs"
+    if curl -fsSL "https://raw.githubusercontent.com/dehydrated-io/dehydrated/master/dehydrated" -o "$dehydrated_bin" 2>/dev/null; then
+        chmod 0700 "$dehydrated_bin"
+        echo "Downloaded latest dehydrated to $dehydrated_bin."
+    else
+        echo "Dehydrated is not installed. Use Certificates > Update dehydrated after setup."
+    fi
+fi
+if [[ ! -e "$lab/certs/dehydrated-dns01-hook.sh" && -f "$repo_root/scripts/dehydrated-dns01-hook.sh" ]]; then
+    install -m 0755 "$repo_root/scripts/dehydrated-dns01-hook.sh" "$lab/certs/dehydrated-dns01-hook.sh"
 fi
 api_port=3030
 nginx_port=8080
@@ -118,6 +127,7 @@ log_dir = "$lab/var/log/nginx"
 
 [certificates]
 certs_dir = "$lab/certs"
+dns01_hook = "$lab/certs/dehydrated-dns01-hook.sh"
 
 [firewall]
 log_dirs = ["$lab/var/log/nginx"]

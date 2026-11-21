@@ -525,56 +525,7 @@ impl AppState {
 
     pub async fn update_dehydrated(&self) -> Result<DehydratedUpdate> {
         let _update = self.dehydrated_update_lock.lock().await;
-        let path = self.config.commands.dehydrated.clone();
-        if self.config.test_mode {
-            return Ok(DehydratedUpdate {
-                path,
-                source: DEHYDRATED_DOWNLOAD_URL.into(),
-                bytes: 0,
-                simulated: true,
-            });
-        }
-
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(
-                self.config.certificates.command_timeout_seconds,
-            ))
-            .user_agent("router-hub/dehydrated-updater")
-            .build()
-            .context("failed to create GitHub download client")?;
-        let response = client
-            .get(DEHYDRATED_DOWNLOAD_URL)
-            .send()
-            .await
-            .context("failed to download dehydrated from GitHub")?
-            .error_for_status()
-            .context("GitHub did not return dehydrated")?;
-        if response
-            .content_length()
-            .is_some_and(|length| length > MAX_DEHYDRATED_DOWNLOAD_BYTES)
-        {
-            bail!("GitHub dehydrated download is unexpectedly large");
-        }
-        let body = response
-            .bytes()
-            .await
-            .context("failed to read dehydrated download")?;
-        if body.len() as u64 > MAX_DEHYDRATED_DOWNLOAD_BYTES {
-            bail!("GitHub dehydrated download is unexpectedly large");
-        }
-        let text = String::from_utf8(body.to_vec())
-            .context("GitHub dehydrated download was not UTF-8 text")?;
-        if !text.starts_with("#!") || !text.contains("dehydrated") {
-            bail!("GitHub response does not look like the dehydrated script");
-        }
-
-        write_atomic(&path, text.as_bytes(), 0o700).await?;
-        Ok(DehydratedUpdate {
-            path,
-            source: DEHYDRATED_DOWNLOAD_URL.into(),
-            bytes: text.len(),
-            simulated: false,
-        })
+        download_latest_dehydrated(&self.config).await
     }
 
     async fn write_dehydrated_files(&self, spec: &CertificateSpec) -> Result<()> {
@@ -688,14 +639,10 @@ fn render_dehydrated_config(config: &AppConfig, spec: &CertificateSpec) -> Resul
             ));
         }
         CertificateMethod::Dns => {
-            let hook = spec.hook.clone().unwrap_or_else(|| {
-                config
-                    .commands
-                    .dehydrated
-                    .parent()
-                    .unwrap_or(&config.paths.data_dir)
-                    .join("dehydrated-dns01-hook.sh")
-            });
+            let hook = spec
+                .hook
+                .clone()
+                .unwrap_or_else(|| config.certificates.dns01_hook.clone());
             if hook.as_os_str().is_empty() || hook.to_string_lossy().contains(['\n', '\r']) {
                 bail!("DNS certificates require a valid dehydrated hook");
             }
@@ -795,6 +742,59 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+pub async fn download_latest_dehydrated(config: &AppConfig) -> Result<DehydratedUpdate> {
+    let path = config.commands.dehydrated.clone();
+    if config.test_mode {
+        return Ok(DehydratedUpdate {
+            path,
+            source: DEHYDRATED_DOWNLOAD_URL.into(),
+            bytes: 0,
+            simulated: true,
+        });
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(
+            config.certificates.command_timeout_seconds,
+        ))
+        .user_agent("router-hub/dehydrated-updater")
+        .build()
+        .context("failed to create GitHub download client")?;
+    let response = client
+        .get(DEHYDRATED_DOWNLOAD_URL)
+        .send()
+        .await
+        .context("failed to download dehydrated from GitHub")?
+        .error_for_status()
+        .context("GitHub did not return dehydrated")?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_DEHYDRATED_DOWNLOAD_BYTES)
+    {
+        bail!("GitHub dehydrated download is unexpectedly large");
+    }
+    let body = response
+        .bytes()
+        .await
+        .context("failed to read dehydrated download")?;
+    if body.len() as u64 > MAX_DEHYDRATED_DOWNLOAD_BYTES {
+        bail!("GitHub dehydrated download is unexpectedly large");
+    }
+    let text = String::from_utf8(body.to_vec())
+        .context("GitHub dehydrated download was not UTF-8 text")?;
+    if !text.starts_with("#!") || !text.contains("dehydrated") {
+        bail!("GitHub response does not look like the dehydrated script");
+    }
+
+    write_atomic(&path, text.as_bytes(), 0o700).await?;
+    Ok(DehydratedUpdate {
+        path,
+        source: DEHYDRATED_DOWNLOAD_URL.into(),
+        bytes: text.len(),
+        simulated: false,
+    })
+}
+
 async fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     let parent = path
         .parent()
@@ -868,6 +868,36 @@ mod tests {
             render_dehydrated_domains(&spec).unwrap(),
             "\n# example.com-start\n*.example.com example.com > example_com\n# example.com-end\n"
         );
+    }
+
+    #[test]
+    fn renders_default_dns_hook_from_config() {
+        let mut config = AppConfig::default();
+        config.certificates.certs_dir = "/tmp/router-hub/certs".into();
+        config.certificates.dns01_hook =
+            "/opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh".into();
+        let spec = CertificateSpec {
+            id: Uuid::new_v4(),
+            name: "example_default_hook".into(),
+            domains: vec!["example.com".into()],
+            method: CertificateMethod::Dns,
+            hook: None,
+            hook_env: BTreeMap::new(),
+            staging: false,
+            auto_renew: true,
+            updated_at: Utc::now(),
+        };
+
+        let rendered = render_dehydrated_config(&config, &spec).unwrap();
+        assert!(
+            rendered
+                .contains("HOOK='/opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh'\n")
+        );
+
+        // User override in config
+        config.certificates.dns01_hook = "/custom/path/hook.sh".into();
+        let rendered2 = render_dehydrated_config(&config, &spec).unwrap();
+        assert!(rendered2.contains("HOOK='/custom/path/hook.sh'\n"));
     }
 
     #[test]

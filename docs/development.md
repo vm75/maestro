@@ -25,6 +25,7 @@ Fixture-backed test mode simulates external commands, skips ASUS menu changes,
 and does not send Wake-on-LAN packets.
 
 For real services, see the [Linux integration guide](linux.md).
+For validating AArch64 packaging, Entware service startup, ASUS UI integration, and kernel WireGuard in an emulated guest, see the [AArch64 Router Lab guide](../lab/aarch64/README.md).
 
 ## Sync router data
 
@@ -54,6 +55,11 @@ cargo build --release
 
 Shortcuts are available through `make check`, `make test`, `make fmt`,
 `make clippy`, `make run`, and `make release`.
+
+Run `make ipk` to build the AArch64 musl release binary and package the Entware
+IPK using the version in `Cargo.toml`. The package and its SHA-256 checksum are
+written to `dist/router-hub_<version>-1_aarch64-3.10.ipk` and `.ipk.sha256`.
+This uses the same cross-compilation toolchain as `make release`.
 
 With the Python environment active, run `make test-nginx` for the bundled
 nginx policy and loopback tests. `make test-linux` exercises the API with real

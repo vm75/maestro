@@ -28,5 +28,36 @@ test -n "$migration_line" && test -n "$start_line" && test "$migration_line" -lt
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/bin/router-hub'
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/etc/init.d/S99router-hub'
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/libexec/router-hub/setup-merlin.sh'
+tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/share/router-hub/dehydrated-dns01-hook.sh'
+tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh'
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/share/router-hub/router-hub.example.toml'
+# Exercise the packaged init script without touching host services or /opt.
+mkdir -p "$TMP/bin"
+tar -xzOf "$TMP/data.tar.gz" ./opt/etc/init.d/S99router-hub | \
+    sed -e 's|^PATH=.*|PATH="$INIT_TEST_BIN:/usr/bin:/bin"|' \
+        -e 's|^\. /opt/etc/init.d/rc.func$|. "$INIT_TEST_RC"|' > "$TMP/init"
+cat > "$TMP/bin/pidof" <<'EOF'
+#!/bin/sh
+exit "${INIT_TEST_PID_STATUS:-1}"
+EOF
+chmod +x "$TMP/bin/pidof"
+# Model rc.func's stop behavior: dead returns 1, successful stop returns 0.
+cat > "$TMP/rc.func" <<'EOF'
+printf '%s\n' "$1" >> "$INIT_TEST_CALLS"
+return "${INIT_TEST_RC_STATUS:-1}"
+EOF
+export INIT_TEST_BIN="$TMP/bin" INIT_TEST_RC="$TMP/rc.func" INIT_TEST_CALLS="$TMP/calls"
+sh "$TMP/init" stop
+test ! -e "$TMP/calls"
+INIT_TEST_PID_STATUS=0 INIT_TEST_RC_STATUS=0 sh "$TMP/init" stop
+test "$(cat "$TMP/calls")" = stop
+# A real stop failure and a dead service check must still report failure.
+if INIT_TEST_PID_STATUS=0 sh "$TMP/init" stop; then
+    echo "Init script hid a stop failure" >&2
+    exit 1
+fi
+if sh "$TMP/init" check; then
+    echo "Init script reported a stopped service as running" >&2
+    exit 1
+fi
 echo "IPK package structure and checksum passed"
