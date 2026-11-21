@@ -657,14 +657,14 @@ impl BanBackend for CommandIpSet {
         self.ensure()?;
         let v4 = self.restore_family(
             &self.config.v4_set,
-            "router_hub_stage4",
+            "maestro_stage4",
             "inet",
             active,
             exceptions,
         )?;
         let v6 = self.restore_family(
             &self.config.v6_set,
-            "router_hub_stage6",
+            "maestro_stage6",
             "inet6",
             active,
             exceptions,

@@ -252,7 +252,7 @@ class Templates(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('nginx') and shutil.which('openssl'), 'nginx and openssl required')
     def test_nginx_complete_tree(self):
-        with tempfile.TemporaryDirectory(prefix='router-hub-templates-') as temp:
+        with tempfile.TemporaryDirectory(prefix='maestro-templates-') as temp:
             dest = Path(temp)
             context = dict(
                 var_dir=str(dest / 'var'), router_ip='127.0.0.1',

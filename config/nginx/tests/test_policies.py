@@ -66,7 +66,7 @@ class Backend(BaseHTTPRequestHandler):
 
 @contextmanager
 def fixture(empty_filter=False, limits=False):
-    with tempfile.TemporaryDirectory(prefix='router-hub-policies-') as tmp, ThreadingHTTPServer(('127.0.0.1', 0), Backend) as backend:
+    with tempfile.TemporaryDirectory(prefix='maestro-policies-') as tmp, ThreadingHTTPServer(('127.0.0.1', 0), Backend) as backend:
         dest = Path(tmp)
         upstream = f'http://127.0.0.1:{backend.server_port}'
         sites = tomllib.loads((ROOT / 'examples/sites.toml').read_text())['sites']
