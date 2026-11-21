@@ -95,7 +95,7 @@ async fn test_unauthenticated_endpoints() {
     assert_eq!(resp.headers()[header::CONTENT_TYPE], "image/svg+xml");
 
     let req = Request::builder()
-        .uri("/router-hub.svg")
+        .uri("/maestro.svg")
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();

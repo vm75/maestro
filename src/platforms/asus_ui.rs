@@ -228,7 +228,7 @@ mod tests {
         let menu_tree = temp.path().join("menuTree.js");
         fs::write(
             &menu_tree,
-            "define(function(){\nlist: [\n{\nindex: \"menu_WAN\",\ntab: [\n{url: \"Advanced_WAN_Content.asp\", tabName: \"WAN\"},\n{url: \"NULL\", tabName: \"__INHERIT__\"}\n]\n},\n{\nmenuName: \"Alexa & IFTTT\",\nindex: \"menu_Alexa_IFTTT\",\ntab: [\n{url: \"Advanced_Smart_Home_Alexa.asp\", tabName: \"__INHERIT__\"},\n{url: \"NULL\", tabName: \"__INHERIT__\"}\n]\n},\n{\nindex: \"menu_Setting\",\ntab: [\n{url: \"user20.asp\", tabName: \"Maestro\"},\n{url: \"Advanced_System_Content.asp\", tabName: \"System\"}\n]\n}\n]\n});\n",
+            "define(function(){\nlist: [\n{\nindex: \"menu_WAN\",\ntab: [\n{url: \"Advanced_WAN_Content.asp\", tabName: \"WAN\"},\n{url: \"NULL\", tabName: \"__INHERIT__\"}\n]\n},\n{\nmenuName: \"Alexa & IFTTT\",\nindex: \"menu_Alexa_IFTTT\",\ntab: [\n{url: \"Advanced_Smart_Home_Alexa.asp\", tabName: \"__INHERIT__\"},\n{url: \"NULL\", tabName: \"__INHERIT__\"}\n]\n},\n{\nindex: \"menu_Setting\",\ntab: [\n{url: \"user20.asp\", tabName: \"Router Hub\"},\n{url: \"Advanced_System_Content.asp\", tabName: \"System\"}\n]\n}\n]\n});\n",
         )
         .unwrap();
         let mut config = AppConfig::default();
