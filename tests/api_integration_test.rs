@@ -150,7 +150,7 @@ async fn test_modules_discovery_is_authenticated_and_platform_scoped() {
         .find(|module| module["id"] == "router_upgrade")
         .unwrap();
     assert_eq!(router_upgrade["availability"], "disabled");
-    assert!(result.to_string().find("router-hub-test-token").is_none());
+    assert!(!result.to_string().contains("router-hub-test-token"));
 }
 
 #[tokio::test]
