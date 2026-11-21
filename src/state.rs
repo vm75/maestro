@@ -890,8 +890,7 @@ mod tests {
 
         let rendered = render_dehydrated_config(&config, &spec).unwrap();
         assert!(
-            rendered
-                .contains("HOOK='/opt/var/lib/maestro/dehydrated/dehydrated-dns01-hook.sh'\n")
+            rendered.contains("HOOK='/opt/var/lib/maestro/dehydrated/dehydrated-dns01-hook.sh'\n")
         );
 
         // User override in config

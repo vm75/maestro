@@ -1347,10 +1347,7 @@ pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
             .file_name()
             .ok_or_else(|| anyhow::anyhow!("nginx config path has no filename"))?
             .to_os_string();
-        name.push(format!(
-            ".before-maestro-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        name.push(format!(".before-maestro-{}", uuid::Uuid::new_v4().simple()));
         let backup = config.nginx.config_path.with_file_name(name);
         ensure_managed_path(config, &backup)?;
         let mut file = fs::OpenOptions::new()
