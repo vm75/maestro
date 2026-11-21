@@ -135,6 +135,7 @@ ITEM_TYPES=(
     "dir"
     "dir"
     "dir"
+    "dir"
     "file"
     "dir"
 )
@@ -247,6 +248,8 @@ sync_selection() {
 
     if [[ "$selection" == "all" ]]; then
         for i in "${!LOCAL_PATHS[@]}"; do
+            # Legacy state is opt-in: it may not exist on fresh Maestro hosts.
+            [[ "${LOCAL_PATHS[$i]}" == "opt/etc/router-hub" ]] && continue
             sync_one "$direction" "$i"
         done
     else
@@ -275,7 +278,7 @@ case "$COMMAND" in
             opt/etc/AdGuardHome/AdGuardHome.yaml \
             opt/etc/nginx \
             opt/etc/init.d/ \
-            opt/etc/router-hub \
+            opt/etc/maestro \
             opt/etc/logrotate.d \
             jffs/scripts/
         ;;
