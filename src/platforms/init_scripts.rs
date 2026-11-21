@@ -21,10 +21,6 @@ use crate::{
     util::{tail_lines, validate_simple_name},
 };
 
-pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<ServiceInfo>>, ApiError> {
-    Ok(Json(collect_services(&state).await?))
-}
-
 async fn check_service_status(
     runner: &crate::command::CommandRunner,
     path: &std::path::Path,
