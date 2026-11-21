@@ -56,8 +56,7 @@ configuration to a dedicated nginx tree, real `dehydrated`, `openssl`,
 Use `[nginx].prefix_path` when nginx's relative includes must resolve below
 a separate `-p` prefix. Certificate DNS-01 tests require a real DNS
 provider and a domain you control; `scripts/test-dehydrated.sh` exercises
-the dehydrated command against Let's Encrypt staging without changing Router
-Hub's certificate store. HTTP-01 additionally requires a publicly reachable
+the dehydrated command against Let's Encrypt staging without changing Maestro's certificate store. HTTP-01 additionally requires a publicly reachable
 ACME challenge. Run real ipset/iptables Ban Shield enforcement only inside an
 isolated Linux network namespace or a disposable VM: even
 `observe_only = true` can remove Maestro-owned firewall hooks during
@@ -76,9 +75,9 @@ Those still need router validation. Linux keeps its firewall policy within
 Linux setup installs executable `S80nginx` and `S99maestro` adapters in
 `data/linux/init.d`. These use the normal Services discovery and actions. They require
 Python 3.11 or newer and default to `data/linux/maestro.toml`; set
-`ROUTER_HUB_CONFIG` to select another configuration. For an existing setup, set
+`MAESTRO_CONFIG` to select another configuration (`ROUTER_HUB_CONFIG` remains a legacy fallback). For an existing setup, set
 `[services].init_dir` to the absolute path of `data/linux/init.d` and rerun
-`./scripts/setup-linux.sh`. Existing adapters are preserved.
+`./scripts/setup-linux.sh`. Existing adapters are preserved; remove or disable an obsolete `S99router-hub` adapter after confirming that `S99maestro` works. When `data/linux/router-hub.toml` exists, setup copies it to `maestro.toml` without overwriting existing paths.
 
 Build Maestro before starting it through `data/linux/init.d/S99maestro start`.
 The adapter prefers the release binary, falling back to the debug binary, and

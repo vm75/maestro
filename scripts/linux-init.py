@@ -11,14 +11,14 @@ import tomllib
 location = Path(__file__).resolve()
 # Installed copies live under data/linux/init.d.
 repo = location.parents[3] if location.parent.name == 'init.d' else location.parents[1]
-config = Path(os.environ.get('ROUTER_HUB_CONFIG', repo / 'data/linux/router-hub.toml')).resolve()
+config = Path(os.environ.get('MAESTRO_CONFIG', os.environ.get('ROUTER_HUB_CONFIG', str(repo / 'data/linux/maestro.toml')))).resolve()
 with config.open('rb') as stream:
     cfg = tomllib.load(stream)
-service = 'nginx' if Path(sys.argv[0]).name.endswith('nginx') else 'router-hub'
+service = 'nginx' if Path(sys.argv[0]).name.endswith('nginx') else 'maestro'
 action = sys.argv[1] if len(sys.argv) > 1 else 'check'
 nginx = cfg['nginx']
 runtime = Path(cfg['paths']['runtime_dir'])
-pidfile = Path(nginx['pid_path']) if service == 'nginx' else runtime / 'router-hub-init.pid'
+pidfile = Path(nginx['pid_path']) if service == 'nginx' else runtime / 'maestro-init.pid'
 
 
 def process_id():
@@ -30,7 +30,7 @@ def process_id():
             return pid
     except (OSError, ValueError):
         pass
-    if service == 'router-hub':
+    if service == 'maestro':
         # Also recognize a foreground server launched with this configuration.
         for proc in Path('/proc').glob('[0-9]*'):
             try:
@@ -81,9 +81,9 @@ try:
                 sys.exit(result if result else run_nginx())
             if cfg['server'].get('daemonize', False):
                 raise RuntimeError('Set server.daemonize = false for the Linux init adapter')
-            binary = repo / 'target/release/router-hub'
+            binary = repo / 'target/release/maestro'
             if not binary.exists():
-                binary = repo / 'target/debug/router-hub'
+                binary = repo / 'target/debug/maestro'
             runtime.mkdir(parents=True, exist_ok=True)
             with Path(cfg['paths']['log_file']).open('ab') as log:
                 child = subprocess.Popen([str(binary), '--config', str(config), '--linux-mode', 'serve'],
@@ -92,13 +92,13 @@ try:
             pidfile.write_text(str(child.pid))
             time.sleep(0.2)
             if child.poll() is not None:
-                raise RuntimeError('Router Hub exited; inspect its log')
+                raise RuntimeError('Maestro exited; inspect its log')
     elif action in ('reconfigure', 'reload'):
         if service == 'nginx':
             sys.exit(run_nginx('-t') or run_nginx('-s', 'reload'))
         pid = process_id()
         if pid is None:
-            raise RuntimeError('Router Hub is stopped')
+            raise RuntimeError('Maestro is stopped')
         os.kill(pid, signal.SIGUSR1)
     elif action != 'stop':
         raise RuntimeError('Usage: start|stop|restart|check|status|reconfigure|reload')

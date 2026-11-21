@@ -2,19 +2,19 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Router Hub: Linux mode",
+            "name": "Maestro: Linux mode",
             "type": "lldb",
             "request": "launch",
             "cargo": {
-                "args": ["build", "--bin", "router-hub"],
+                "args": ["build", "--bin", "maestro"],
                 "filter": {
-                    "name": "router-hub",
+                    "name": "maestro",
                     "kind": "bin"
                 }
             },
             "args": [
                 "--config",
-                "${workspaceFolder}/data/linux/router-hub.toml",
+                "${workspaceFolder}/data/linux/maestro.toml",
                 "--linux-mode",
                 "serve"
             ],

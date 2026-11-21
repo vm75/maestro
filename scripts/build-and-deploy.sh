@@ -2,9 +2,9 @@
 set -euo pipefail
 
 host=${1:?Usage: $0 <user@host>}
-bin="dist/router-hub-aarch64-unknown-linux-musl"
-remote="/opt/bin/router-hub"
-service="/opt/etc/init.d/S99router-hub"
+bin="dist/maestro-aarch64-unknown-linux-musl"
+remote="/opt/bin/maestro"
+service="/opt/etc/init.d/S99maestro"
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=5)
 
 ssh "${ssh_opts[@]}" "$host" "test -f '$remote'" ||

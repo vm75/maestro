@@ -40,7 +40,7 @@ Useful repository shortcuts are `make check`, `make test`, `make run`,
 `make fmt`, `make clippy`, `make test-nginx`, `make test-lab`, and `make release`.
 `make test-nginx` needs Python 3.11+, Jinja2, nginx, and OpenSSL and uses temporary
 files and loopback servers. `make run` starts x64 test mode
-with `test-fixtures/etc/router-hub/router-hub.toml`; it does not execute router commands or send
+with `test-fixtures/etc/maestro/maestro.toml`; it does not execute router commands or send
 Wake-on-LAN packets.
 
 For **real Linux integration** use `platform = "linux"` (or

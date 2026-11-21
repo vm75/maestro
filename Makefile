@@ -22,7 +22,7 @@ test-lab:
 	bash tests/test_lab_aarch64.sh
 
 run:
-	cargo run -- --config ./test-fixtures/etc/router-hub/router-hub.toml --test-mode serve
+	cargo run -- --config ./test-fixtures/etc/maestro/maestro.toml --test-mode serve
 
 fmt:
 	cargo fmt --all
