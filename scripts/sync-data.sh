@@ -34,7 +34,8 @@ Configured local directories:
   opt/etc/init.d
   opt/etc/mosquitto
   opt/etc/nginx
-  opt/etc/router-hub
+  opt/etc/maestro
+  opt/etc/router-hub (legacy)
   opt/etc/logrotate.d
   jffs/addons
   jffs/configs
@@ -93,6 +94,7 @@ LOCAL_PATHS=(
     "opt/etc/init.d"
     "opt/etc/mosquitto"
     "opt/etc/nginx"
+    "opt/etc/maestro"
     "opt/etc/router-hub"
     "opt/etc/logrotate.d"
     "jffs/addons"
@@ -109,6 +111,7 @@ REMOTE_PATHS=(
     "/opt/etc/init.d"
     "/opt/etc/mosquitto"
     "/opt/etc/nginx"
+    "/opt/etc/maestro"
     "/opt/etc/router-hub"
     "/opt/etc/logrotate.d"
     "/jffs/addons"
