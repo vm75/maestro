@@ -25,6 +25,8 @@ tar -xzOf "$TMP/control.tar.gz" ./postinst | grep -F 'setup-merlin.sh'
 setup=scripts/setup-merlin.sh
 migration_line=$(grep -nF 'migrate-nginx-inputs' "$setup" | tail -1 | cut -d: -f1)
 start_line=$(grep -nF '/opt/etc/init.d/S99maestro restart' "$setup" | tail -1 | cut -d: -f1)
+legacy_line=$(grep -nF 'LEGACY_CONFIG=/opt/etc/router-hub/router-hub.toml' "$setup" | head -1 | cut -d: -f1)
+test -n "$legacy_line" && test "$legacy_line" -lt "$migration_line"
 test -n "$migration_line" && test -n "$start_line" && test "$migration_line" -lt "$start_line"
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/bin/maestro'
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/bin/router-hub'
