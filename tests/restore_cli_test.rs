@@ -57,10 +57,10 @@ fn restore_works_with_corrupt_configuration_and_test_mode_leaves_destination_unt
 #[test]
 fn update_dehydrated_cli_simulates_in_test_mode() {
     let temp = tempfile::tempdir().unwrap();
-    let config = temp.path().join("router-hub.toml");
+    let config = temp.path().join("maestro.toml");
     fs::write(
         &config,
-        "[commands]\ndehydrated = \"/opt/var/lib/router-hub/dehydrated/dehydrated\"\n",
+        "[commands]\ndehydrated = \"/opt/var/lib/maestro/dehydrated/dehydrated\"\n",
     )
     .unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_maestro"));

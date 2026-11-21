@@ -472,7 +472,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let config_dir = temp.path().join("config");
         fs::create_dir(&config_dir).unwrap();
-        let config_path = config_dir.join("router-hub.toml");
+        let config_path = config_dir.join("maestro.toml");
         fs::write(&config_path, "original config").unwrap();
         let mut config = crate::config::AppConfig::default();
         config.apply_test_mode(&config_path).unwrap();

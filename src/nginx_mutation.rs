@@ -203,7 +203,7 @@ mod tests {
             .apply_test_mode(
                 &temp
                     .path()
-                    .join("test-fixtures/etc/router-hub/router-hub.toml"),
+                    .join("test-fixtures/etc/maestro/maestro.toml"),
             )
             .unwrap();
         config.ensure_directories().unwrap();

@@ -825,7 +825,7 @@ mod tests {
     #[test]
     fn renders_reference_style_dns_files() {
         let mut config = AppConfig::default();
-        config.certificates.certs_dir = "/tmp/router-hub/certs".into();
+        config.certificates.certs_dir = "/tmp/maestro/certs".into();
         let mut hook_env = BTreeMap::new();
         hook_env.insert("DUCKDNS_TOKEN".into(), "token-value".into());
         let spec = CertificateSpec {
@@ -833,7 +833,7 @@ mod tests {
             name: "example_duckdns_org".into(),
             domains: vec!["*.example.duckdns.org".into()],
             method: CertificateMethod::Dns,
-            hook: Some("/tmp/router-hub/dehydrated-duckdns-hook.sh".into()),
+            hook: Some("/tmp/maestro/dehydrated-duckdns-hook.sh".into()),
             hook_env,
             staging: false,
             auto_renew: true,
@@ -842,7 +842,7 @@ mod tests {
 
         assert_eq!(
             render_dehydrated_config(&config, &spec).unwrap(),
-            "CA='letsencrypt'\nAUTO_CLEANUP='yes'\nDOMAINS_TXT='/tmp/router-hub/certs/example_duckdns_org.txt'\nCHALLENGETYPE='dns-01'\nHOOK='/tmp/router-hub/dehydrated-duckdns-hook.sh'\nexport DUCKDNS_TOKEN='token-value'\n"
+            "CA='letsencrypt'\nAUTO_CLEANUP='yes'\nDOMAINS_TXT='/tmp/maestro/certs/example_duckdns_org.txt'\nCHALLENGETYPE='dns-01'\nHOOK='/tmp/maestro/dehydrated-duckdns-hook.sh'\nexport DUCKDNS_TOKEN='token-value'\n"
         );
         assert_eq!(
             render_dehydrated_domains(&spec).unwrap(),
@@ -873,9 +873,9 @@ mod tests {
     #[test]
     fn renders_default_dns_hook_from_config() {
         let mut config = AppConfig::default();
-        config.certificates.certs_dir = "/tmp/router-hub/certs".into();
+        config.certificates.certs_dir = "/tmp/maestro/certs".into();
         config.certificates.dns01_hook =
-            "/opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh".into();
+            "/opt/var/lib/maestro/dehydrated/dehydrated-dns01-hook.sh".into();
         let spec = CertificateSpec {
             id: Uuid::new_v4(),
             name: "example_default_hook".into(),
@@ -891,7 +891,7 @@ mod tests {
         let rendered = render_dehydrated_config(&config, &spec).unwrap();
         assert!(
             rendered
-                .contains("HOOK='/opt/var/lib/router-hub/dehydrated/dehydrated-dns01-hook.sh'\n")
+                .contains("HOOK='/opt/var/lib/maestro/dehydrated/dehydrated-dns01-hook.sh'\n")
         );
 
         // User override in config
