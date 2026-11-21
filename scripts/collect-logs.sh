@@ -1,20 +1,20 @@
 #!/bin/sh
 #
-# collect-router-hub-diagnostics.sh
+# collect-maestro-diagnostics.sh
 #
-# Read-only diagnostics collector for Router Hub on Asuswrt-Merlin.
+# Read-only diagnostics collector for Maestro on Asuswrt-Merlin.
 # It collects firewall/ban state, enforcement counters, bounded relevant logs,
-# Router Hub API status (when locally reachable), and minimal router context.
+# Maestro API status (when locally reachable), and minimal router context.
 #
 # Defaults:
 #   OUTPUT_DIR=/tmp
 #   MAX_LOG_BYTES=1048576      # 1 MiB per configured log
 #   SAMPLE_SECONDS=0           # set e.g. 600 to get a 10-minute counter delta
-#   ROUTER_HUB_CONFIG=/opt/etc/router-hub/router-hub.toml
+#   MAESTRO_CONFIG=/opt/etc/maestro/maestro.toml
 #
 # Example:
-#   chmod 700 collect-router-hub-diagnostics.sh
-#   SAMPLE_SECONDS=600 ./collect-router-hub-diagnostics.sh
+#   chmod 700 collect-maestro-diagnostics.sh
+#   SAMPLE_SECONDS=600 ./collect-maestro-diagnostics.sh
 #
 # The resulting archive can contain public attacker IPs, URLs, internal
 # subnets/allowlists, and selected log content. Review before sharing.
@@ -27,19 +27,23 @@ export PATH
 OUTPUT_DIR="${OUTPUT_DIR:-/tmp}"
 MAX_LOG_BYTES="${MAX_LOG_BYTES:-1048576}"
 SAMPLE_SECONDS="${SAMPLE_SECONDS:-0}"
-CONFIG="${ROUTER_HUB_CONFIG:-/opt/etc/router-hub/router-hub.toml}"
+CONFIG="${MAESTRO_CONFIG:-${ROUTER_HUB_CONFIG:-/opt/etc/maestro/maestro.toml}}"
+# Legacy installations are still diagnosable before completing migration.
+if [ ! -r "$CONFIG" ] && [ -r /opt/etc/router-hub/router-hub.toml ]; then
+    CONFIG=/opt/etc/router-hub/router-hub.toml
+fi
 
 STAMP="$(date '+%Y%m%d-%H%M%S' 2>/dev/null || echo unknown-time)"
 HOST="$(hostname 2>/dev/null || echo router)"
-WORK="${OUTPUT_DIR}/router-hub-diagnostics-${HOST}-${STAMP}.$$"
-BASE="router-hub-diagnostics-${HOST}-${STAMP}"
+WORK="${OUTPUT_DIR}/maestro-diagnostics-${HOST}-${STAMP}.$$"
+BASE="maestro-diagnostics-${HOST}-${STAMP}"
 ARCHIVE="${OUTPUT_DIR}/${BASE}.tar.gz"
 
 mkdir -p "$WORK" 2>/dev/null || {
     echo "ERROR: cannot create $WORK" >&2
     exit 1
 }
-for d in system router-hub firewall logs nginx; do
+for d in system maestro firewall logs nginx; do
     mkdir -p "$WORK/$d" 2>/dev/null || {
         echo "ERROR: cannot create $WORK/$d" >&2
         exit 1
@@ -192,15 +196,15 @@ firewall_snapshot() {
     if [ -n "$IPTABLES" ]; then
         run_to_file "$dest/iptables-input-parent.txt" "$IPTABLES" -nvxL INPUT --line-numbers
         run_to_file "$dest/iptables-forward-parent.txt" "$IPTABLES" -nvxL FORWARD --line-numbers
-        run_to_file "$dest/iptables-router-hub-input.txt" "$IPTABLES" -nvxL ROUTER_HUB_INPUT --line-numbers
-        run_to_file "$dest/iptables-router-hub-forward.txt" "$IPTABLES" -nvxL ROUTER_HUB_FORWARD --line-numbers
+        run_to_file "$dest/iptables-maestro-input.txt" "$IPTABLES" -nvxL ROUTER_HUB_INPUT --line-numbers
+        run_to_file "$dest/iptables-maestro-forward.txt" "$IPTABLES" -nvxL ROUTER_HUB_FORWARD --line-numbers
     fi
 
     if [ -n "$IP6TABLES" ]; then
         run_to_file "$dest/ip6tables-input-parent.txt" "$IP6TABLES" -nvxL INPUT --line-numbers
         run_to_file "$dest/ip6tables-forward-parent.txt" "$IP6TABLES" -nvxL FORWARD --line-numbers
-        run_to_file "$dest/ip6tables-router-hub-input.txt" "$IP6TABLES" -nvxL ROUTER_HUB_INPUT --line-numbers
-        run_to_file "$dest/ip6tables-router-hub-forward.txt" "$IP6TABLES" -nvxL ROUTER_HUB_FORWARD --line-numbers
+        run_to_file "$dest/ip6tables-maestro-input.txt" "$IP6TABLES" -nvxL ROUTER_HUB_INPUT --line-numbers
+        run_to_file "$dest/ip6tables-maestro-forward.txt" "$IP6TABLES" -nvxL ROUTER_HUB_FORWARD --line-numbers
     fi
 
     date -u '+%Y-%m-%dT%H:%M:%SZ' >"$dest/captured-at-utc.txt" 2>/dev/null || true
@@ -246,11 +250,11 @@ copy_bounded_log() {
     printf '%s\n' "$src" >>"$WORK/logs/collected-paths.txt"
 }
 
-note "Collecting Router Hub diagnostics into $WORK"
+note "Collecting Maestro diagnostics into $WORK"
 
-# ---- Router Hub configuration and state ------------------------------------
+# ---- Maestro configuration and state ------------------------------------
 
-DATA_DIR="/opt/etc/router-hub"
+DATA_DIR="/opt/etc/maestro"
 BIND=""
 PORT="3030"
 AUTH_TOKEN=""
@@ -258,11 +262,11 @@ IPSET_CFG=""
 IPTABLES_CFG=""
 IP6TABLES_CFG=""
 NGINX_CFG=""
-SET4="router_hub_bans4"
-SET6="router_hub_bans6"
+SET4="maestro_bans4"
+SET6="maestro_bans6"
 
 if [ -r "$CONFIG" ]; then
-    sanitize_toml "$CONFIG" "$WORK/router-hub/router-hub.sanitized.toml"
+    sanitize_toml "$CONFIG" "$WORK/maestro/maestro.sanitized.toml"
 
     v="$(toml_get paths data_dir "$CONFIG")"; [ -n "$v" ] && DATA_DIR="$v"
     v="$(toml_get server bind "$CONFIG")"; [ -n "$v" ] && BIND="$v"
@@ -277,21 +281,21 @@ if [ -r "$CONFIG" ]; then
     v="$(toml_get firewall set_name_v4 "$CONFIG")"; [ -n "$v" ] && SET4="$v"
     v="$(toml_get firewall set_name_v6 "$CONFIG")"; [ -n "$v" ] && SET6="$v"
 else
-    printf 'config not readable: %s\n' "$CONFIG" >"$WORK/router-hub/config-missing.txt"
+    printf 'config not readable: %s\n' "$CONFIG" >"$WORK/maestro/config-missing.txt"
 fi
 
 POLICY="${DATA_DIR}/firewall-policy.json"
 STATE="${DATA_DIR}/ban-attack-state.json"
 
 if [ -r "$POLICY" ]; then
-    cp "$POLICY" "$WORK/router-hub/firewall-policy.json"
+    cp "$POLICY" "$WORK/maestro/firewall-policy.json"
 fi
 if [ -r "$STATE" ]; then
-    cp "$STATE" "$WORK/router-hub/ban-attack-state.json"
+    cp "$STATE" "$WORK/maestro/ban-attack-state.json"
 fi
 
-if [ -x /opt/bin/router-hub ] && have sha256sum; then
-    sha256sum /opt/bin/router-hub >"$WORK/router-hub/router-hub-binary.sha256" 2>/dev/null || true
+if [ -x /opt/bin/maestro ] && have sha256sum; then
+    sha256sum /opt/bin/maestro >"$WORK/maestro/maestro-binary.sha256" 2>/dev/null || true
 fi
 
 # ---- Local API -------------------------------------------------------------
@@ -312,28 +316,28 @@ case "$BIND" in
 esac
 API_BASE="http://${API_HOST}:${PORT}"
 
-printf '%s\n' "$API_BASE" >"$WORK/router-hub/api-base-used.txt"
-api_get "/healthz" "$WORK/router-hub/api-healthz.txt" 0
-api_get "/api/version" "$WORK/router-hub/api-version.json" 0
-api_get "/api/dashboard" "$WORK/router-hub/api-dashboard.json" 1
-api_get "/api/system/usage" "$WORK/router-hub/api-system-usage.json" 1
-api_get "/api/firewall?include_bans=true" "$WORK/router-hub/api-firewall.json" 1
+printf '%s\n' "$API_BASE" >"$WORK/maestro/api-base-used.txt"
+api_get "/healthz" "$WORK/maestro/api-healthz.txt" 0
+api_get "/api/version" "$WORK/maestro/api-version.json" 0
+api_get "/api/dashboard" "$WORK/maestro/api-dashboard.json" 1
+api_get "/api/system/usage" "$WORK/maestro/api-system-usage.json" 1
+api_get "/api/firewall?include_bans=true" "$WORK/maestro/api-firewall.json" 1
 
 # Pretty-print useful JSON if jq exists, while retaining originals.
 if have jq; then
     for f in \
-        "$WORK/router-hub/api-version.json" \
-        "$WORK/router-hub/api-dashboard.json" \
-        "$WORK/router-hub/api-system-usage.json" \
-        "$WORK/router-hub/api-firewall.json" \
-        "$WORK/router-hub/firewall-policy.json" \
-        "$WORK/router-hub/ban-attack-state.json"
+        "$WORK/maestro/api-version.json" \
+        "$WORK/maestro/api-dashboard.json" \
+        "$WORK/maestro/api-system-usage.json" \
+        "$WORK/maestro/api-firewall.json" \
+        "$WORK/maestro/firewall-policy.json" \
+        "$WORK/maestro/ban-attack-state.json"
     do
         [ -s "$f" ] || continue
         jq . "$f" >"${f}.pretty" 2>/dev/null || rm -f "${f}.pretty"
     done
 
-    if [ -s "$WORK/router-hub/ban-attack-state.json" ]; then
+    if [ -s "$WORK/maestro/ban-attack-state.json" ]; then
         jq '{
           schema_version,
           saved_at,
@@ -342,8 +346,8 @@ if have jq; then
           reputation_entries: (.reputation | length),
           subnet_offenders: (.subnet_offenders | length),
           rule_stats
-        }' "$WORK/router-hub/ban-attack-state.json" \
-            >"$WORK/router-hub/state-summary.json" 2>/dev/null || true
+        }' "$WORK/maestro/ban-attack-state.json" \
+            >"$WORK/maestro/state-summary.json" 2>/dev/null || true
     fi
 fi
 
@@ -373,7 +377,7 @@ if have df; then
 fi
 
 if have ps; then
-    ps 2>&1 | grep -E '[r]outer-hub|[n]ginx' >"$WORK/system/processes-router-hub-nginx.txt" 2>/dev/null || true
+    ps 2>&1 | grep -E '[r]outer-hub|[n]ginx' >"$WORK/system/processes-maestro-nginx.txt" 2>/dev/null || true
 fi
 
 NVRAM="$(resolve_cmd "/bin/nvram" nvram)"
@@ -418,15 +422,15 @@ done
 
 if [ -n "$LOGREAD" ]; then
     "$LOGREAD" 2>/dev/null \
-        | grep -Ei 'router-hub|ban-attack|ROUTER_HUB_|ipset|iptables|ip6tables|nginx' \
+        | grep -Ei 'maestro|ban-attack|ROUTER_HUB_|ipset|iptables|ip6tables|nginx' \
         | tail -n 5000 >"$WORK/logs/router-syslog-security.tail" 2>/dev/null || true
 fi
 
-# Common Router Hub/Entware logs if present.
+# Common Maestro/Entware logs if present.
 for f in \
-    /opt/var/log/router-hub.log \
-    /opt/var/log/router-hub/current \
-    /tmp/router-hub.log
+    /opt/var/log/maestro.log \
+    /opt/var/log/maestro/current \
+    /tmp/maestro.log
 do
     [ -r "$f" ] && copy_bounded_log "$f"
 done
@@ -472,23 +476,23 @@ fi
 # ---- Sharing/analysis notes ------------------------------------------------
 
 cat >"$WORK/README-SHARE.txt" <<EOF
-Router Hub diagnostics collected: ${STAMP}
+Maestro diagnostics collected: ${STAMP}
 
 Purpose
 -------
-Measure Router Hub ban-engine effectiveness and improve detection/ban rules.
+Measure Maestro ban-engine effectiveness and improve detection/ban rules.
 
 Useful files
 ------------
-router-hub/api-firewall.json
+maestro/api-firewall.json
   Live policy, bounded score snapshot, active bans, engine health, and tuning.
 
-router-hub/ban-attack-state.json
+maestro/ban-attack-state.json
   Persistent active bans, IP scores, subnet reputation/promotion history,
   and per-rule match/ban statistics.
 
 firewall/t0/ and firewall/t1/
-  ipset membership plus INPUT/FORWARD Router Hub chain counters.
+  ipset membership plus INPUT/FORWARD Maestro chain counters.
   If SAMPLE_SECONDS > 0, compare packet/byte counters between t0 and t1.
 
 logs/
@@ -521,7 +525,7 @@ Suggested analysis
    - eviction_count and tracked counts versus configured caps
 
 2. Verify enforcement:
-   - active bans in Router Hub state vs ipset members
+   - active bans in Maestro state vs ipset members
    - ROUTER_HUB_INPUT / ROUTER_HUB_FORWARD hooks exist
    - packet/byte counters increase after bans (especially with t0/t1 sampling)
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Standalone NGINX cross-builder for Asuswrt-Merlin / Entware aarch64-k3.10.
-# Host: Debian, Ubuntu, or Arch Linux (x86_64). No router-hub repository changes.
+# Host: Debian, Ubuntu, or Arch Linux (x86_64). No Maestro repository changes.
 # Uses Entware's glibc 2.27 / Linux 3.10-targeted cross-toolchain and nginx-ssl recipe.
 # Does NOT install anything on the router.
 set -Eeuo pipefail
@@ -640,7 +640,7 @@ PY
     printf 'release_selection=%s\n' "$RELEASE_SELECTION"
     printf 'target=aarch64-k3.10\n'
     printf 'nginx_source_sha256=%s\n' "$SOURCE_SHA256"
-    printf 'profile=router-hub-reverse-proxy-hardened-v2-broad-upstream\n'
+    printf 'profile=maestro-reverse-proxy-hardened-v2-broad-upstream\n'
     printf 'hardening=PIE+SSP_STRONG+FORTIFY2+FULL_RELRO+FORMAT_SECURITY\n'
     printf 'enabled_upstreams=HTTP,HTTPS,GRPC,FASTCGI,UWSGI,SCGI,MEMCACHED,TCP,UDP\n'
     printf 'enabled_features=HTTP2,HTTP3,REAL_IP,ACCESS,AUTH_REQUEST,RATE_LIMIT,CONN_LIMIT,GZIP,BROTLI,HEADERS_MORE\n'

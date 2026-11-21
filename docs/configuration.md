@@ -95,7 +95,7 @@ Port existing nginx configuration manually to the current
 [`config/nginx` bundle](../config/nginx/README.md) **before deploying Maestro**.
 The service contains no legacy template renderer or old map migration.
 The installer runs `init-nginx` to install Maestro's main configuration,
-saving a different existing file as `nginx.conf.before-router-hub-<unique-id>`.
+saving a different existing file as `nginx.conf.before-maestro-<unique-id>`.
 It creates missing shared files, site directories, and a self-signed fallback
 certificate. Re-running it leaves an identical main configuration unchanged.
 Saved inputs and other existing shared/custom files are preserved.

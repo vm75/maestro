@@ -20,7 +20,7 @@
 make run
 ```
 
-Open <http://127.0.0.1:3030> with the fixture test token `router-hub-test-token`.
+Open <http://127.0.0.1:3030> with the fixture test token `maestro-test-token`.
 Fixture-backed test mode simulates external commands, skips ASUS menu changes,
 and does not send Wake-on-LAN packets.
 
@@ -66,7 +66,7 @@ nginx policy and loopback tests. `make test-linux` exercises the API with real
 nginx, including managed-site persistence, regeneration, and HTTPS.
 
 The emulated nginx examples are managed inputs in
-`test-fixtures/etc/router-hub/nginx/sites.toml`. Test mode still writes fixture
+`test-fixtures/etc/maestro/nginx/sites.toml`. Test mode still writes fixture
 files when you save settings; the ASUS page is generated at startup and ignored
 by Git.
 

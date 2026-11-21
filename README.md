@@ -104,7 +104,7 @@ With **Rust 1.85+**, from a checkout:
 make run
 ```
 
-Open <http://127.0.0.1:3030> and use the fixture test token `router-hub-test-token`.
+Open <http://127.0.0.1:3030> and use the fixture test token `maestro-test-token`.
 This uses fixture data, simulates external commands, skips ASUS menu changes,
 and does not send Wake-on-LAN packets.
 

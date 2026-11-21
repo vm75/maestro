@@ -12,7 +12,7 @@ Keep a working LAN/VPN management session open and back up your nginx inputs and
 
 1. Keep management private
 
-   Keep the ASUS administration UI, Router Hub, SSH, and application administration interfaces reachable only through your trusted LAN or VPN. Check firmware port forwards and WAN-management settings too: nginx rules only protect traffic passing through nginx.
+   Keep the ASUS administration UI, Maestro, SSH, and application administration interfaces reachable only through your trusted LAN or VPN. Check firmware port forwards and WAN-management settings too: nginx rules only protect traffic passing through nginx.
 
 2. Create named access rules
 
@@ -110,7 +110,7 @@ that constructs redirects using its own unrelated URL setting.
 Unknown hosts are rejected on managed profiles, and unassigned TLS endpoints
 have rejecting defaults. Authored custom nginx objects remain administrator
 configuration: inspect their listeners, default servers and shared includes
-before migrating. Router Hub cannot promise their isolation. Validation errors
+before migrating. Maestro cannot promise their isolation. Validation errors
 restore managed inputs, generated files and enabled links. In validation-only
 mode, nginx validation also inventories expanded includes with `nginx -T`.
 Authored non-TLS listeners on public port 80 or a configured challenge HTTP
@@ -159,7 +159,7 @@ window. Concurrent settings saves cannot change active challenge bindings.
 Public DNS must lead to reachable external TCP port 80. Private applications do
 not need public vhosts for certificate validation. DNS-01 is appropriate when
 public HTTP validation is impossible; wildcard certificates also need DNS-01.
-After successful issuance or renewal, Router Hub deploys standard dehydrated
+After successful issuance or renewal, Maestro deploys standard dehydrated
 output from `<certificates.certs_dir>/certs/<certificate-name>` into
 `<nginx.root_dir>/certs/<certificate-name>`, validates nginx and reloads it when
 running. Failed validation/reload restores the previous deployed files. Use the
@@ -186,7 +186,7 @@ does not edit saved firmware/NVRAM port-forward settings.
 Validate the firmware's actual packet path, external reachability/closure and
 interaction with other rules in an isolated router lab before using it. Firewall
 reconciliation runs every 15 seconds and on SIGUSR1. Arrange the firmware's
-firewall post-hook to notify Router Hub after rebuilding rules; periodic checks
+firewall post-hook to notify Maestro after rebuilding rules; periodic checks
 cannot prevent a gap while owned hooks are missing. Detected rule damage closes
 the session instead of extending its deadline.
 

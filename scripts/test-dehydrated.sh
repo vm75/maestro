@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Exercise dehydrated and a Router Hub-compatible hook against the Let's Encrypt
+# Exercise dehydrated and a Maestro-compatible hook against the Let's Encrypt
 # staging CA.  This deliberately uses a temporary data directory and never
-# changes Router Hub's configured certificate files.
+# changes Maestro's configured certificate files.
 
 usage() {
     cat <<'EOF'
@@ -11,7 +11,7 @@ Usage:
   test-dehydrated.sh [options] <domain> [domain ...]
 
 Issue a staging certificate using the same dehydrated config and command line
-that Router Hub uses. The first domain is the certificate name unless --name
+that Maestro uses. The first domain is the certificate name unless --name
 is supplied. Domains may include a leading '*.' for wildcard DNS challenges.
 
 Options:
@@ -19,7 +19,7 @@ Options:
   --method METHOD   http or dns (default: dns)
   --hook PATH       Hook path (default: scripts/dehydrated-dns01-hook.sh)
   --env KEY=VALUE   Export a hook environment value; may be repeated
-  --force           Pass --force, like Router Hub's renew operation
+  --force           Pass --force, like Maestro's renew operation
   --keep            Keep the temporary dehydrated directory after completion
   -h, --help        Show this help
 
@@ -126,7 +126,7 @@ for assignment in "${hook_env[@]}"; do
         die "--env must use a valid shell variable name: KEY=VALUE"
 done
 
-work_dir=$(mktemp -d "${TMPDIR:-/tmp}/router-hub-dehydrated-test.XXXXXX")
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/maestro-dehydrated-test.XXXXXX")
 cleanup() {
     if "$keep"; then
         echo "Temporary dehydrated data kept at: $work_dir"

@@ -5,7 +5,7 @@ A standalone host-side tool for building **Nginx and matching dynamic modules** 
 ## Repository layout
 
 ```text
-router-hub/
+maestro/
 └── tools/
     └── nginx-builder/
         ├── build-nginx-entware-aarch64-reverse-proxy.sh
@@ -22,7 +22,7 @@ Run `tools/nginx-builder/build-nginx-entware-aarch64-reverse-proxy.sh` from any 
 
 ## Build
 
-From the router-hub repository root:
+From the Maestro repository root:
 
 ```bash
 chmod +x tools/nginx-builder/build-nginx-entware-aarch64-reverse-proxy.sh
@@ -60,7 +60,7 @@ schedule, or PR trigger.
 Each successful run uploads a separate downloadable Actions artifact with the
 same output described below. By default it also publishes a GitHub Release
 under a unique `nginx-v*` tag, marked **not Latest** so it cannot replace the
-latest Router Hub release. Uncheck `publish_release` for an artifact-only
+latest Maestro release. Uncheck `publish_release` for an artifact-only
 trial.
 
 ### Pre-built Toolchain Container (GHCR)
