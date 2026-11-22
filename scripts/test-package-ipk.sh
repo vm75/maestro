@@ -63,4 +63,5 @@ if sh "$TMP/init" check; then
     echo "Init script reported a stopped service as running" >&2
     exit 1
 fi
+bash tests/test_one_time_migration.sh
 echo "IPK package structure and checksum passed"
