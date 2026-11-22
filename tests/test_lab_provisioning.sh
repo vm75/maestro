@@ -27,15 +27,14 @@ chmod +x "$TMP/bin/"*
 export PATH="$TMP/bin:$PATH" CHROOT_ARGS="$TMP/chroot-args"
 # Alpine may derive /maestro and fsck options from the live ISO's share.
 printf '%s\n' '/dev/vda3 / ext4 defaults 0 1' \
-    'router-hub /router-hub 9p defaults 0 2' \
-    'router-hub /mnt/router-hub 9p noauto 0 0' \
+    'maestro /mnt/maestro 9p defaults 0 0' \
+    'maestro /mnt/maestro 9p noauto 0 0' \
     'other-share /mnt/other 9p ro 0 0' > "$TMP/fstab"
 sh "$REPO_DIR/lab/aarch64/configure-share.sh" "$TMP/fstab" "$TMP/modules"
 cp "$TMP/fstab" "$TMP/expected-fstab"
 sh "$REPO_DIR/lab/aarch64/configure-share.sh" "$TMP/fstab" "$TMP/modules"
 cmp "$TMP/expected-fstab" "$TMP/fstab"
 test "$(grep -c '^maestro ' "$TMP/fstab")" -eq 1
-! grep -q '^router-hub ' "$TMP/fstab"
 grep -Fx 'maestro /mnt/maestro 9p trans=virtio,version=9p2000.L,ro 0 0' "$TMP/fstab" >/dev/null
 grep -Fx 'other-share /mnt/other 9p ro 0 0' "$TMP/fstab" >/dev/null
 grep -Fx '/dev/vda3 / ext4 defaults 0 1' "$TMP/fstab" >/dev/null

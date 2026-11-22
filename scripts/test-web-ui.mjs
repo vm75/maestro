@@ -25,13 +25,13 @@ assert.ok(!html.includes('<link rel="stylesheet"'),'UI must contain no external 
 // Exercise the manifest functions without a browser. All tabs are composed
 // from modules, with deterministic groups and legacy section IDs.
 const navigation = readFileSync('web/src/js/navigation.js', 'utf8');
-const manifestStart = navigation.indexOf('    const RH_FALLBACK_MODULES =');
+const manifestStart = navigation.indexOf('    const MAESTRO_FALLBACK_MODULES =');
 const composeStart = navigation.indexOf('    function rhComposeNavigation()', manifestStart);
 assert.ok(manifestStart >= 0 && composeStart > manifestStart);
 const groups = new Script(navigation.slice(manifestStart, composeStart) + `
 const original = rhNavigationGroups();
 const markup = rhNavigationMarkup(original, false);
-rhModuleCatalog = RH_FALLBACK_MODULES
+rhModuleCatalog = MAESTRO_FALLBACK_MODULES
   .filter(module => module.id !== 'nginx')
   .map(module => module.id === 'adguard' ? {...module, availability: 'unsupported'} : module);
 ({

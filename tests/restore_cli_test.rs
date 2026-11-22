@@ -18,7 +18,7 @@ fn restore_works_with_corrupt_configuration_and_test_mode_leaves_destination_unt
     header.set_size(contents.len() as u64);
     header.set_mode(0o600);
     header.set_cksum();
-    tar.append_data(&mut header, "etc/router-hub/router-hub.toml", &contents[..])
+    tar.append_data(&mut header, "etc/maestro/maestro.toml", &contents[..])
         .unwrap();
     tar.into_inner().unwrap().finish().unwrap();
 
@@ -49,7 +49,7 @@ fn restore_works_with_corrupt_configuration_and_test_mode_leaves_destination_unt
         String::from_utf8_lossy(&restored.stderr)
     );
     assert_eq!(
-        fs::read(root.join("etc/router-hub/router-hub.toml")).unwrap(),
+        fs::read(root.join("etc/maestro/maestro.toml")).unwrap(),
         contents
     );
 }

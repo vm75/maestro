@@ -421,7 +421,7 @@ settings = {
     'PACKAGE_nginx-mod-naxsi': 'n',
     'PACKAGE_nginx-mod-ts': 'n',
     'PACKAGE_nginx-mod-njs': 'n',
-    # Required by the router-hub reverse-proxy configuration / TLS.
+    # Required by the Maestro reverse-proxy configuration / TLS.
     'NGINX_HTTP_V2': 'y',
     'NGINX_HTTP_REAL_IP': 'y',
     'NGINX_HTTP_AUTH_REQUEST': 'y',

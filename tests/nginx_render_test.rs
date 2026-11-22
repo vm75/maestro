@@ -186,9 +186,7 @@ async fn native_jinja_output_passes_real_nginx_validation() {
             nginx::set_enabled(&config, kind, "example.test", name, false).unwrap();
         }
     }
-    if let Some(fixture) = std::env::var_os("MAESTRO_NGINX_FIXTURE")
-        .or_else(|| std::env::var_os("ROUTER_HUB_NGINX_FIXTURE"))
-    {
+    if let Some(fixture) = std::env::var_os("MAESTRO_NGINX_FIXTURE") {
         fs::create_dir_all(root.join("settings")).unwrap();
         fs::copy(
             PathBuf::from(fixture).join("../maestro/nginx/sites.toml"),

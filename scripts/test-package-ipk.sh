@@ -20,16 +20,15 @@ tar -xOzf "$TMP/control.tar.gz" ./control | grep -Fx 'Architecture: aarch64-3.10
 tar -xOzf "$TMP/control.tar.gz" ./control | grep -Fx 'Conflicts: router-hub'
 tar -tzf "$TMP/control.tar.gz" | grep -Fx './postinst'
 tar -tzf "$TMP/control.tar.gz" | grep -Fx './prerm'
-# Migration runs during every IPK post-install, before service restart.
+# The post-install helper may migrate Maestro's nginx input format, but never imports Router Hub automatically.
 tar -xzOf "$TMP/control.tar.gz" ./postinst | grep -F 'setup-merlin.sh'
 setup=scripts/setup-merlin.sh
 migration_line=$(grep -nF 'migrate-nginx-inputs' "$setup" | tail -1 | cut -d: -f1)
 start_line=$(grep -nF '/opt/etc/init.d/S99maestro restart' "$setup" | tail -1 | cut -d: -f1)
-legacy_line=$(grep -nF 'LEGACY_CONFIG=/opt/etc/router-hub/router-hub.toml' "$setup" | head -1 | cut -d: -f1)
-test -n "$legacy_line" && test "$legacy_line" -lt "$migration_line"
+! grep -qF 'LEGACY_CONFIG=' "$setup"
 test -n "$migration_line" && test -n "$start_line" && test "$migration_line" -lt "$start_line"
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/bin/maestro'
-tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/bin/router-hub'
+! tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/bin/router-hub'
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/etc/init.d/S99maestro'
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/libexec/maestro/setup-merlin.sh'
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/share/maestro/dehydrated-dns01-hook.sh'

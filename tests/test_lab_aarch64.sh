@@ -108,8 +108,6 @@ QEMU_ARGS="$TMP/qemu-args" PATH="$TMP/bin:$PATH" lab/aarch64/run.sh \
     --disk "$TMP/disk.qcow2" --uefi "$TMP/uefi.fd" >/dev/null
 grep -Fx -- '-virtfs' "$TMP/qemu-args" >/dev/null
 grep -Fx "local,path=$REPO_DIR,mount_tag=maestro,security_model=none,readonly=on" "$TMP/qemu-args" >/dev/null
-# Existing QEMU disks still mount their legacy read-only project share.
-grep -Fx "local,path=$REPO_DIR,mount_tag=router-hub,security_model=none,readonly=on" "$TMP/qemu-args" >/dev/null
 grep -Fx 'user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:8080-:8080,hostfwd=tcp:127.0.0.1:8443-:8443,hostfwd=tcp:127.0.0.1:3030-:3030' "$TMP/qemu-args" >/dev/null
 # The simulated firmware must not occupy NGINX's HTTP/HTTPS ports.
 (

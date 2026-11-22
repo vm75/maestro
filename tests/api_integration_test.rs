@@ -645,8 +645,8 @@ async fn test_services_api() {
             .all(|service| service["enabled"].as_bool() == Some(true))
     );
 
-    // The new service and legacy init-script alias must both be protected.
-    for service in ["S99maestro", "S99router-hub"] {
+    // Maestro must not permit disabling its own init service.
+    for service in ["S99maestro"] {
         let req = Request::builder()
             .method("POST")
             .uri(format!("/api/services/{service}/disable"))
