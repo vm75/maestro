@@ -81,8 +81,6 @@ pub fn install_menu_entry(config: &AppConfig) -> Result<()> {
     }
     let menu_index = config.asus_ui.menu_index.trim();
     if !menu_index.starts_with("menu_")
-        || menu_index == "menu_RouterHub"
-        || menu_index == "menu_Router_Hub"
         || menu_index == "menu_Maestro"
         || !menu_index
             .chars()
@@ -97,11 +95,7 @@ pub fn install_menu_entry(config: &AppConfig) -> Result<()> {
             config.asus_ui.menu_tree.display()
         )
     })?;
-    for (index, label) in [
-        ("menu_RouterHub", "Router Hub"),
-        ("menu_Router_Hub", "Router Hub"),
-        ("menu_Maestro", "Maestro"),
-    ] {
+    for (index, label) in [("menu_Maestro", "Maestro")] {
         let marker = format!("{{\nmenuName: \"{label}\",\nindex: \"{index}\",");
         if let Some(start) = menu_tree.find(&marker) {
             if let Some(end) = menu_tree[start..].find("\n},\n") {
@@ -111,8 +105,6 @@ pub fn install_menu_entry(config: &AppConfig) -> Result<()> {
     }
     let settings_child = format!("{{url: \"{page}\", tabName: \"Maestro\"}},\n");
     menu_tree = menu_tree.replacen(&settings_child, "", 1);
-    let legacy_settings_child = format!("{{url: \"{page}\", tabName: \"Router Hub\"}},\n");
-    menu_tree = menu_tree.replacen(&legacy_settings_child, "", 1);
 
     let index_marker = format!("index: \"{menu_index}\"");
     let index = menu_tree.find(&index_marker).ok_or_else(|| {
@@ -225,7 +217,7 @@ mod tests {
         let menu_tree = temp.path().join("menuTree.js");
         fs::write(
             &menu_tree,
-            "define(function(){\nlist: [\n{\nindex: \"menu_WAN\",\ntab: [\n{url: \"Advanced_WAN_Content.asp\", tabName: \"WAN\"},\n{url: \"NULL\", tabName: \"__INHERIT__\"}\n]\n},\n{\nmenuName: \"Alexa & IFTTT\",\nindex: \"menu_Alexa_IFTTT\",\ntab: [\n{url: \"Advanced_Smart_Home_Alexa.asp\", tabName: \"__INHERIT__\"},\n{url: \"NULL\", tabName: \"__INHERIT__\"}\n]\n},\n{\nindex: \"menu_Setting\",\ntab: [\n{url: \"user20.asp\", tabName: \"Router Hub\"},\n{url: \"Advanced_System_Content.asp\", tabName: \"System\"}\n]\n}\n]\n});\n",
+            "define(function(){\nlist: [\n{\nindex: \"menu_WAN\",\ntab: [\n{url: \"Advanced_WAN_Content.asp\", tabName: \"WAN\"},\n{url: \"NULL\", tabName: \"__INHERIT__\"}\n]\n},\n{\nmenuName: \"Alexa & IFTTT\",\nindex: \"menu_Alexa_IFTTT\",\ntab: [\n{url: \"Advanced_Smart_Home_Alexa.asp\", tabName: \"__INHERIT__\"},\n{url: \"NULL\", tabName: \"__INHERIT__\"}\n]\n},\n{\nindex: \"menu_Setting\",\ntab: [\n{url: \"user20.asp\", tabName: \"Custom\"},\n{url: \"Advanced_System_Content.asp\", tabName: \"System\"}\n]\n}\n]\n});\n",
         )
         .unwrap();
         let mut config = AppConfig::default();

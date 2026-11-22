@@ -111,15 +111,9 @@ impl Stores {
     }
 }
 
-/// Keep mirroring legacy policy files for adopted Router Hub installations.
-fn firewall_policy_config_path(data_dir: &Path) -> &'static Path {
-    if data_dir.starts_with("/opt/etc/router-hub")
-        || data_dir.starts_with("/opt/var/lib/router-hub")
-    {
-        Path::new("/opt/etc/router-hub/firewall-policy.json")
-    } else {
-        Path::new("/opt/etc/maestro/firewall-policy.json")
-    }
+/// Router configuration policy is stored in the Maestro configuration root.
+fn firewall_policy_config_path(_data_dir: &Path) -> &'static Path {
+    Path::new("/opt/etc/maestro/firewall-policy.json")
 }
 
 #[derive(Default)]
@@ -519,10 +513,6 @@ mod tests {
     #[test]
     fn policy_config_follows_existing_state_root() {
         use std::path::Path;
-        assert_eq!(
-            super::firewall_policy_config_path(Path::new("/opt/etc/router-hub")),
-            Path::new("/opt/etc/router-hub/firewall-policy.json")
-        );
         assert_eq!(
             super::firewall_policy_config_path(Path::new("/opt/var/lib/maestro")),
             Path::new("/opt/etc/maestro/firewall-policy.json")

@@ -364,7 +364,7 @@ fn rename_service(
 }
 
 fn is_maestro_service(name: &str) -> bool {
-    name.ends_with("maestro") || name.ends_with("router-hub")
+    name.ends_with("maestro")
 }
 
 fn is_adguard_home_service(name: &str) -> bool {
@@ -406,11 +406,8 @@ mod tests {
     use super::{is_adguard_home_service, is_maestro_service, is_nginx_service};
 
     #[test]
-    fn recognizes_router_hub_service_by_suffix() {
+    fn recognizes_maestro_service_by_suffix() {
         assert!(is_maestro_service("S99maestro"));
-        assert!(is_maestro_service("S99router-hub"));
-        assert!(is_maestro_service("S10router-hub"));
-        assert!(is_maestro_service("K42router-hub"));
         assert!(!is_maestro_service("S99other-service"));
     }
 

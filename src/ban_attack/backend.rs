@@ -72,9 +72,9 @@ pub struct ReconcileReport {
     pub repaired: bool,
 }
 
-const INPUT_CHAIN: &str = "ROUTER_HUB_INPUT";
-const FORWARD_CHAIN: &str = "ROUTER_HUB_FORWARD";
-const RULE_COMMENT: &str = "router-hub:ban-attack";
+const INPUT_CHAIN: &str = "MAESTRO_INPUT";
+const FORWARD_CHAIN: &str = "MAESTRO_FORWARD";
+const RULE_COMMENT: &str = "maestro:ban-attack";
 const MAX_RESTORE_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug)]

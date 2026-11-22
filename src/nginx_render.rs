@@ -10,8 +10,8 @@ use serde_json::{Map, Value};
 use crate::{models::NginxObjectKind, nginx};
 
 pub type Settings = Map<String, Value>;
-/// Keep the historical marker to read settings embedded in pre-rebrand nginx objects.
-pub const SETTINGS_PREFIX: &str = "# router-hub-settings: ";
+/// Maestro owns settings metadata embedded in generated nginx objects.
+pub const SETTINGS_PREFIX: &str = "# maestro-settings: ";
 
 /// Named budgets are shared per client IP across every assignment of that name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
