@@ -1,6 +1,6 @@
 //! HTTP-01 windows. Persistent intent is separate from transient session state.
 //! The optional IPv4 WAN adapter uses a kernel ipset timeout: its accept gate
-//! expires even if Router Hub dies. nginx/local listener cleanup still needs
+//! expires even if Maestro dies. nginx/local listener cleanup still needs
 //! startup recovery after an abrupt process death.
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};

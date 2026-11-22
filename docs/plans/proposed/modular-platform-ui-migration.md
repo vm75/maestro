@@ -241,7 +241,7 @@ Keep the Go implementation available as the behavior/specification reference. Im
 ### Step 4 — Linux UI shell, operations bridge and authentication
 
 - Reuse Server Man's Svelte 5/Vite shell and responsive styles; compile to static assets only in the Linux release. Keep ASUS build and IPK free of the Svelte build toolchain/assets.
-- Adapt the existing Svelte `invokeTool`/`startJob` client: preserve or provide a compatible `POST /api/tools/{name}` transport, tool/module discovery, tracked jobs and predictable JSON error codes. Keep Router Hub's existing REST endpoints working.
+- Adapt the existing Svelte `invokeTool`/`startJob` client: preserve or provide a compatible `POST /api/tools/{name}` transport, tool/module discovery, tracked jobs and predictable JSON error codes. Keep Maestro's existing REST endpoints working.
 - Port the core registry concepts (schema validation, read/write policy, bounded output, management-job locking, audit, cancellation) into Rust incrementally.
 - Port Linux browser session flow and Host/Origin protection; do not change ASUS bearer-token behavior. Require explicit permission boundaries for privileged Linux actions.
 - Establish a shared navigation/dashboard contribution contract; Linux tab assembly uses Svelte components and lazy loading, while ASUS keeps its embedded renderer.
@@ -323,7 +323,7 @@ The final acceptance matrix must cover:
 | UI hides feature operations | Inventory all existing screens, command handlers, modal flows and deep links; matrix-based browser tests |
 | Platform abstraction changes firewall/NGINX semantics | Extract adapters without rewriting operations; stable API and rollback fixtures |
 | Existing config/data or upgrade break | Keep paths/schemas through M1; separate versioned rebrand migration with rollback |
-| Legacy installed Router Hub IPK collides with Maestro alias | Explicit package conflict, remove old package only after backup, non-destructive config adoption and rollback instructions |
+| Legacy Router Hub installation conflicts with Maestro | Keep the IPK conflict guard, run an explicit one-time data transfer, remove old boot hooks, reboot to clear old firewall chains, and preserve offline rollback artifacts |
 | Go workload port loses transactional safety | Preserve revision, ownership, preflight, journal and review gates; native guest acceptance |
 | CI accidentally runs before M1 | Keep branch outside `main`/`ci/**`, no tags or manual dispatch; audit changed workflows |
 

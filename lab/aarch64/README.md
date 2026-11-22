@@ -67,7 +67,7 @@ and `AARCH64_UEFI` for a firmware path. Both scripts use these defaults regardle
 of the host working directory. Direct launcher calls also accept `--disk`,
 `--iso`, and `--uefi`.
 
-QEMU also exports the old `router-hub` 9p mount tag read-only so existing guest disks can still boot. New installs and reprovisioned guests use only `/mnt/maestro`; the legacy guest mount is replaced on reprovision.
+QEMU exports only the `maestro` 9p mount tag at `/mnt/maestro`. Reprovision old guests whose fstab still points to the previous mount tag before launching them.
 
 ## 3. Install Alpine Linux in the Guest
 

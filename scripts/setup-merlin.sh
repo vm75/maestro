@@ -33,6 +33,14 @@ fi
 # Relocate current-format inputs while Maestro is stopped.
 /opt/bin/maestro --config "$CONFIG_DIR/maestro.toml" migrate-nginx-inputs
 
+# Refuse an old JFFS daemon hook; the one-time cutover must remove it first.
+for hook in /jffs/scripts/post-mount /jffs/scripts/firewall-start; do
+    if [ -f "$hook" ] && grep -qF '/opt/etc/init.d/S99router-hub' "$hook"; then
+        echo "Remove old Router Hub reconciliation hook from $hook before installing Maestro (see docs/maestro-migration.md)." >&2
+        exit 1
+    fi
+done
+
 # Install the embedded main configuration, backing up a different nginx.conf.
 # Saved inputs, existing shared fragments, and configured nginx paths are retained.
 /opt/bin/maestro --config "$CONFIG_DIR/maestro.toml" init-nginx

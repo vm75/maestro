@@ -19,7 +19,7 @@ configured
 router programs and files: Entware init scripts, nginx, dehydrated/OpenSSL,
 ipset/iptables, NVRAM, and optionally an AdGuard Home HTTP API.
 
-Legacy firewall chain prefixes and ownership markers remain `ROUTER_HUB_*` and `router-hub:ban-attack` on purpose for safe in-place upgrades.
+Maestro owns `MAESTRO_INPUT`/`MAESTRO_FORWARD` firewall chains and rules tagged `maestro:ban-attack`. The one-time Router Hub migration must retire old firewall objects before starting Maestro.
 
 ## Components
 
@@ -258,9 +258,9 @@ current set entries.
 ## Ban-attack firewall backend and recovery
 
 The production backend manages IPv4 and IPv6 `hash:net` ipsets and owned
-`ROUTER_HUB_INPUT`/`ROUTER_HUB_FORWARD` chains. Owned rules carry the
-`router-hub:ban-attack` comment, and disabling the policy removes only legacy Router
-Hub's parent hooks; administrator or other-tool rules are not removed. The
+`MAESTRO_INPUT`/`MAESTRO_FORWARD` chains. Owned rules carry the
+`maestro:ban-attack` comment, and disabling the policy removes only
+Maestro-owned parent hooks; administrator or other-tool rules are not removed. The
 application path currently supplies a 65,536-entry ipset capacity; the lower
 level engine type accepts a configurable capacity, but there is not yet an
 application `[firewall]` setting for it.

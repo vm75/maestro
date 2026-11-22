@@ -57,9 +57,9 @@ support is not promised.
    ./scripts/install-merlin.sh ./maestro
    ```
 
-   The installer creates a token and configuration on first install, can adopt
-   legacy Router Hub configuration without moving stored state, installs startup
-   hooks, and restarts Maestro.
+   The installer creates a token and Maestro configuration on first install,
+   installs startup hooks, and restarts Maestro. Migrating Router Hub data
+   requires the explicit one-time procedure before installation.
 4. Review `/opt/etc/maestro/maestro.toml` after either installation method: set your bind address,
    allowed origins, ASUS page/menu, API URL, and service paths. The shipped
    values are examples. Restart after changes:
@@ -131,7 +131,7 @@ security, nginx settings, and firewall tuning.
 | --- | --- |
 | [Installation](docs/installation.md) | Packages, source builds, installer options, service commands |
 | [Configuration](docs/configuration.md) | TOML sections, nginx settings, Ban Shield tuning, operational notes |
-| [Upgrading](docs/maestro-migration.md) | Rebrand steps and Router Hub coexistence/rollback |
+| [Upgrading](docs/maestro-migration.md) | One-time cutover and rollback; no legacy runtime aliases |
 | [Legacy migrations](docs/migration.md) | Historical nginx and storage compatibility |
 | [Development](docs/development.md) | Prerequisites, local checks, certificate tests, API overview |
 | [Linux integration](docs/linux.md) | Real-service lab setup and smoke tests |

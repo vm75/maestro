@@ -17,15 +17,15 @@ python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ requir
 }
 nginx_bin=$(command -v nginx)
 lab=$(mktemp -d "${TMPDIR:-/tmp}/maestro-linux.XXXXXX")
-hub_pid=
-keep_lab=${MAESTRO_KEEP_LINUX_LAB:-${ROUTER_HUB_KEEP_LINUX_LAB:-0}}
+maestro_pid=
+keep_lab=${MAESTRO_KEEP_LINUX_LAB:-0}
 
 cleanup() {
     local result=$?
     trap - EXIT
-    if [[ -n "$hub_pid" ]]; then
-        kill "$hub_pid" 2>/dev/null || true
-        wait "$hub_pid" 2>/dev/null || true
+    if [[ -n "$maestro_pid" ]]; then
+        kill "$maestro_pid" 2>/dev/null || true
+        wait "$maestro_pid" 2>/dev/null || true
     fi
     if [[ -s "$lab/run/nginx.pid" ]]; then
         "$nginx_bin" -p "$lab/nginx/" -c "$lab/nginx/nginx.conf" -s quit >/dev/null 2>&1 || true
@@ -144,7 +144,7 @@ cargo build --quiet --locked
 bin="$repo_root/target/debug/maestro"
 "$bin" --config "$lab/maestro.toml" --linux-mode check-config
 "$bin" --config "$lab/maestro.toml" --linux-mode serve >"$lab/logs/maestro.stdout" 2>&1 &
-hub_pid=$!
+maestro_pid=$!
 
 api="http://127.0.0.1:$api_port"
 ready=false
@@ -153,7 +153,7 @@ for _ in $(seq 1 80); do
         ready=true
         break
     fi
-    if ! kill -0 "$hub_pid" 2>/dev/null; then
+    if ! kill -0 "$maestro_pid" 2>/dev/null; then
         cat "$lab/logs/maestro.stdout" >&2
         echo "Maestro exited before becoming ready" >&2
         exit 1
