@@ -646,7 +646,8 @@ async fn test_services_api() {
     );
 
     // Maestro must not permit disabling its own init service.
-    for service in ["S99maestro"] {
+    {
+        let service = "S99maestro";
         let req = Request::builder()
             .method("POST")
             .uri(format!("/api/services/{service}/disable"))

@@ -95,7 +95,8 @@ pub fn install_menu_entry(config: &AppConfig) -> Result<()> {
             config.asus_ui.menu_tree.display()
         )
     })?;
-    for (index, label) in [("menu_Maestro", "Maestro")] {
+    {
+        let (index, label) = ("menu_Maestro", "Maestro");
         let marker = format!("{{\nmenuName: \"{label}\",\nindex: \"{index}\",");
         if let Some(start) = menu_tree.find(&marker) {
             if let Some(end) = menu_tree[start..].find("\n},\n") {
