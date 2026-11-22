@@ -75,9 +75,12 @@ Those still need router validation. Linux keeps its firewall policy within
 Linux setup installs executable `S80nginx` and `S99maestro` adapters in
 `data/linux/init.d`. These use the normal Services discovery and actions. They require
 Python 3.11 or newer and default to `data/linux/maestro.toml`; set
-`MAESTRO_CONFIG` to select another configuration (`ROUTER_HUB_CONFIG` remains a legacy fallback). For an existing setup, set
-`[services].init_dir` to the absolute path of `data/linux/init.d` and rerun
-`./scripts/setup-linux.sh`. Existing adapters are preserved; remove or disable an obsolete `S99router-hub` adapter after confirming that `S99maestro` works. When `data/linux/router-hub.toml` exists, setup copies it to `maestro.toml` without overwriting existing paths.
+`MAESTRO_CONFIG` to select another configuration. For an existing
+Maestro setup, set `[services].init_dir` to the absolute path of
+`data/linux/init.d` and rerun `./scripts/setup-linux.sh`. Existing Maestro
+adapters and configuration files are preserved. Router Hub Linux lab
+configurations require a deliberate manual transfer; there is no runtime
+environment-variable fallback or automatic configuration import.
 
 Build Maestro before starting it through `data/linux/init.d/S99maestro start`.
 The adapter prefers the release binary, falling back to the debug binary, and

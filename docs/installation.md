@@ -41,14 +41,17 @@ sha256sum -c "${PACKAGE}.sha256"
 
 Use a root shell. The package owns the Maestro binary, Entware init script,
 example configuration, and shared setup helper, but **not** runtime settings or
-state. The `postinst` hook initializes first-install configuration, migrates
-current-format nginx inputs where needed, installs JFFS reconciliation hooks,
+state. The `postinst` hook initializes first-install Maestro configuration, migrates
+NGINX input layouts *within Maestro* where needed, installs JFFS reconciliation hooks,
 validates configuration and starts the service. `prerm` stops the service
 before an upgrade or removal; it does not delete persistent data.
 
-**Migrating from a Router Hub package or tarball:** Make a backup and follow the
-[Maestro migration guide](maestro-migration.md) first. The Maestro IPK declares a conflict with the old Router Hub package. Remove the
-old package only after backing up and follow the documented data adoption steps.
+**Migrating from a Router Hub package or tarball:** Maestro no longer
+auto-imports legacy installations. Back up first, follow the explicit
+[one-time migration guide](maestro-migration.md), remove old startup hooks,
+uninstall the old package, reboot to clear old firewall objects and only
+then install Maestro. The IPK conflict prevents the two packages from
+being installed together.
 The new package does not delete legacy administrator-created state. Removing the IPK also intentionally
 leaves administrator-created configuration, data and JFFS hooks in place.
 

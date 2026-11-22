@@ -213,18 +213,17 @@ self-updater and the custom NGINX updater now target `vm75/maestro` releases. Th
 `vm75/server-man` remains untouched and may be used as a Phase 2 port reference.
 The earlier Server Man repository-name collision is no longer relevant.
 
-**Migration strategy:** ship the new `maestro` package with an explicit
-`Conflicts: router-hub` constraint, and a CLI-only `router-hub` symlink.
-Operators first back up then remove the old Entware package, then install a
-verified published Maestro IPK. On first install only, the setup helper
-adopts the legacy TOML into the new configuration file, preserving tokens,
-NGINX inputs, policy/state paths and legacy firewall ownership identifiers;
-it copies legacy dehydrated binary data when available, and rewrites
-packaged dehydrated hook references in the *new* configuration only.
-Original user data and config remain untouched for rollback. Old JFFS
-reconciliation hooks are updated to call `S99maestro` without duplication.
-No automatic legacy package uninstall, force-overwrite, state relocation,
-or change to the exposed API endpoints is permitted.
+**Migration strategy (one private deployment):** Maestro v0.11.0 is a
+clean break. The CLI, packaged files, browser auth, static assets, NGINX
+settings markers, firewall chains and UI no longer recognize Router Hub
+aliases. The Entware package retains `Conflicts: router-hub` solely to
+prevent unsafe co-installation. A separate, backup-gated, operator-invoked
+`scripts/migrate-router-hub-once.sh` stages the original configuration and
+data in Maestro paths; it is neither packaged in nor invoked by Maestro.
+After verifying copied data and generated NGINX settings, remove old JFFS
+hooks and the Router Hub package, reboot to clear runtime firewall objects,
+then install a verified Maestro IPK. The original data and an off-router
+backup remain available for manual rollback. No unattended legacy import.
 
 Full instructions and rollback procedures:
 [Maestro migration guide](../../maestro-migration.md).
