@@ -206,11 +206,10 @@ The new Rust project identity is **Maestro**, including the `maestro` crate, bin
 Entware IPK, `S99maestro` init script, new-install config path and UI. The
 existing artwork is merely renamed and can be replaced by the maintainer.
 
-The GitHub repository is **still** `vm75/router-hub`. Renaming a repository is a
-separate GitHub administrative action after merge and release readiness; source
-code branches cannot perform that rename. Both the Rust self-updater and the
-custom NGINX updater retain the currently reachable release endpoint until
-the repository is actually renamed. The unrelated Go project at
+The GitHub repository has been renamed to **`vm75/maestro`**. The historical
+Phase 1 baseline was developed under `vm75/router-hub`, so that identifier is
+retained above only to describe the original source project. Both the Rust
+self-updater and the custom NGINX updater now target `vm75/maestro` releases. The unrelated Go project at
 `vm75/server-man` remains untouched and may be used as a Phase 2 port reference.
 The earlier Server Man repository-name collision is no longer relevant.
 

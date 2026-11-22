@@ -26,12 +26,12 @@ For Router Hub 0.10.5 installations, follow the [Maestro migration guide](maestr
 
 Stable GitHub releases include a `.ipk` and `.ipk.sha256` pair. For example,
 after `v0.11.0` is published, download both assets from
-[GitHub Releases](https://github.com/vm75/router-hub/releases) and verify:
+[GitHub Releases](https://github.com/vm75/maestro/releases) and verify:
 
 ```sh
 VERSION=0.11.0
 PACKAGE="maestro_${VERSION}-1_aarch64-3.10.ipk"
-BASE="https://github.com/vm75/router-hub/releases/download/v${VERSION}"
+BASE="https://github.com/vm75/maestro/releases/download/v${VERSION}"
 cd /tmp
 curl -fLO "${BASE}/${PACKAGE}"
 curl -fLO "${BASE}/${PACKAGE}.sha256"
@@ -278,7 +278,7 @@ published:
 VERSION=v0.10.1
 TARGET=aarch64-unknown-linux-musl
 PACKAGE="maestro-${VERSION}-${TARGET}"
-URL="https://github.com/vm75/router-hub/releases/download/${VERSION}"
+URL="https://github.com/vm75/maestro/releases/download/${VERSION}"
 
 curl -fLO "${URL}/${PACKAGE}.tar.gz"
 curl -fLO "${URL}/${PACKAGE}.tar.gz.sha256"

@@ -1,6 +1,6 @@
 # Migrating Router Hub 0.10.5 to Maestro 0.11.0
 
-Maestro is the Phase 1.5 Rust rebrand. It has the same API/features as the validated Phase 1 Router Hub release; Linux Applications, systemd provider port and the Svelte shell remain Phase 2 work. The GitHub repository still lives at [vm75/router-hub](https://github.com/vm75/router-hub) until the owner separately renames it. The existing Go [vm75/server-man](https://github.com/vm75/server-man) is unrelated and untouched.
+Maestro is the Phase 1.5 Rust rebrand. It has the same API/features as the validated Phase 1 Router Hub release; Linux Applications, systemd provider port and the Svelte shell remain Phase 2 work. The GitHub repository is now [vm75/maestro](https://github.com/vm75/maestro), renamed from `vm75/router-hub`. GitHub redirects old repository URLs, but all Maestro release and upgrade instructions use the new address. The existing Go [vm75/server-man](https://github.com/vm75/server-man) is unrelated and untouched.
 
 ## Names after rebranding
 
@@ -33,7 +33,7 @@ The new IPK ships a `/opt/bin/router-hub` **CLI-only compatibility symlink**, bu
    ```sh
    VERSION=0.11.0
    FILE="maestro_${VERSION}-1_aarch64-3.10.ipk"
-   BASE="https://github.com/vm75/router-hub/releases/download/v${VERSION}"
+   BASE="https://github.com/vm75/maestro/releases/download/v${VERSION}"
    cd /tmp
    curl -fLO "${BASE}/${FILE}"
    curl -fLO "${BASE}/${FILE}.sha256"
@@ -64,4 +64,4 @@ Before merging/releasing, run `cargo fmt --all -- --check`, `cargo test --locked
 
 ## Compatibility identifiers retained deliberately
 
-Until the GitHub repository is separately renamed, release/update endpoints and source links still use `vm75/router-hub`. The IPK retains the legacy CLI symlink and explicit package conflict; the API retains old static-asset aliases and browser-token fallback. Existing firewall chain names (`ROUTER_HUB_*`), rule ownership comments, and stored nginx settings markers stay readable to avoid orphaning deployed resources or altering persisted site inputs. Existing QEMU guest disks can still mount the legacy `router-hub` 9p tag, while newly provisioned guests use `maestro` and `/mnt/maestro`. Old installation paths remain readable only for migration, rollback, or tests of those paths.
+After the repository rename to `vm75/maestro`, release/update endpoints and current source links use the new repository address. The IPK retains the legacy CLI symlink and explicit package conflict; the API retains old static-asset aliases and browser-token fallback. Existing firewall chain names (`ROUTER_HUB_*`), rule ownership comments, and stored nginx settings markers stay readable to avoid orphaning deployed resources or altering persisted site inputs. Existing QEMU guest disks can still mount the legacy `router-hub` 9p tag, while newly provisioned guests use `maestro` and `/mnt/maestro`. Old installation paths remain readable only for migration, rollback, or tests of those paths.

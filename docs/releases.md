@@ -5,7 +5,7 @@
 Maestro follows [Semantic Versioning](https://semver.org/). Set the version
 in `Cargo.toml` and commit the matching `Cargo.lock`; Git tags use the
 `vMAJOR.MINOR.PATCH` convention (or a prerelease such as `v0.8.0-rc.1`).
-The [GitHub Releases page](https://github.com/vm75/router-hub/releases) offers
+The [GitHub Releases page](https://github.com/vm75/maestro/releases) offers
 versioned AArch64 musl tarballs, and for stable tags, `aarch64-3.10`
 Entware IPKs. Each artifact has a SHA-256 checksum file.
 

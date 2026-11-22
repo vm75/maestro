@@ -12,7 +12,7 @@ Maestro coordinates your installed Entware tools. The modular feature registry
 organizes the UI into Dashboard, Services, Web, Security, and Network groups;
 existing feature URLs and API calls remain compatible.
 
-[Install](#install-on-your-router) · [Try locally](#try-it-locally) · [Documentation](#documentation) · [Releases](https://github.com/vm75/router-hub/releases)
+[Install](#install-on-your-router) · [Try locally](#try-it-locally) · [Documentation](#documentation) · [Releases](https://github.com/vm75/maestro/releases)
 
 ## Features
 
@@ -43,13 +43,13 @@ support is not promised.
    read the [Maestro migration guide](docs/maestro-migration.md) first; existing nginx configuration
    must be ported to the current bundle before deployment.
 2. For a new install, download the matching `.ipk` and checksum from
-   [GitHub Releases](https://github.com/vm75/router-hub/releases), verify the
+   [GitHub Releases](https://github.com/vm75/maestro/releases), verify the
    checksum, then run `/opt/bin/opkg install /tmp/<package>.ipk` as root.
    The IPK installs Maestro, initializes configuration, and starts the
    service. Migrating an existing Router Hub IPK requires the separate [rebrand migration](docs/maestro-migration.md); **do not install the new package over the legacy package**.
 
    Alternatively, download the matching tarball and checksum from
-   [GitHub Releases](https://github.com/vm75/router-hub/releases).
+   [GitHub Releases](https://github.com/vm75/maestro/releases).
    Verify with `sha256sum -c <archive>.tar.gz.sha256`, then extract the archive.
 3. **For tarball installs only**, from the extracted package run as root on the router:
 
