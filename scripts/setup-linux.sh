@@ -42,12 +42,6 @@ umask 077
 mkdir -p "$lab"/{state,run,logs/nginx,nginx/conf.d,nginx/domains-available,nginx/domains-enabled,nginx/snippets,init.d,wireguard,certs}
 mkdir -p "$lab/tmp" "$lab/nginx/logs"
 
-# Adopt an existing Linux lab configuration without overwriting its paths or state.
-if [[ ! -e "$lab/maestro.toml" && ! -L "$lab/maestro.toml" && -f "$lab/router-hub.toml" ]]; then
-    cp -p "$lab/router-hub.toml" "$lab/maestro.toml"
-    echo "Copied legacy Linux configuration to $lab/maestro.toml; existing paths retained."
-fi
-
 if [[ ! -e "$lab/state/firewall-policy.json" && ! -L "$lab/state/firewall-policy.json" ]]; then
     printf '%s\n' '{"enabled":false,"observe_only":false,"rules":[],"allowlist":[]}' > "$lab/state/firewall-policy.json"
 fi

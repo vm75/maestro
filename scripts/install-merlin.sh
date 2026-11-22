@@ -40,9 +40,6 @@ done
 [ -f "$BINARY" ] || { echo "Binary not found: $BINARY" >&2; exit 1; }
 
 mkdir -p /opt/bin /opt/etc/init.d /opt/var/lib/maestro/dehydrated
-if [ -x /opt/etc/init.d/S99router-hub ]; then
-    /opt/etc/init.d/S99router-hub stop
-fi
 if [ -x /opt/etc/init.d/S99maestro ]; then
     /opt/etc/init.d/S99maestro stop
 fi

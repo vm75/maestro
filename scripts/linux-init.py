@@ -11,7 +11,7 @@ import tomllib
 location = Path(__file__).resolve()
 # Installed copies live under data/linux/init.d.
 repo = location.parents[3] if location.parent.name == 'init.d' else location.parents[1]
-config = Path(os.environ.get('MAESTRO_CONFIG', os.environ.get('ROUTER_HUB_CONFIG', str(repo / 'data/linux/maestro.toml')))).resolve()
+config = Path(os.environ.get('MAESTRO_CONFIG', str(repo / 'data/linux/maestro.toml'))).resolve()
 with config.open('rb') as stream:
     cfg = tomllib.load(stream)
 service = 'nginx' if Path(sys.argv[0]).name.endswith('nginx') else 'maestro'

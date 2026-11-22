@@ -12,26 +12,16 @@ MOSQUITTO_PASS="${MOSQUITTO_PASS:-${MOSQUITTO_PASSWD:-}}"
 # In that mode, complete setup while leaving all service lifecycle calls to boot.
 [ "$(id -u)" = "0" ] || { echo "Run as root on the router." >&2; exit 1; }
 [ -x /opt/bin/maestro ] || { echo "/opt/bin/maestro not installed" >&2; exit 1; }
+# Never start an empty Maestro against an unmigrated Router Hub installation.
+if [ ! -f "$CONFIG_DIR/maestro.toml" ] && [ -f /opt/etc/router-hub/router-hub.toml ]; then
+    echo "Router Hub config detected: stage the one-time migration described in docs/maestro-migration.md first." >&2
+    exit 1
+fi
 mkdir -p /opt/etc/init.d "$CONFIG_DIR" "$DATA_DIR" "$DATA_DIR/dehydrated" /opt/var/log/nginx /opt/var/run/maestro
 if [ "${MAESTRO_DEFER_START:-0}" != 1 ] && [ -x /opt/etc/init.d/S99maestro ]; then
     /opt/etc/init.d/S99maestro stop
 fi
 
-# Keep all state/NGINX paths in legacy user config; never relocate data implicitly.
-# Copy rather than move to preserve rollback to Router Hub.
-LEGACY_CONFIG=/opt/etc/router-hub/router-hub.toml
-LEGACY_DATA=/opt/var/lib/router-hub
-if [ ! -e "$CONFIG_DIR/maestro.toml" ] && [ -f "$LEGACY_CONFIG" ]; then
-    cp -p "$LEGACY_CONFIG" "$CONFIG_DIR/maestro.toml"
-    chmod 0600 "$CONFIG_DIR/maestro.toml"
-    # The old IPK owned its DNS hook and may remove it on uninstall.
-    # Move only packaged dehydrated executable/hook references into Maestro's tree.
-    sed -i 's|/opt/var/lib/router-hub/dehydrated|/opt/var/lib/maestro/dehydrated|g' "$CONFIG_DIR/maestro.toml"
-    echo "Adopted Router Hub configuration; existing state and NGINX inputs stay at their configured paths."
-fi
-if [ ! -f "$DATA_DIR/dehydrated/dehydrated" ] && [ -s "$LEGACY_DATA/dehydrated/dehydrated" ]; then
-    cp -p "$LEGACY_DATA/dehydrated/dehydrated" "$DATA_DIR/dehydrated/dehydrated"
-fi
 if [ ! -f "$CONFIG_DIR/maestro.toml" ]; then
     cp "$EXAMPLES_DIR/maestro.example.toml" "$CONFIG_DIR/maestro.toml"
     chmod 0600 "$CONFIG_DIR/maestro.toml"
@@ -109,9 +99,6 @@ if [ ! -f "$POST_MOUNT" ]; then
     printf '#!/bin/sh\n' >"$POST_MOUNT"
     chmod 0755 "$POST_MOUNT"
 fi
-if grep -qF 'router-hub firewall reconciliation' "$POST_MOUNT"; then
-    sed -i 's|router-hub firewall reconciliation|maestro firewall reconciliation|g; s|S99router-hub reconcile|S99maestro reconcile|g' "$POST_MOUNT"
-fi
 if ! grep -qF 'maestro firewall reconciliation' "$POST_MOUNT"; then
     cat >> "$POST_MOUNT" <<'EOF'
 
@@ -124,9 +111,6 @@ FIREWALL_START=/jffs/scripts/firewall-start
 if [ ! -f "$FIREWALL_START" ]; then
     printf '#!/bin/sh\n' >"$FIREWALL_START"
     chmod 0755 "$FIREWALL_START"
-fi
-if grep -qF 'Router Hub: restore firewall hooks after Asuswrt rebuilds its firewall' "$FIREWALL_START"; then
-    sed -i 's|Router Hub: restore firewall hooks after Asuswrt rebuilds its firewall|Maestro: restore firewall hooks after Asuswrt rebuilds its firewall|g; s|S99router-hub reconcile|S99maestro reconcile|g; s|logger -t router-hub|logger -t maestro|g' "$FIREWALL_START"
 fi
 if ! grep -qF 'Maestro: restore firewall hooks after Asuswrt rebuilds its firewall' "$FIREWALL_START"; then
     cat >> "$FIREWALL_START" <<'EOF'

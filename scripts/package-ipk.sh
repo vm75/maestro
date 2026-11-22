@@ -32,8 +32,6 @@ META="$TMP/meta"
 mkdir -p "$DATA/opt/bin" "$DATA/opt/etc/init.d" "$DATA/opt/libexec/maestro" \
   "$DATA/opt/share/maestro" "$DATA/opt/var/lib/maestro/dehydrated" "$CONTROL" "$META" dist
 install -m 0755 "$BINARY" "$DATA/opt/bin/maestro"
-# Transitional CLI alias; the legacy init service is intentionally not aliased.
-ln -s maestro "$DATA/opt/bin/router-hub"
 install -m 0755 scripts/S99maestro "$DATA/opt/etc/init.d/S99maestro"
 install -m 0755 scripts/setup-merlin.sh "$DATA/opt/libexec/maestro/setup-merlin.sh"
 install -m 0755 scripts/dehydrated-dns01-hook.sh "$DATA/opt/share/maestro/dehydrated-dns01-hook.sh"

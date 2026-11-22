@@ -35,7 +35,6 @@ Configured local directories:
   opt/etc/mosquitto
   opt/etc/nginx
   opt/etc/maestro
-  opt/etc/router-hub (legacy)
   opt/etc/logrotate.d
   jffs/addons
   jffs/configs
@@ -95,7 +94,6 @@ LOCAL_PATHS=(
     "opt/etc/mosquitto"
     "opt/etc/nginx"
     "opt/etc/maestro"
-    "opt/etc/router-hub"
     "opt/etc/logrotate.d"
     "jffs/addons"
     "jffs/configs"
@@ -112,7 +110,6 @@ REMOTE_PATHS=(
     "/opt/etc/mosquitto"
     "/opt/etc/nginx"
     "/opt/etc/maestro"
-    "/opt/etc/router-hub"
     "/opt/etc/logrotate.d"
     "/jffs/addons"
     "/jffs/configs"
@@ -248,8 +245,6 @@ sync_selection() {
 
     if [[ "$selection" == "all" ]]; then
         for i in "${!LOCAL_PATHS[@]}"; do
-            # Legacy state is opt-in: it may not exist on fresh Maestro hosts.
-            [[ "${LOCAL_PATHS[$i]}" == "opt/etc/router-hub" ]] && continue
             sync_one "$direction" "$i"
         done
     else

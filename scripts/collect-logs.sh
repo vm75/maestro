@@ -27,11 +27,7 @@ export PATH
 OUTPUT_DIR="${OUTPUT_DIR:-/tmp}"
 MAX_LOG_BYTES="${MAX_LOG_BYTES:-1048576}"
 SAMPLE_SECONDS="${SAMPLE_SECONDS:-0}"
-CONFIG="${MAESTRO_CONFIG:-${ROUTER_HUB_CONFIG:-/opt/etc/maestro/maestro.toml}}"
-# Legacy installations are still diagnosable before completing migration.
-if [ ! -r "$CONFIG" ] && [ -r /opt/etc/router-hub/router-hub.toml ]; then
-    CONFIG=/opt/etc/router-hub/router-hub.toml
-fi
+CONFIG="${MAESTRO_CONFIG:-/opt/etc/maestro/maestro.toml}"
 
 STAMP="$(date '+%Y%m%d-%H%M%S' 2>/dev/null || echo unknown-time)"
 HOST="$(hostname 2>/dev/null || echo router)"
@@ -196,15 +192,15 @@ firewall_snapshot() {
     if [ -n "$IPTABLES" ]; then
         run_to_file "$dest/iptables-input-parent.txt" "$IPTABLES" -nvxL INPUT --line-numbers
         run_to_file "$dest/iptables-forward-parent.txt" "$IPTABLES" -nvxL FORWARD --line-numbers
-        run_to_file "$dest/iptables-maestro-input.txt" "$IPTABLES" -nvxL ROUTER_HUB_INPUT --line-numbers
-        run_to_file "$dest/iptables-maestro-forward.txt" "$IPTABLES" -nvxL ROUTER_HUB_FORWARD --line-numbers
+        run_to_file "$dest/iptables-maestro-input.txt" "$IPTABLES" -nvxL MAESTRO_INPUT --line-numbers
+        run_to_file "$dest/iptables-maestro-forward.txt" "$IPTABLES" -nvxL MAESTRO_FORWARD --line-numbers
     fi
 
     if [ -n "$IP6TABLES" ]; then
         run_to_file "$dest/ip6tables-input-parent.txt" "$IP6TABLES" -nvxL INPUT --line-numbers
         run_to_file "$dest/ip6tables-forward-parent.txt" "$IP6TABLES" -nvxL FORWARD --line-numbers
-        run_to_file "$dest/ip6tables-maestro-input.txt" "$IP6TABLES" -nvxL ROUTER_HUB_INPUT --line-numbers
-        run_to_file "$dest/ip6tables-maestro-forward.txt" "$IP6TABLES" -nvxL ROUTER_HUB_FORWARD --line-numbers
+        run_to_file "$dest/ip6tables-maestro-input.txt" "$IP6TABLES" -nvxL MAESTRO_INPUT --line-numbers
+        run_to_file "$dest/ip6tables-maestro-forward.txt" "$IP6TABLES" -nvxL MAESTRO_FORWARD --line-numbers
     fi
 
     date -u '+%Y-%m-%dT%H:%M:%SZ' >"$dest/captured-at-utc.txt" 2>/dev/null || true
@@ -422,7 +418,7 @@ done
 
 if [ -n "$LOGREAD" ]; then
     "$LOGREAD" 2>/dev/null \
-        | grep -Ei 'maestro|ban-attack|ROUTER_HUB_|ipset|iptables|ip6tables|nginx' \
+        | grep -Ei 'maestro|ban-attack|MAESTRO_|ipset|iptables|ip6tables|nginx' \
         | tail -n 5000 >"$WORK/logs/router-syslog-security.tail" 2>/dev/null || true
 fi
 
@@ -526,7 +522,7 @@ Suggested analysis
 
 2. Verify enforcement:
    - active bans in Maestro state vs ipset members
-   - ROUTER_HUB_INPUT / ROUTER_HUB_FORWARD hooks exist
+   - MAESTRO_INPUT / MAESTRO_FORWARD hooks exist
    - packet/byte counters increase after bans (especially with t0/t1 sampling)
 
 3. Tune rules:
