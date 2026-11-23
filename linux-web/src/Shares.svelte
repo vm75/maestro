@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { invokeTool, type Discovery, type Status } from './lib/api'
 
-  let { status: _status, discovery: _discovery }: { status: Status; discovery: Discovery } = $props()
+  let { status: _status, discovery }: { status: Status; discovery: Discovery } = $props()
 
   interface Share {
     id: string
@@ -29,6 +29,12 @@
   let sharesStatus = $state<SharesStatusResponse | null>(null)
   let loading = $state(true)
   let error = $state('')
+  let password = $state('')
+  let passwordAgain = $state('')
+  let passwordPending = $state(false)
+  let passwordError = $state('')
+  let passwordMessage = $state('')
+  const sambaCapability = $derived(discovery.permissions?.sambaPassword)
 
   async function loadData() {
     loading = true
@@ -44,6 +50,29 @@
       error = e instanceof Error ? e.message : 'Could not load shares data'
     } finally {
       loading = false
+    }
+  }
+
+  async function changeSambaPassword(event: SubmitEvent) {
+    event.preventDefault()
+    if (passwordPending || sambaCapability?.status !== 'ready') return
+    passwordError = ''
+    passwordMessage = ''
+    if (!password || password !== passwordAgain) {
+      passwordError = 'Passwords must be non-empty and match.'
+      return
+    }
+    if (!window.confirm('Change the trusted workload account Samba password?')) return
+    passwordPending = true
+    try {
+      await invokeTool('shares_samba_password', { password, confirm: true })
+      passwordMessage = 'Samba password updated for the authorized workload account.'
+    } catch (failure) {
+      passwordError = failure instanceof Error ? failure.message : 'Could not update Samba password.'
+    } finally {
+      password = ''
+      passwordAgain = ''
+      passwordPending = false
     }
   }
 
@@ -85,6 +114,27 @@
     {:else if loading}
       <p role="status">Checking services status…</p>
     {/if}
+  </section>
+
+  <section class="panel" aria-labelledby="password-heading">
+    <h2 id="password-heading">Samba account password</h2>
+    <p>This changes only the trusted Linux workload account's Samba password. Account selection is not accepted by the API, and passwords are not saved in Maestro job history.</p>
+    {#if sambaCapability?.status !== 'ready'}
+      <p role="status">{sambaCapability?.reason ?? 'Samba password capability is unavailable.'} Review optional helper installation and both administrator policies.</p>
+    {/if}
+    <form class="password-form" onsubmit={changeSambaPassword}>
+      <label for="samba-password">New Samba password</label>
+      <input id="samba-password" type="password" autocomplete="new-password" bind:value={password}
+        required maxlength="256" disabled={passwordPending || sambaCapability?.status !== 'ready'}>
+      <label for="samba-password-again">Confirm new Samba password</label>
+      <input id="samba-password-again" type="password" autocomplete="new-password" bind:value={passwordAgain}
+        required maxlength="256" disabled={passwordPending || sambaCapability?.status !== 'ready'}>
+      <button type="submit" disabled={passwordPending || sambaCapability?.status !== 'ready'}>
+        {passwordPending ? 'Changing…' : 'Change Samba password'}
+      </button>
+    </form>
+    {#if passwordError}<p role="alert">{passwordError}</p>{/if}
+    {#if passwordMessage}<p role="status">{passwordMessage}</p>{/if}
   </section>
 
   <!-- Network Shares List -->
@@ -136,6 +186,9 @@
     display: grid;
     gap: 1.5rem;
   }
+  .password-form { display: grid; grid-template-columns: minmax(0, 23rem); gap: .65rem; }
+  .password-form input { background: var(--panel); color: var(--text); font: inherit; padding: .6rem; border: 1px solid var(--border); border-radius: 6px; }
+  .password-form button { justify-self: start; }
   .panel-header {
     display: flex;
     justify-content: space-between;

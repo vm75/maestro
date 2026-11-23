@@ -52,6 +52,10 @@
       <dd>{current.permissions.systemServices.status} — {current.permissions.systemServices.reason}</dd>
       <dt>Package writes</dt>
       <dd>{current.permissions.packageWrites.status} — {current.permissions.packageWrites.reason}</dd>
+      {#if current.permissions.sambaPassword}
+        <dt>Samba password writes</dt>
+        <dd>{current.permissions.sambaPassword.status} — {current.permissions.sambaPassword.reason}</dd>
+      {/if}
     </dl>
   {:else}
     <p role="status">Permission details are unavailable. Recheck the connected server.</p>
