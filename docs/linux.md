@@ -294,3 +294,16 @@ structured MCP results and official SDK contract parity remain mandatory before
 claiming reference compatibility. Native workloads, safe share mutations,
 backup capture/recovery and the production Linux installer are also incomplete.
 See [Phase 2 parity matrix](plans/proposed/server-man-phase2-parity-matrix.md).
+
+### Systemd service privilege-boundary caveat
+
+The service is always installed under its existing non-root workload
+account. The optional, explicitly authorized `sudo -n` helper relies on
+setuid privilege transition: a systemd service configured with
+`NoNewPrivileges=yes` or an empty `CapabilityBoundingSet` would prevent
+the authorized helper from performing root operations. The current
+installation unit therefore leaves setuid elevation available **only through
+the narrow sudoers command allowlist**; the main process receives no ambient
+root capabilities. Avoid blanket sudo, `SETENV`, or additional allowlisted
+programs. This boundary requires a disposable-guest security review in both
+helper-free and helper-enabled deployments before production use.

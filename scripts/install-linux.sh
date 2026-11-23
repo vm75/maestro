@@ -149,8 +149,10 @@ Environment=HOME=$home
 ExecStart=/usr/local/bin/maestro --config $config --linux-mode serve
 Restart=on-failure
 RestartSec=5s
-NoNewPrivileges=yes
-CapabilityBoundingSet=
+# The restricted optional sudo -n helper requires setuid escalation.
+# NoNewPrivileges=yes and an empty capability bounding set would break it.
+# Main Maestro still runs under User=/Group= with no ambient privileges.
+NoNewPrivileges=no
 UMask=0077
 [Install]
 WantedBy=multi-user.target

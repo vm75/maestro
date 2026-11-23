@@ -1,11 +1,14 @@
 use std::{
     fs::{self, File},
     io::Read,
-    os::unix::fs::{DirBuilderExt, MetadataExt},
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::LazyLock,
     time::Duration,
 };
+
+#[cfg(test)]
+use std::os::unix::fs::DirBuilderExt;
 
 use chrono::{DateTime, Utc};
 use regex::Regex;
