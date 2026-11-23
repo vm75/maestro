@@ -50,7 +50,7 @@ pub fn app(state: AppState) -> anyhow::Result<Router> {
     ));
     #[cfg(feature = "linux")]
     let api = if state.config.platform == crate::config::Platform::Linux {
-        api.merge(tools::router(state.clone()))
+        api.merge(tools::router(state.clone())?)
     } else {
         api
     };

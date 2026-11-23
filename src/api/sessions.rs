@@ -1,7 +1,8 @@
 use std::{
     collections::HashMap,
+    io::Read,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -11,36 +12,38 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use base64::Engine;
 use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 
 use crate::{
     auth::{bearer_token, token_matches},
     config::AppConfig,
 };
 
-use super::tools::error;
+use super::{
+    linux_session_store::{SessionKey, SessionStore, LIFETIME_SECONDS, MAX_SESSIONS},
+    tools::error,
+};
 
 const COOKIE: &str = "maestro_session";
-const LIFETIME: Duration = Duration::from_secs(8 * 60 * 60);
-const MAX_SESSIONS: usize = 128;
-type SessionKey = [u8; 32];
-
 #[derive(Clone)]
 pub(super) struct Sessions {
     config: Arc<AppConfig>,
-    active: Arc<Mutex<HashMap<SessionKey, Instant>>>,
+    active: Arc<Mutex<HashMap<SessionKey, u64>>>,
+    store: Arc<SessionStore>,
 }
 
 impl Sessions {
-    pub(super) fn new(config: Arc<AppConfig>) -> Self {
-        Self {
+    pub(super) fn new(config: Arc<AppConfig>) -> anyhow::Result<Self> {
+        let (store, active) = SessionStore::open(&config.paths.data_dir, &config.server.auth_token)?;
+        Ok(Self {
             config,
-            active: Arc::default(),
-        }
+            active: Arc::new(Mutex::new(active)),
+            store: Arc::new(store),
+        })
     }
 }
 
@@ -56,7 +59,7 @@ pub(super) async fn authorize(
             .active
             .lock()
             .get(&key)
-            .is_some_and(|expiry| *expiry > Instant::now())
+            .is_some_and(|expiry| *expiry > unix_now())
     });
     if session_valid
         && !bearer_valid
@@ -116,8 +119,10 @@ pub(super) async fn login(
         );
     }
 
-    let token = Uuid::new_v4().simple().to_string();
-    let now = Instant::now();
+    let Ok(token) = random_token() else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "unavailable", "Could not issue a secure browser session.");
+    };
+    let now = unix_now();
     let mut active = sessions.active.lock();
     active.retain(|_, expiry| *expiry > now);
     if let Some(key) = cookie_key(&headers) {
@@ -130,8 +135,14 @@ pub(super) async fn login(
             "Too many active browser sessions.",
         );
     }
-    active.insert(key(&token), now + LIFETIME);
-    session_response("signed in", &token, LIFETIME.as_secs(), secure)
+    let key = key(&token);
+    active.insert(key, now.saturating_add(LIFETIME_SECONDS));
+    if sessions.store.save(&active).is_err() {
+        active.remove(&key);
+        return error(StatusCode::SERVICE_UNAVAILABLE, "unavailable",
+            "Could not persist browser session securely.");
+    }
+    session_response("signed in", &token, LIFETIME_SECONDS, secure)
 }
 
 pub(super) async fn logout(
@@ -146,7 +157,13 @@ pub(super) async fn logout(
         );
     };
     if let Some(key) = cookie_key(&headers) {
-        sessions.active.lock().remove(&key);
+        let mut active = sessions.active.lock();
+        let previous = active.remove(&key);
+        if sessions.store.save(&active).is_err() {
+            if let Some(expiry) = previous { active.insert(key, expiry); }
+            return error(StatusCode::SERVICE_UNAVAILABLE, "unavailable",
+                "Could not persist session revocation.");
+        }
     }
     session_response("signed out", "", 0, secure)
 }
@@ -172,7 +189,19 @@ fn cookie_key(headers: &HeaderMap) -> Option<SessionKey> {
         .filter_map(|pair| pair.trim().split_once('='))
         .filter_map(|(name, value)| (name == COOKIE).then_some(value));
     let token = tokens.next()?;
-    (tokens.next().is_none() && token.len() == 32).then(|| key(token))
+    if tokens.next().is_some() || token.len() != 43 { return None; }
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(token).ok()?;
+    (bytes.len() == 32).then(|| key(token))
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |duration| duration.as_secs())
+}
+
+fn random_token() -> std::io::Result<String> {
+    let mut random = [0_u8; 32];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random))
 }
 
 fn key(token: &str) -> SessionKey {

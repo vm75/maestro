@@ -208,11 +208,11 @@ impl Tool {
     }
 }
 
-pub(super) fn router(state: AppState) -> Router<AppState> {
-    let sessions = Sessions::new(state.config.clone());
+pub(super) fn router(state: AppState) -> anyhow::Result<Router<AppState>> {
+    let sessions = Sessions::new(state.config.clone())?;
     let store = Store::new(state.config.paths.data_dir.join("workloads"));
     let provider = Arc::new(CompositeProvider::new(&state.config, state.runner.clone()));
-    Router::new()
+    Ok(Router::new()
         .route("/status", get(status))
         .route("/tools", get(discover))
         .route("/tools/{name}", post(invoke))
@@ -240,7 +240,7 @@ pub(super) fn router(state: AppState) -> Router<AppState> {
                 .headers_mut()
                 .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             response
-        }))
+        })))
 }
 
 async fn require_origin(
