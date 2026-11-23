@@ -277,12 +277,14 @@ pub async fn execute(
         install_args(manager.family, &packages)
     };
     let (text, truncated, code) = run_step(&manager, &args, false, action == "upgrade").await?;
-    let tail = if text.len() > 4096 { &text[text.len() - 4096..] } else { &text };
+    let tail = text.chars().rev().take(4096).collect::<String>().chars().rev().collect::<String>();
     let message = format!("{}: {} completed (exit={:?}; output_truncated={})\n{}",
         manager.family.id(), action, code, truncated, tail);
     // Bound the combined response; never include native environment/passwords.
     output.push_str(&message);
-    if output.len() > 6000 { output = output.split_off(output.len() - 6000); }
+    if output.len() > 6000 {
+        output = output.chars().rev().take(5800).collect::<String>().chars().rev().collect();
+    }
     Ok(output)
 }
 

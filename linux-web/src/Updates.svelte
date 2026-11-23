@@ -19,6 +19,8 @@
   let loading = $state(true)
   let error = $state('')
 
+  let packageNames = $state('')
+  let dependencyTarget = $state('podman')
   let mutation = $state(false)
   let job = $state<Job | null>(null)
   let jobRequest: AbortController | undefined
@@ -44,6 +46,38 @@
       if (current.state === 'succeeded') void readCached()
     } catch (failure) {
       if (!controller.signal.aborted) error = failure instanceof Error ? failure.message : 'Could not track the update.'
+    } finally {
+      if (!controller.signal.aborted) mutation = false
+    }
+  }
+
+  async function runCustomInstall(name: 'packages_install' | 'dependencies_install') {
+    if (mutation || !result?.manager.canInstall) return
+    const arguments_ = name === 'packages_install'
+      ? { packages: packageNames.trim(), confirm: true }
+      : { target: dependencyTarget, confirm: true }
+    if (name === 'packages_install' && !packageNames.trim()) return
+    if (!window.confirm(name === 'packages_install'
+      ? 'Install these repository packages? Native scripts may restart services.'
+      : 'Install the selected backend dependencies? Package scripts may restart services.')) return
+    const controller = new AbortController()
+    jobRequest = controller
+    mutation = true
+    error = ''
+    job = null
+    try {
+      let current = await startJob(name, arguments_)
+      if (controller.signal.aborted) return
+      job = current
+      while (current.state === 'running') {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        if (controller.signal.aborted) return
+        current = await invokeTool<Job>('jobs_get', { id: current.id }, controller.signal)
+        if (!controller.signal.aborted) job = current
+      }
+      if (current.state === 'succeeded') void readCached()
+    } catch (failure) {
+      if (!controller.signal.aborted) error = failure instanceof Error ? failure.message : 'Package installation failed.'
     } finally {
       if (!controller.signal.aborted) mutation = false
     }
@@ -101,6 +135,28 @@
     <p>{result.notice}</p>
     {#if result.manager.writeReason}<p role="status">{result.manager.writeReason} Read-only cached package inspection remains available.</p>{/if}
     <p>{result.reboot.reason}</p>
+    <div class="controls">
+      <label for="native-packages">Named repository packages</label>
+      <input id="native-packages" type="text" bind:value={packageNames}
+        placeholder="nginx curl" maxlength="4096"
+        disabled={!result.manager.canInstall || mutation} />
+      <button type="button" disabled={!result.manager.canInstall || mutation || !packageNames.trim()}
+        onclick={() => runCustomInstall('packages_install')}>Install named packages</button>
+    </div>
+    <div class="controls">
+      <label for="dependency-target">Backend dependencies</label>
+      <select id="dependency-target" bind:value={dependencyTarget}
+        disabled={!result.manager.canInstall || mutation}>
+        <option value="podman">Podman</option>
+        <option value="docker">Docker</option>
+        <option value="virtualization">KVM / libvirt</option>
+        <option value="incus">Incus</option>
+        <option value="samba">Samba</option>
+        <option value="nfs">NFS</option>
+      </select>
+      <button type="button" disabled={!result.manager.canInstall || mutation}
+        onclick={() => runCustomInstall('dependencies_install')}>Install dependencies</button>
+    </div>
     {#if result.valid && result.packages.length}
       <div class="table-scroll">
         <table>
@@ -123,7 +179,9 @@
 
 <style>
   .heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem; margin-bottom: 1rem; }
-  .controls { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .controls { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .5rem 0; }
+  input, select { font: inherit; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: .5rem; }
+  input { max-width: 21rem; }
   pre { max-height: 20rem; overflow: auto; white-space: pre-wrap; }
   .heading h2 { margin: 0; }
   .table-scroll { overflow-x: auto; }
