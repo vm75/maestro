@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, time::Duration};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use crate::state::AppState;
+use crate::{platforms::admin, state::AppState};
 
 const TIMEOUT: Duration = Duration::from_secs(12);
 const MAX_BYTES: usize = 2 * 1024 * 1024;
@@ -36,6 +36,8 @@ pub struct Inventory {
     reason: Option<&'static str>,
     services: Vec<Service>,
     warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permission_reason: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -97,6 +99,7 @@ pub async fn inventory(state: &AppState, scope: Scope) -> Result<Inventory> {
         reason: None,
         services: vec![],
         warnings: vec![],
+        permission_reason: None,
     };
     if !available {
         result.reason = Some("systemctl is unavailable");
@@ -142,11 +145,23 @@ pub async fn inventory(state: &AppState, scope: Scope) -> Result<Inventory> {
             "service inventory exceeds {MAX_UNITS} units"
         );
     }
+    let helper = if matches!(scope, Scope::System) {
+        let probe = admin::probe().await;
+        if probe.status != "ready" {
+            result.permission_reason = Some(probe.reason.clone());
+        } else if write_units(state, scope).iter().any(|unit| !probe.permits_unit(unit)) {
+            result.permission_reason = Some("Some configured system units are not authorized by the root-owned helper policy.".into());
+        }
+        Some(probe)
+    } else {
+        None
+    };
     result.services = merged
         .into_values()
         .map(|mut unit| {
-            unit.writable =
-                writable_unit(&unit.name) && write_units(state, scope).contains(&unit.name);
+            unit.writable = writable_unit(&unit.name)
+                && write_units(state, scope).contains(&unit.name)
+                && helper.as_ref().is_none_or(|probe| probe.permits_unit(&unit.name));
             unit
         })
         .collect();
@@ -195,13 +210,7 @@ pub const ACTIONS: [&str; 6] = ["start", "stop", "restart", "reload", "enable", 
 pub fn writes_enabled(state: &AppState) -> bool {
     available(state)
         && matches!(state.config.platform, crate::config::Platform::Linux)
-        && [
-            &state.config.services.systemd_system_write_units,
-            &state.config.services.systemd_user_write_units,
-        ]
-        .into_iter()
-        .flatten()
-        .any(|unit| writable_unit(unit))
+        && state.config.services.systemd_user_write_units.iter().any(|unit| writable_unit(unit))
 }
 
 fn writable_unit(unit: &str) -> bool {
@@ -233,6 +242,9 @@ pub async fn act(state: &AppState, scope: Scope, unit: &str, action: &str) -> Re
         "service is outside the write policy"
     );
     ensure!(ACTIONS.contains(&action), "unsupported service action");
+    if matches!(scope, Scope::System) {
+        return admin::system_service(unit, action).await;
+    }
     let identity = state
         .runner
         .capture_bounded(

@@ -30,6 +30,7 @@ struct Manager {
     title: &'static str,
     available: bool,
     reason: Option<&'static str>,
+    write_reason: Option<&'static str>,
     can_refresh: bool,
     can_install: bool,
 }
@@ -132,12 +133,10 @@ pub fn available(state: &AppState) -> bool {
     availability_reason(state, family, &program).is_none()
 }
 
-pub fn writes_enabled(state: &AppState) -> bool {
-    // Package managers use the daemon's existing privileges.
-    state.config.system.allow_package_writes
-        && !state.config.test_mode
-        && state.config.platform == crate::config::Platform::Linux
-        && unsafe { libc::geteuid() } == 0
+pub fn writes_enabled(_state: &AppState) -> bool {
+    // Fail closed until each native package mutation has been moved into the
+    // root-owned helper. Running the workload server as root is not a fallback.
+    false
 }
 
 pub async fn status(state: &AppState) -> Status {
@@ -159,6 +158,11 @@ pub async fn status(state: &AppState) -> Status {
             title,
             available: reason.is_none(),
             reason,
+            write_reason: if !state.config.system.allow_package_writes {
+                Some("Package writes are disabled by the administrator policy.")
+            } else {
+                Some("Protected package operations are gated until their restricted helper verbs and native acceptance are completed.")
+            },
             can_install: reason.is_none() && writes_enabled(state),
             can_refresh: reason.is_none()
                 && writes_enabled(state)
