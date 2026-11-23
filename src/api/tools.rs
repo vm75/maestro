@@ -39,6 +39,12 @@ enum Tool {
     PackagesInstall,
     DependenciesInstall,
     BackupInventory,
+    ManagedConfigRead,
+    ManagedConfigValidate,
+    ManagedConfigHealth,
+    ManagedConfigModel,
+    ManagedConfigHistory,
+    ManagedConfigHistoryRead,
     WorkloadsGet,
     WorkloadsPlan,
     WorkloadsApply,
@@ -54,7 +60,7 @@ enum Tool {
 }
 
 impl Tool {
-    const ALL: [Self; 26] = [
+    const ALL: [Self; 32] = [
         Self::Status,
         Self::Capabilities,
         Self::JobsList,
@@ -69,6 +75,12 @@ impl Tool {
         Self::PackagesInstall,
         Self::DependenciesInstall,
         Self::BackupInventory,
+        Self::ManagedConfigRead,
+        Self::ManagedConfigValidate,
+        Self::ManagedConfigHealth,
+        Self::ManagedConfigModel,
+        Self::ManagedConfigHistory,
+        Self::ManagedConfigHistoryRead,
         Self::WorkloadsGet,
         Self::WorkloadsPlan,
         Self::WorkloadsApply,
@@ -150,6 +162,36 @@ impl Tool {
                 "managed_backup_inventory",
                 "Review backup inputs",
                 "Read bounded private source metadata and native prerequisites; not a restorable backup.",
+            ),
+            Self::ManagedConfigRead => (
+                "managed_config_read",
+                "Inspect authoritative configuration",
+                "Read private raw YAML and validity without exposing secret-file contents.",
+            ),
+            Self::ManagedConfigValidate => (
+                "managed_config_validate",
+                "Validate authoritative YAML",
+                "Strictly parse a candidate YAML and report errors without saving or changing the host.",
+            ),
+            Self::ManagedConfigHealth => (
+                "managed_config_health",
+                "Configuration validity",
+                "Report the current authored YAML validity without native mutations.",
+            ),
+            Self::ManagedConfigModel => (
+                "managed_config_model",
+                "Typed configuration definitions",
+                "Read typed private definitions for an editor; no file secret contents.",
+            ),
+            Self::ManagedConfigHistory => (
+                "managed_config_history",
+                "Private configuration history",
+                "Read verified historical revision identifiers.",
+            ),
+            Self::ManagedConfigHistoryRead => (
+                "managed_config_history_read",
+                "Read a historical revision",
+                "Inspect exact historical YAML bytes, including invalid recovery revisions.",
             ),
             Self::WorkloadsGet => (
                 "workloads_get",
@@ -334,6 +376,12 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                 Tool::MonitorSnapshot | Tool::MonitorProcesses => "monitor",
                 Tool::UpdatesStatus | Tool::PackagesInstall | Tool::DependenciesInstall => "updates",
                 Tool::BackupInventory
+                | Tool::ManagedConfigRead
+                | Tool::ManagedConfigValidate
+                | Tool::ManagedConfigHealth
+                | Tool::ManagedConfigModel
+                | Tool::ManagedConfigHistory
+                | Tool::ManagedConfigHistoryRead
                 | Tool::WorkloadsGet
                 | Tool::WorkloadsPlan
                 | Tool::WorkloadsApply
@@ -364,6 +412,22 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                         "id": {"type": "string", "format": "uuid"}
                     },
                     "required": ["id"],
+                    "additionalProperties": false
+                }),
+                Tool::ManagedConfigValidate => json!({
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string", "maxLength": 1048576}
+                    },
+                    "required": ["content"],
+                    "additionalProperties": false
+                }),
+                Tool::ManagedConfigHistoryRead => json!({
+                    "type": "object",
+                    "properties": {
+                        "target": {"type": "string", "minLength": 64, "maxLength": 64}
+                    },
+                    "required": ["target"],
                     "additionalProperties": false
                 }),
                 Tool::PackagesInstall => json!({
@@ -820,6 +884,10 @@ pub async fn execute_tool(
             | "updates_status"
             | "workloads_get"
             | "managed_backup_inventory"
+            | "managed_config_read"
+            | "managed_config_health"
+            | "managed_config_model"
+            | "managed_config_history"
             | "workloads_history"
             | "applications_list"
             | "shares_list"
@@ -1053,6 +1121,125 @@ pub async fn execute_tool(
         }
 
         "updates_status" => (StatusCode::OK, json!(package_updates::status(state).await)),
+
+        "managed_config_read" => {
+            if !writes_allowed(state) {
+                return (StatusCode::FORBIDDEN,
+                    json_err("writes_disabled", "Private configuration editing is disabled by policy."));
+            }
+            match store.read() {
+                Ok(Some(raw)) => {
+                    let parsed = crate::core::declarative::parse(&raw.bytes);
+                    (
+                        StatusCode::OK,
+                        json!({
+                            "revision": raw.revision,
+                            "content": String::from_utf8_lossy(&raw.bytes),
+                            "valid": parsed.is_ok(),
+                            "error": parsed.err().map(|error| error.to_string()).unwrap_or_default()
+                        }),
+                    )
+                }
+                Ok(None) => (StatusCode::OK, json!({
+                    "revision": MISSING_REVISION,
+                    "content": "version: 1\n",
+                    "valid": true
+                })),
+                Err(_) => (StatusCode::SERVICE_UNAVAILABLE,
+                    json_err("unavailable", "Private YAML cannot be read safely.")),
+            }
+        }
+        "managed_config_validate" => {
+            let Some(content) = arguments.get("content").and_then(Value::as_str)
+                .filter(|_| arguments.len() == 1)
+            else {
+                return (StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Expected only a YAML content string."));
+            };
+            if content.len() > crate::core::declarative::MAX_CONFIG_BYTES {
+                return (StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "YAML exceeds 1 MiB."));
+            }
+            match crate::core::declarative::parse(content.as_bytes()) {
+                Ok(_) => (StatusCode::OK,
+                    json!({"valid":true, "runtimeChecked":false, "files":[],
+                        "notice":"Native file and dependency readiness has not been established."})),
+                Err(error) => (StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", &error.to_string())),
+            }
+        }
+        "managed_config_health" => match store.read() {
+            Ok(Some(raw)) => match crate::core::declarative::parse(&raw.bytes) {
+                Ok(_) => (StatusCode::OK,
+                    json!({"configured":true, "valid":true, "runtimeChecked":false,
+                        "files":[], "notice":"Native readiness remains unverified."})),
+                Err(error) => (StatusCode::OK,
+                    json!({"configured":true, "valid":false, "runtimeChecked":false,
+                        "error":error.to_string()})),
+            },
+            Ok(None) => (StatusCode::OK,
+                json!({"configured":false, "runtimeChecked":false})),
+            Err(_) => (StatusCode::SERVICE_UNAVAILABLE,
+                json_err("unavailable", "Cannot read the private configuration safely.")),
+        },
+        "managed_config_model" => {
+            if !writes_allowed(state) {
+                return (StatusCode::FORBIDDEN,
+                    json_err("writes_disabled", "Private typed configuration editing is disabled by policy."));
+            }
+            match store.read() {
+                Ok(Some(raw)) => match raw.config() {
+                    Ok(config) => (StatusCode::OK, json!({
+                        "config":config,
+                        "revision":raw.revision,
+                        "notice":"Private-file references are paths only; no file contents were read."
+                    })),
+                    Err(_) => (StatusCode::SERVICE_UNAVAILABLE,
+                        json_err("unavailable", "Invalid YAML; use the raw recovery editor.")),
+                },
+                Ok(None) => (StatusCode::OK, json!({
+                    "config":{"version":1,"services":{},"storage":{},"shares":{},"bindings":{},"secrets":{}},
+                    "revision":MISSING_REVISION
+                })),
+                Err(_) => (StatusCode::SERVICE_UNAVAILABLE,
+                    json_err("unavailable", "Typed configuration is not accessible.")),
+            }
+        }
+        "managed_config_history" => {
+            if !writes_allowed(state) {
+                return (StatusCode::FORBIDDEN,
+                    json_err("writes_disabled", "Private configuration history is disabled by policy."));
+            }
+            match store.list_history() {
+                Ok(history) => (StatusCode::OK, json!({"entries":history})),
+                Err(_) => (StatusCode::SERVICE_UNAVAILABLE,
+                    json_err("unavailable", "Private configuration history is not accessible.")),
+            }
+        }
+        "managed_config_history_read" => {
+            if !writes_allowed(state) {
+                return (StatusCode::FORBIDDEN,
+                    json_err("writes_disabled", "Private configuration history is disabled by policy."));
+            }
+            let Some(revision) = arguments.get("target").and_then(Value::as_str)
+                .filter(|_| arguments.len() == 1)
+            else {
+                return (StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Expected an exact target revision."));
+            };
+            match store.read_history(revision) {
+                Ok(raw) => (
+                    StatusCode::OK,
+                    json!({
+                        "revision":raw.revision,
+                        "content":String::from_utf8_lossy(&raw.bytes),
+                        "valid":crate::core::declarative::parse(&raw.bytes).is_ok()
+                    }),
+                ),
+                Err(_) => (StatusCode::NOT_FOUND,
+                    json_err("not_found", "The requested private revision is not accessible.")),
+            }
+        }
 
         "managed_backup_inventory" => {
             // A read-only metadata inventory must never perform any host
