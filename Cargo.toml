@@ -12,6 +12,11 @@ asuswrt = []
 linux = ["dep:quick-xml", "dep:serde_yaml", "dep:unsafe-libyaml"]
 linux-ui = ["linux"]
 
+[[bin]]
+name = "maestro-admin"
+path = "src/bin/maestro-admin.rs"
+required-features = ["linux"]
+
 [dependencies]
 anyhow = "1"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "tracing"] }

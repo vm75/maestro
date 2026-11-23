@@ -1,3 +1,5 @@
+#[cfg(feature = "linux")]
+pub mod admin;
 pub mod init_scripts;
 #[cfg(feature = "linux")]
 pub mod package_updates;

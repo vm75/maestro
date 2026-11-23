@@ -152,6 +152,10 @@ fn main() -> Result<()> {
         config.apply_test_mode(&cli.config)?;
     }
     config.validate()?;
+    #[cfg(feature = "linux")]
+    if config.platform == Platform::Linux && !config.test_mode && unsafe { libc::geteuid() } == 0 {
+        anyhow::bail!("Linux Maestro must run as a non-root workload account; privileged host changes require optional maestro-admin");
+    }
 
     match cli.command.unwrap_or(Command::Serve) {
         Command::Restore { .. } => unreachable!("restore is handled before configuration loading"),
