@@ -15,6 +15,7 @@ pub mod libvirt;
 pub mod native_shares;
 mod model;
 mod plan;
+pub mod preflight;
 pub mod quadlet;
 pub use composite::{ApplicationSummary, CompositeProvider, ShareSummary};
 pub use plan::{Change, Operation, Plan};

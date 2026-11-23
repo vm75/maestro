@@ -835,3 +835,16 @@ presentation. Metadata reads use bounded proc-root-derived paths without shell
 execution; missing frequency is null rather than zero. Source regression tests
 cover kernel/hostname/OS/model fallbacks, malformed frequencies, core ordering
 and JSON field names. Build, browser and native acceptance remain pending.
+
+
+### Source-guided static configuration file/mount preflight increment
+
+Translated the reference's static file checks, mount inventory and most-specific
+visible mount selection, writable storage checks, private file permissions,
+source asset warnings, dependent service/share diagnostics and explicit host-port
+overlap warnings into the Linux configuration validation and health tools. The
+existing Maestro storage/private root mapping is retained. Checks use metadata
+and access probes only; no native mutation, directory creation or secret content
+read is introduced. Runtime readiness is still explicitly unchecked. Added Rust
+fixtures for mount visibility, missing inputs, portable path escapes, privacy and
+port warnings. Compilation and test execution remain pending.

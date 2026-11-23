@@ -1689,10 +1689,13 @@ pub async fn execute_tool(
                 );
             }
             match crate::core::declarative::parse(content.as_bytes()) {
-                Ok(_) => (
+                Ok(config) => (
                     StatusCode::OK,
-                    json!({"valid":true, "runtimeChecked":false, "files":[],
-                        "notice":"Native file and dependency readiness has not been established."}),
+                    json!({"valid":true, "runtimeChecked":false,
+                        "files":crate::core::declarative::preflight::check_files(
+                            store, &config, &state.config.paths.storage_dir,
+                            state.config.paths.proc_stat.parent(),
+                        )}),
                 ),
                 Err(error) => (
                     StatusCode::BAD_REQUEST,
@@ -1702,10 +1705,13 @@ pub async fn execute_tool(
         }
         "managed_config_health" => match store.read() {
             Ok(Some(raw)) => match crate::core::declarative::parse(&raw.bytes) {
-                Ok(_) => (
+                Ok(config) => (
                     StatusCode::OK,
                     json!({"configured":true, "valid":true, "runtimeChecked":false,
-                        "files":[], "notice":"Native readiness remains unverified."}),
+                        "files":crate::core::declarative::preflight::check_files(
+                            store, &config, &state.config.paths.storage_dir,
+                            state.config.paths.proc_stat.parent(),
+                        )}),
                 ),
                 Err(error) => (
                     StatusCode::OK,
