@@ -32,4 +32,12 @@ if [[ "$SUFFIX" == "-linux-ui" ]]; then
     sha256sum "$HELPER" > "$HELPER.sha256"
   )
   echo "Built opt-in helper dist/$HELPER (not installed)"
+  STDIO="maestro-mcp-stdio-$TARGET"
+  test -x "target/$TARGET/release/maestro-mcp-stdio"
+  cp "target/$TARGET/release/maestro-mcp-stdio" "dist/$STDIO"
+  (
+    cd dist
+    sha256sum "$STDIO" > "$STDIO.sha256"
+  )
+  echo "Built Linux MCP stdio artifact dist/$STDIO"
 fi

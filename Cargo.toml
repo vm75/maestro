@@ -17,6 +17,11 @@ name = "maestro-admin"
 path = "src/bin/maestro-admin.rs"
 required-features = ["linux"]
 
+[[bin]]
+name = "maestro-mcp-stdio"
+path = "src/bin/maestro-mcp-stdio.rs"
+required-features = ["linux"]
+
 [dependencies]
 anyhow = "1"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "tracing"] }
