@@ -13,7 +13,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, process::Command, time::timeout};
-use super::admin_packages;
+use super::{admin_packages, admin_shares};
 
 pub const HELPER_PATH: &str = "/usr/local/libexec/maestro-admin";
 const POLICY_PATH: &str = "/etc/maestro/admin-policy.json";
@@ -38,6 +38,8 @@ struct Request {
     packages: Vec<String>,
     #[serde(default)]
     target: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -52,6 +54,8 @@ struct Reply {
     #[serde(default)]
     package_writes: bool,
     #[serde(default)]
+    samba_password: bool,
+    #[serde(default)]
     output: String,
 }
 
@@ -63,6 +67,8 @@ struct Policy {
     system_units: Vec<String>,
     #[serde(default)]
     package_writes: bool,
+    #[serde(default)]
+    samba_password: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -73,16 +79,18 @@ pub struct Probe {
     pub reason: String,
     pub system_units: Vec<String>,
     pub package_writes: bool,
+    pub samba_password: bool,
 }
 
 impl Probe {
-    fn ready(units: Vec<String>, package_writes: bool) -> Self {
+    fn ready(units: Vec<String>, package_writes: bool, samba_password: bool) -> Self {
         Self {
             status: "ready",
             code: "ready".into(),
             reason: "The authorized privileged helper is available.".into(),
             system_units: units,
             package_writes,
+            samba_password,
         }
     }
 
@@ -93,6 +101,7 @@ impl Probe {
             reason: reason.into(),
             system_units: vec![],
             package_writes: false,
+            samba_password: false,
         }
     }
 
@@ -102,6 +111,10 @@ impl Probe {
 
     pub fn permits_packages(&self) -> bool {
         self.status == "ready" && self.package_writes
+    }
+
+    pub fn permits_samba_password(&self) -> bool {
+        self.status == "ready" && self.samba_password
     }
 }
 
@@ -196,15 +209,17 @@ fn validate_request(request: &Request) -> Result<()> {
     match request.operation.as_str() {
         "probe" => ensure!(
             request.unit.is_none() && request.action.is_none() && request.confirm.is_none()
-                && request.packages.is_empty() && request.target.is_none(),
+                && request.packages.is_empty() && request.target.is_none()
+                && request.password.is_none(),
             "probe accepts no arguments"
         ),
         "system_service" => {
             let unit = request.unit.as_deref().context("missing unit")?;
             let action = request.action.as_deref().context("missing action")?;
             ensure!(
-                request.packages.is_empty() && request.target.is_none(),
-                "system service accepts no package arguments"
+                request.packages.is_empty() && request.target.is_none()
+                    && request.password.is_none(),
+                "system service accepts no package or password arguments"
             );
             ensure!(safe_system_unit(unit), "invalid or reserved system service");
             ensure!(
@@ -217,7 +232,8 @@ fn validate_request(request: &Request) -> Result<()> {
             );
         }
         "package_refresh" | "package_upgrade" | "package_install" | "dependency_install" => {
-            ensure!(request.unit.is_none() && request.action.is_none(), "package action has service arguments");
+            ensure!(request.unit.is_none() && request.action.is_none() && request.password.is_none(),
+                "package action has service or password arguments");
             match request.operation.as_str() {
                 "package_refresh" => ensure!(
                     request.packages.is_empty() && request.target.is_none() && request.confirm.is_none(),
@@ -240,6 +256,17 @@ fn validate_request(request: &Request) -> Result<()> {
                 ),
                 _ => unreachable!(),
             }
+        }
+        "samba_password" => {
+            ensure!(
+                request.unit.is_none() && request.action.is_none()
+                    && request.packages.is_empty() && request.target.is_none()
+                    && request.confirm == Some(true),
+                "Samba password requires fixed caller identity and confirmation"
+            );
+            admin_shares::validate_password(
+                request.password.as_deref().context("missing Samba password")?,
+            )?;
         }
         _ => anyhow::bail!("unknown privileged operation"),
     }
@@ -269,9 +296,10 @@ pub async fn probe() -> Probe {
         confirm: None,
         packages: vec![],
         target: None,
+        password: None,
     };
     match call(&request, Duration::from_secs(6)).await {
-        Ok(reply) if reply.ok => Probe::ready(reply.system_units, reply.package_writes),
+        Ok(reply) if reply.ok => Probe::ready(reply.system_units, reply.package_writes, reply.samba_password),
         Ok(reply) => Probe::unavailable(&reply.code, &reply.message),
         Err(error) if error.to_string().contains("protocol mismatch") => {
             Probe::unavailable("helper_protocol_mismatch", "The installed helper must be upgraded to the matching Maestro protocol.")
@@ -292,6 +320,7 @@ pub async fn system_service(unit: &str, action: &str) -> Result<String> {
         confirm: (!matches!(action, "start" | "enable")).then_some(true),
         packages: vec![],
         target: None,
+        password: None,
     };
     validate_request(&request)?;
     let capability = probe().await;
@@ -318,6 +347,7 @@ pub async fn package_operation(
         confirm: (operation != "package_refresh").then_some(true),
         packages: names,
         target,
+        password: None,
     };
     validate_request(&request)?;
     let capability = probe().await;
@@ -325,6 +355,27 @@ pub async fn package_operation(
     let reply = call(&request, Duration::from_secs(25 * 60)).await?;
     ensure!(reply.ok, "{} ({})", reply.message, reply.code);
     Ok(reply.output)
+}
+
+/// Secret-bearing operation is never logged, placed in argv or retained in a
+/// management job history. Only the sudo-resolved workload identity is targeted.
+pub async fn samba_password(password: String) -> Result<()> {
+    let request = Request {
+        version: PROTOCOL,
+        operation: "samba_password".into(),
+        unit: None,
+        action: None,
+        confirm: Some(true),
+        packages: vec![],
+        target: None,
+        password: Some(password),
+    };
+    validate_request(&request)?;
+    ensure!(probe().await.permits_samba_password(),
+        "Samba password changes require an authorized optional helper and root-owned policy");
+    let reply = call(&request, Duration::from_secs(45)).await?;
+    ensure!(reply.ok, "{} ({})", reply.message, reply.code);
+    Ok(())
 }
 
 fn load_policy(caller_uid: u32) -> Result<Policy> {
@@ -425,6 +476,7 @@ pub async fn helper_main() -> Result<()> {
                     message: "Privileged helper authorized.".into(),
                     system_units: policy.system_units,
                     package_writes: policy.package_writes,
+                    samba_password: policy.samba_password,
                     output: String::new(),
                 }
             } else {
@@ -435,12 +487,21 @@ pub async fn helper_main() -> Result<()> {
                         request.unit.as_deref().unwrap_or_default(),
                         request.action.as_deref().unwrap_or_default(),
                     ).await.map(|()| String::new())
+                } else if request.operation == "samba_password" {
+                    if policy.samba_password {
+                        admin_shares::set_password(
+                            caller_uid,
+                            request.password.as_deref().unwrap_or_default(),
+                        ).await.map(|()| String::new())
+                    } else {
+                        Err(anyhow::anyhow!("Samba password administration is disabled by root policy"))
+                    }
                 } else if policy.package_writes {
                     // A request may never choose the native executable, PATH,
                     // repository, arbitrary arguments or target account.
                     admin_packages::execute(&request.operation, &request.packages, request.target.as_deref()).await
                 } else {
-                    anyhow::bail!("privileged package writes are disabled by root-owned policy")
+                    Err(anyhow::anyhow!("Package writes are disabled by root-owned policy"))
                 };
                 Reply {
                     version: PROTOCOL,
@@ -453,6 +514,7 @@ pub async fn helper_main() -> Result<()> {
                     },
                     system_units: vec![],
                     package_writes: false,
+                    samba_password: false,
                     output: result.unwrap_or_default(),
                 }
             }
@@ -464,6 +526,7 @@ pub async fn helper_main() -> Result<()> {
             message: "Unsupported or malformed privileged request.".into(),
             system_units: vec![],
             package_writes: false,
+            samba_password: false,
             output: String::new(),
         },
     };
@@ -490,6 +553,9 @@ mod tests {
             r#"{"version":1,"operation":"package_install","packages":["--overwrite"],"confirm":true}"#,
             r#"{"version":1,"operation":"package_upgrade"}"#,
             r#"{"version":1,"operation":"dependency_install","target":"shell","confirm":true}"#,
+            r#"{"version":1,"operation":"samba_password","password":"bad\nnewline","confirm":true}"#,
+            r#"{"version":1,"operation":"samba_password","password":"valid","unit":"root.service","confirm":true}"#,
+            r#"{"version":1,"operation":"samba_password","password":"valid","target":"root","confirm":true}"#,
             r#"{"version":2,"operation":"probe"}"#,
         ] {
             let request: Request = serde_json::from_str(request).unwrap();
@@ -509,11 +575,13 @@ mod tests {
             confirm: Some(true),
             packages: vec![],
             target: None,
+            password: None,
         };
         assert!(validate_request(&request).is_ok());
         assert!(!safe_system_unit("maestro.service"));
         assert!(!safe_system_unit("maestro-example-app-0123456789abcdef.service"));
         assert!(!Probe::unavailable("helper_missing", "missing").permits_unit("sshd.service"));
         assert!(!Probe::unavailable("helper_missing", "missing").permits_packages());
+        assert!(!Probe::unavailable("helper_missing", "missing").permits_samba_password());
     }
 }
