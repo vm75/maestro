@@ -798,3 +798,8 @@ provider and guest acceptance remains open.
 ### Source-guided Linux monitoring increment
 
 Ported the pinned Server Man monitor parser and sampler semantics into Linux-only code: strict CPU counters, genuine zero available memory, cache/buffer and swap reporting, all network interfaces, loopback-excluded aggregate rates with missing/reset-counter propagation, optional uptime/load warnings, process-count metadata and bounded time-window history. Added focused Rust fixtures from the Go monitor tests and extended the Linux resources UI. Router system_usage and router UI are unchanged. Rust/Svelte build and native acceptance are pending; this is not a parity sign-off.
+
+
+### Source-guided backup inventory increment
+
+Translated the pinned reference's declared input and consumer enumeration, explicit native VM input placeholders, per-container image and enabled-share quiescence requirements, overlapping input coverage, capture-relative paths and state collision diagnostics. The existing stricter no-symlink metadata policy is retained. Private inventory is now restricted by the same workload policy as private configuration reads. UI displays source and bundle paths, consumers, covered inputs and allocated size. Native dependency discovery, capture, verification, publication and recovery remain unavailable; compile, fixture and native checks are pending.

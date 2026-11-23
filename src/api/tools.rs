@@ -489,6 +489,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     | Tool::ManagedConfigRevert
                     | Tool::ManagedResourceSave
                     | Tool::SharesSambaPassword
+                    | Tool::BackupInventory
             );
             let input_schema = match tool {
                 Tool::ManagedApplyStatus => json!({"type":"object","properties":{},"required":[],"additionalProperties":false}),
@@ -1805,8 +1806,15 @@ pub async fn execute_tool(
         }
 
         "managed_backup_inventory" => {
-            // A read-only metadata inventory must never perform any host
-            // mutation or claim the result can be restored.
+            // The frozen reference requires the private-configuration policy
+            // even though inventory does not mutate native state.
+            if !writes_allowed(state) {
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err("writes_disabled", "Private backup inventory is disabled by policy."),
+                );
+            }
+            // Never perform native mutation or claim the result can be restored.
             let authority_path = store.path();
             let root = authority_path.parent().expect("store path has a parent");
             match crate::core::declarative::backup_inventory::inventory(

@@ -12,6 +12,10 @@
     kind: string
     strategy: string
     path?: string
+    bundlePath?: string
+    includedBy?: string
+    resources: string[]
+    allocatedBytes?: number
     required: boolean
     sensitive: boolean
     inspection: string
@@ -286,8 +290,9 @@
 <section class="panel" aria-labelledby="backup-title">
   <div class="controls">
     <h2 id="backup-title">Backup input readiness</h2>
-    <button type="button" onclick={inspectBackup}>Inventory inputs</button>
+    <button type="button" disabled={!writable} onclick={inspectBackup}>Inventory inputs</button>
   </div>
+  {#if !writable}<p role="status">Private backup inventory requires workload management permission.</p>{/if}
   <p>This is a metadata-only inventory. It does not copy files, export guests, produce a verified backup, or make any capture restorable.</p>
   {#if inventoryError}<p role="alert">{inventoryError}</p>{/if}
   {#if inventory}
@@ -302,10 +307,15 @@
         <tbody>
           {#each inventory.inputs as input (input.id)}
             <tr>
-              <th scope="row">{input.id}<small>{input.kind}</small></th>
+              <th scope="row">{input.id}<small>{input.kind}</small>
+                {#if input.path}<small>{input.path}</small>{/if}
+                {#if input.bundlePath}<small>Bundle path: {input.bundlePath}</small>{/if}
+                {#if input.includedBy}<small>Covered by: {input.includedBy}</small>{/if}
+                <small>References: {input.resources.join(', ')}</small>
+              </th>
               <td>{input.strategy}</td>
               <td>{input.inspection}</td>
-              <td>{input.logicalBytes === undefined ? '—' : input.logicalBytes + ' B'}</td>
+              <td>{input.logicalBytes === undefined ? '—' : input.logicalBytes + ' B'}{#if input.allocatedBytes !== undefined}<small>{input.allocatedBytes} B allocated</small>{/if}</td>
             </tr>
           {/each}
         </tbody>

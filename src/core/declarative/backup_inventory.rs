@@ -2,6 +2,7 @@
 //! This is not a backup/capture/verification implementation. It never opens
 //! private file contents, follows links or changes native workloads.
 use std::{
+    collections::BTreeSet,
     fs,
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
@@ -23,6 +24,10 @@ pub struct BackupInput {
     pub strategy: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundle_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub included_by: Option<String>,
     pub resources: Vec<String>,
     pub required: bool,
     pub sensitive: bool,
@@ -37,7 +42,7 @@ pub struct BackupInput {
 pub struct Requirement {
     pub resource: String,
     pub kind: &'static str,
-    pub description: &'static str,
+    pub description: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -87,11 +92,13 @@ fn issue(
 }
 
 impl BackupInventory {
-    fn input(&mut self, input: BackupInput) -> Result<()> {
+    fn input(&mut self, mut input: BackupInput) -> Result<()> {
         ensure!(
             self.inputs.len() + self.requirements.len() < MAX_ENTRIES,
             "backup input inventory exceeds its bounded entry limit"
         );
+        input.resources.sort_unstable();
+        input.resources.dedup();
         self.inputs.push(input);
         Ok(())
     }
@@ -100,7 +107,7 @@ impl BackupInventory {
         &mut self,
         resource: &str,
         kind: &'static str,
-        description: &'static str,
+        description: impl Into<String>,
     ) -> Result<()> {
         ensure!(
             self.inputs.len() + self.requirements.len() < MAX_ENTRIES,
@@ -109,7 +116,7 @@ impl BackupInventory {
         self.requirements.push(Requirement {
             resource: resource.to_owned(),
             kind,
-            description,
+            description: description.into(),
         });
         Ok(())
     }
@@ -167,7 +174,7 @@ impl BackupInventory {
                 } =>
             {
                 let mode = meta.permissions().mode();
-                if input.sensitive
+                if input.kind == "private_file"
                     && (meta.uid() != unsafe { libc::geteuid() } || mode & 0o077 != 0)
                 {
                     input.inspection = "unsafe_permissions";
@@ -200,6 +207,97 @@ impl BackupInventory {
     }
 }
 
+// Source-guided translation of Server Man references.go and backup_declared.go.
+fn consumers(config: &Config, kind: &str, id: &str) -> Vec<String> {
+    let mut resources = BTreeSet::from([format!("{kind}/{id}")]);
+    for (service_id, service) in &config.services {
+        let referenced = match kind {
+            "storage" => {
+                service.containers.values().any(|container| {
+                    container.mounts.iter().any(|mount| mount.storage == id)
+                }) || service.vm.as_ref().is_some_and(|vm| vm.disks.iter().any(|disk| disk == id))
+            }
+            "secret" => service.containers.values().any(|container| {
+                container.env_files.iter().any(|secret| secret == id)
+            }),
+            _ => false,
+        };
+        if referenced {
+            resources.insert(format!("service/{service_id}"));
+        }
+    }
+    if kind == "storage" {
+        for (share_id, share) in &config.shares {
+            if share.storage == id {
+                resources.insert(format!("share/{share_id}"));
+            }
+        }
+    }
+    resources.into_iter().collect()
+}
+
+/// Derive a capture-relative path and flag escapes/overlap with the authoritative
+/// configuration or private runtime state. No capture is authorized by this.
+fn annotate_coverage(inventory: &mut BackupInventory, store: &Store, root: &Path) {
+    let config_path = store.path();
+    let config_name = config_path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+    for input in &mut inventory.inputs {
+        if input.strategy != "bundle_copy" {
+            continue;
+        }
+        let Some(path) = input.path.as_deref().map(Path::new) else { continue };
+        let Ok(relative) = path.strip_prefix(root) else {
+            inventory.issues.push(issue(
+                &input.id, "path", "backup_path_escape",
+                "A required backup input is outside the authoritative configuration root.",
+                "Review and explicitly rebind this storage before capture.",
+            ));
+            input.inspection = "outside_configuration_root";
+            continue;
+        };
+        let first = relative.components().next().and_then(|part| part.as_os_str().to_str()).unwrap_or("");
+        if input.id != "configuration" && (
+            first.is_empty() || first == config_name || first == store.history_name
+                || first.starts_with(&format!("{config_name}."))
+                || matches!(first, "apply-candidate.yaml" | "apply-journal.json" | "applications" | "run" | "logs")
+        ) {
+            inventory.issues.push(issue(
+                &input.id, "path", "backup_derived_state_collision",
+                "A backup input overlaps the authoritative configuration or derived private state.",
+                "Rebind data away from configuration, history, generated definitions and runtime journals.",
+            ));
+            input.inspection = "state_collision";
+            continue;
+        }
+        input.bundle_path = Some(relative.to_string_lossy().into_owned());
+    }
+    let mut indices: Vec<_> = inventory.inputs.iter().enumerate()
+        .filter(|(_, input)| input.strategy == "bundle_copy" && input.inspection == "metadata_only"
+            && input.bundle_path.is_some())
+        .map(|(index, _)| index)
+        .collect();
+    indices.sort_by(|&left, &right| {
+        let a = &inventory.inputs[left];
+        let b = &inventory.inputs[right];
+        a.path.as_ref().map(String::len).cmp(&b.path.as_ref().map(String::len))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    for (position, &index) in indices.iter().enumerate() {
+        let covered = indices[..position].iter().find_map(|&prior| {
+            let input = &inventory.inputs[index];
+            let parent = &inventory.inputs[prior];
+            if parent.included_by.is_some() {
+                return None;
+            }
+            let path = Path::new(input.path.as_deref()?);
+            let base = Path::new(parent.path.as_deref()?);
+            (path == base || (parent.kind == "directory" && path.starts_with(base)))
+                .then(|| parent.id.clone())
+        });
+        inventory.inputs[index].included_by = covered;
+    }
+}
+
 fn inventory_inputs(
     inventory: &mut BackupInventory,
     config: &Config,
@@ -214,7 +312,7 @@ fn inventory_inputs(
             storage_root.join(&storage.path)
         };
         let kind = if storage.kind == "file" {
-            "disk"
+            "file"
         } else {
             "directory"
         };
@@ -227,9 +325,11 @@ fn inventory_inputs(
                 "bundle_copy"
             },
             path: Some(path.to_string_lossy().into_owned()),
-            resources: vec![resource.clone()],
+            bundle_path: None,
+            included_by: None,
+            resources: consumers(config, "storage", id),
             required: true,
-            sensitive: false,
+            sensitive: true,
             inspection: "not_checked",
             logical_bytes: None,
             allocated_bytes: None,
@@ -263,16 +363,18 @@ fn inventory_inputs(
             )?;
         }
         if let Some(source) = &storage.source {
-            let key = format!("image/{id}");
+            let key = format!("asset/{id}");
             let path = private_root.join(&source.path);
             let mut input = BackupInput {
                 id: key.clone(),
                 kind: "image_asset",
                 strategy: "bundle_copy",
                 path: Some(path.to_string_lossy().into_owned()),
-                resources: vec![resource.clone()],
+                bundle_path: None,
+                included_by: None,
+                resources: consumers(config, "storage", id),
                 required: true,
-                sensitive: false,
+                sensitive: true,
                 inspection: "not_checked",
                 logical_bytes: None,
                 allocated_bytes: None,
@@ -294,7 +396,9 @@ fn inventory_inputs(
             kind: "private_file",
             strategy: "bundle_copy",
             path: Some(full.to_string_lossy().into_owned()),
-            resources: vec![resource],
+            bundle_path: None,
+            included_by: None,
+            resources: consumers(config, "secret", id),
             required: true,
             sensitive: true,
             inspection: "not_checked",
@@ -311,7 +415,28 @@ fn inventory_inputs(
             "workload_consistency",
             "Verify runtime state and quiesce running workloads before any data capture.",
         )?;
+        for container_id in service.containers.keys() {
+            inventory.requirement(
+                &resource,
+                "container_image",
+                format!("Resolve the configured image for container {container_id} and review registry access before restore."),
+            )?;
+        }
         if service.vm.is_some() {
+            inventory.input(BackupInput {
+                id: format!("native/{id}"),
+                kind: if service.backend == "incus" { "incus_instance_export" } else { "libvirt_guest_state" },
+                strategy: "native_export",
+                path: None,
+                bundle_path: None,
+                included_by: None,
+                resources: vec![resource.clone()],
+                required: true,
+                sensitive: true,
+                inspection: "native_dependencies_unchecked",
+                logical_bytes: None,
+                allocated_bytes: None,
+            })?;
             inventory.requirement(&resource, "native_export",
                 "Capture native libvirt/Incus guest state and dependent disks through its verified backend.")?;
             inventory.issues.push(Issue {
@@ -324,9 +449,14 @@ fn inventory_inputs(
             });
         }
     }
-    for id in config.shares.keys() {
-        inventory.requirement(&format!("share/{id}"), "share_host_setup",
+    for (id, share) in &config.shares {
+        let resource = format!("share/{id}");
+        inventory.requirement(&resource, "share_host_setup",
             "Review client writes, export state, account identities and host permissions before capture.")?;
+        if share.enabled {
+            inventory.requirement(&resource, "share_quiescence",
+                "Coordinate client writes before capture; unpublishing does not disconnect existing Samba sessions.")?;
+        }
     }
     for id in config.bindings.keys() {
         inventory.requirement(
@@ -387,7 +517,9 @@ pub fn inventory(
         kind: "configuration",
         strategy: "bundle_copy",
         path: Some(store.path().to_string_lossy().into_owned()),
-        resources: vec![],
+        bundle_path: None,
+        included_by: None,
+        resources: vec!["configuration".into()],
         required: true,
         sensitive: true,
         inspection: "metadata_only",
@@ -395,6 +527,11 @@ pub fn inventory(
         allocated_bytes: None,
     })?;
     inventory_inputs(&mut result, &config, private_root, storage_root)?;
+    annotate_coverage(&mut result, store, private_root);
+    ensure!(
+        serde_json::to_vec(&result)?.len() <= super::MAX_CONFIG_BYTES,
+        "backup inventory output exceeds 1 MiB"
+    );
     // Detect a concurrent author edit before returning a revision claim.
     ensure!(
         store
@@ -438,6 +575,33 @@ mod tests {
                 .any(|issue| issue.code == "backup_path_unavailable")
         );
         assert!(!directory.join("private/key.txt").exists());
+    }
+
+    #[test]
+    fn declared_consumers_and_overlapping_inputs_match_reference() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("workloads");
+        let store = Store::new(directory.clone());
+        store.save(
+            b"version: 1\nstorage:\n  shared: {kind: directory, path: shared}\nsecrets:\n  nested: storage/shared/app.env\nservices:\n  app:\n    kind: container\n    engine: podman\n    backend: quadlet\n    containers:\n      web:\n        image: example/image:1\n        env_files: [nested]\n        mounts: [{storage: shared, target: /data}]\nshares:\n  files: {protocol: samba, storage: shared, enabled: true, guest: true}\n",
+            MISSING_REVISION,
+        ).unwrap();
+        let storage = directory.join("storage");
+        fs::create_dir_all(storage.join("shared")).unwrap();
+        let file = storage.join("shared/app.env");
+        fs::write(&file, "PRIVATE_CONTENT_SENTINEL").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+        let result = inventory(&store, &directory, &storage).unwrap();
+        let shared = result.inputs.iter().find(|input| input.id == "storage/shared").unwrap();
+        assert_eq!(shared.bundle_path.as_deref(), Some("storage/shared"));
+        assert!(shared.resources.iter().any(|resource| resource == "service/app"));
+        assert!(shared.resources.iter().any(|resource| resource == "share/files"));
+        let secret = result.inputs.iter().find(|input| input.id == "secret/nested").unwrap();
+        assert_eq!(secret.included_by.as_deref(), Some("storage/shared"));
+        assert!(secret.resources.iter().any(|resource| resource == "service/app"));
+        assert!(result.requirements.iter().any(|item| item.kind == "share_quiescence"));
+        assert!(!serde_json::to_string(&result).unwrap().contains("PRIVATE_CONTENT_SENTINEL"));
+        assert_eq!(fs::read_to_string(file).unwrap(), "PRIVATE_CONTENT_SENTINEL");
     }
 
     #[test]
