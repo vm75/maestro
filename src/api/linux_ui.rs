@@ -38,6 +38,18 @@ pub(super) async fn asset(Path(name): Path<String>) -> Response {
             "text/javascript",
             include_bytes!("../../linux-web/dist/Updates.js"),
         ),
+        "Activity.js" => (
+            "text/javascript",
+            include_bytes!("../../linux-web/dist/Activity.js"),
+        ),
+        "AgentAccess.js" => (
+            "text/javascript",
+            include_bytes!("../../linux-web/dist/AgentAccess.js"),
+        ),
+        "Configuration.js" => (
+            "text/javascript",
+            include_bytes!("../../linux-web/dist/Configuration.js"),
+        ),
         "select.js" => (
             "text/javascript",
             include_bytes!("../../linux-web/dist/select.js"),
