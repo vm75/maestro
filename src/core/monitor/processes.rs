@@ -96,6 +96,14 @@ impl Counters {
         })
     }
 
+    pub(super) fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub(super) fn limited(&self) -> bool {
+        self.limited
+    }
+
     pub(super) fn calculate(&mut self, previous: &Self, elapsed: Duration) {
         if elapsed.is_zero() || self.ticks_per_second != previous.ticks_per_second {
             return;

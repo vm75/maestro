@@ -1,11 +1,12 @@
 //! Cached Linux resource samples shared across browser clients.
 
 mod processes;
+mod source;
 mod storage;
 pub use processes::{ProcessList, Sort as ProcessSort};
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
@@ -16,16 +17,14 @@ use serde::Serialize;
 
 use crate::config::AppConfig;
 
-use super::system_usage::{
-    CpuStat, MemoryStat, NetworkStat, parse_proc_loadavg, parse_proc_meminfo, parse_proc_net_dev,
-    parse_proc_stat, parse_proc_uptime,
-};
+use super::system_usage::{CpuStat, NetworkStat};
 
 struct Reading {
     cpu: Vec<CpuStat>,
-    memory: MemoryStat,
-    network: Option<NetworkStat>,
-    uptime_seconds: Option<u64>,
+    memory: Memory,
+    network: BTreeMap<String, NetworkStat>,
+    uptime_seconds: Option<f64>,
+    warnings: Vec<&'static str>,
     load_average: Option<[f64; 3]>,
     processes: Option<processes::Counters>,
     storage: storage::Storage,
@@ -34,18 +33,41 @@ struct Reading {
 impl Reading {
     fn collect(config: &AppConfig) -> anyhow::Result<Self> {
         let paths = &config.paths;
-        let cpu = parse_proc_stat(&paths.proc_stat)?;
-        let memory = parse_proc_meminfo(&paths.proc_meminfo)?;
-        anyhow::ensure!(memory.total_kb > 0 && cpu.iter().any(|core| core.name == "cpu"));
+        let cpu = source::parse_cpu(&source::read(&paths.proc_stat)?)?;
+        let memory = source::parse_memory(&source::read(&paths.proc_meminfo)?)?;
+        let mut warnings = Vec::new();
+        let network = source::read(&paths.proc_net_dev)
+            .and_then(|text| source::parse_network(&text))
+            .unwrap_or_else(|_| {
+                warnings.push("Network counters are unavailable.");
+                BTreeMap::new()
+            });
+        let uptime_seconds = source::read(&paths.proc_uptime)
+            .ok()
+            .and_then(|text| source::parse_uptime(&text));
+        if uptime_seconds.is_none() {
+            warnings.push("Uptime is unavailable.");
+        }
+        let load_average = source::read(&paths.proc_loadavg)
+            .ok()
+            .and_then(|text| source::parse_load(&text));
+        if load_average.is_none() {
+            warnings.push("Load averages are unavailable.");
+        }
+        let processes = paths.proc_stat.parent().and_then(processes::Counters::read);
+        if processes.is_none() {
+            warnings.push("Process inventory is unavailable.");
+        } else if processes.as_ref().is_some_and(processes::Counters::limited) {
+            warnings.push("Process sampling is limited to 4096 visible processes.");
+        }
         Ok(Self {
             cpu,
             memory,
-            network: parse_proc_net_dev(&paths.proc_net_dev, &config.system.wan_interface).ok(),
-            uptime_seconds: parse_proc_uptime(&paths.proc_uptime).ok(),
-            load_average: parse_proc_loadavg(&paths.proc_loadavg)
-                .ok()
-                .filter(|load| load.iter().all(|value| value.is_finite())),
-            processes: paths.proc_stat.parent().and_then(processes::Counters::read),
+            network,
+            uptime_seconds,
+            load_average,
+            warnings,
+            processes,
             storage: paths
                 .proc_stat
                 .parent()
@@ -77,7 +99,9 @@ pub struct Snapshot {
     interval_seconds: u64,
     cpu: Cpu,
     memory: Memory,
-    uptime_seconds: Option<u64>,
+    uptime_seconds: Option<f64>,
+    process_count: usize,
+    processes_limited: bool,
     load: Option<[f64; 3]>,
     networks: Vec<Network>,
     disks: Vec<storage::Disk>,
@@ -108,6 +132,8 @@ struct Memory {
     total: u64,
     available: u64,
     used: u64,
+    cached: u64,
+    buffers: u64,
     swap_total: u64,
     swap_used: u64,
 }
@@ -137,6 +163,8 @@ impl Default for Samples {
                 cpu: Cpu::default(),
                 memory: Memory::default(),
                 uptime_seconds: None,
+                process_count: 0,
+                processes_limited: false,
                 load: None,
                 networks: vec![],
                 disks: vec![],
@@ -198,7 +226,7 @@ impl Monitor {
                     let mut samples = cache.lock();
                     match reading {
                         Ok(Ok(usage)) => {
-                            samples.accept(usage, &config.system.wan_interface, Instant::now());
+                            samples.accept(usage, Instant::now(), Utc::now());
                         }
                         _ => {
                             samples.current.last_error =
@@ -226,9 +254,11 @@ impl Monitor {
 }
 
 impl Samples {
-    fn accept(&mut self, mut usage: Reading, interface: &str, now: Instant) {
-        let at = Utc::now();
-        let previous = self.previous.as_ref();
+    fn accept(&mut self, mut usage: Reading, now: Instant, at: DateTime<Utc>) {
+        // Preserve the reference's bounded time window and reject clock regressions.
+        let previous = self.previous.as_ref().filter(|(sampled, _)| {
+            now > *sampled && self.current.at.is_none_or(|old| at > old)
+        });
         let cpu_usage = |cpu: &CpuStat| {
             previous.and_then(|(_, usage)| {
                 usage
@@ -254,48 +284,47 @@ impl Samples {
                 })
                 .collect(),
         };
-        let total = usage.memory.total_kb.saturating_mul(1024);
-        let available = usage.memory.available_kb.saturating_mul(1024).min(total);
-        let memory = Memory {
-            total,
-            available,
-            used: total - available,
-            swap_total: usage.memory.swap_total_kb.saturating_mul(1024),
-            swap_used: usage
-                .memory
-                .swap_total_kb
-                .saturating_sub(usage.memory.swap_free_kb)
-                .saturating_mul(1024),
-        };
-        let rate = |counter: u64, select: fn(&NetworkStat) -> u64| {
-            let (sampled, old) = previous?;
-            let elapsed = now.checked_duration_since(*sampled)?.as_secs_f64();
-            if elapsed == 0.0 {
-                return None;
-            }
-            Some(counter.checked_sub(select(old.network.as_ref()?))? as f64 / elapsed)
-        };
-        let network = usage.network.as_ref().map(|network| Network {
-            name: interface.into(),
-            rx_bytes: network.rx_bytes,
-            tx_bytes: network.tx_bytes,
-            rx_bytes_per_second: rate(network.rx_bytes, |old| old.rx_bytes),
-            tx_bytes_per_second: rate(network.tx_bytes, |old| old.tx_bytes),
-        });
+        let memory = usage.memory.clone();
+        let networks: Vec<_> = usage
+            .network
+            .iter()
+            .map(|(name, network)| {
+                let rate = |counter: u64, select: fn(&NetworkStat) -> u64| {
+                    let (sampled, old) = previous?;
+                    let elapsed = now.checked_duration_since(*sampled)?.as_secs_f64();
+                    if elapsed == 0.0 {
+                        return None;
+                    }
+                    Some(counter.checked_sub(select(old.network.get(name)?))? as f64 / elapsed)
+                };
+                Network {
+                    name: name.clone(),
+                    rx_bytes: network.rx_bytes,
+                    tx_bytes: network.tx_bytes,
+                    rx_bytes_per_second: rate(network.rx_bytes, |old| old.rx_bytes),
+                    tx_bytes_per_second: rate(network.tx_bytes, |old| old.tx_bytes),
+                }
+            })
+            .collect();
         let history = &mut self.current.history;
+        if history.back().is_some_and(|point| point.at >= at) {
+            history.clear();
+        }
+        let cutoff = at - chrono::Duration::seconds(
+            (self.current.interval_seconds * HISTORY_LIMIT as u64) as i64,
+        );
+        while history.front().is_some_and(|point| point.at < cutoff) {
+            history.pop_front();
+        }
         if history.len() == HISTORY_LIMIT {
             history.pop_front();
         }
         history.push_back(Point {
             at,
             cpu: cpu.usage,
-            memory_percent: 100.0 * memory.used as f64 / total as f64,
-            rx: network
-                .as_ref()
-                .and_then(|network| network.rx_bytes_per_second),
-            tx: network
-                .as_ref()
-                .and_then(|network| network.tx_bytes_per_second),
+            memory_percent: 100.0 * memory.used as f64 / memory.total as f64,
+            rx: aggregate_rate(&networks, |network| network.rx_bytes_per_second),
+            tx: aggregate_rate(&networks, |network| network.tx_bytes_per_second),
         });
         self.current = Snapshot {
             valid: true,
@@ -304,14 +333,16 @@ impl Samples {
             cpu,
             memory,
             uptime_seconds: usage.uptime_seconds,
+            process_count: usage.processes.as_ref().map_or(0, processes::Counters::len),
+            processes_limited: usage.processes.as_ref().is_some_and(processes::Counters::limited),
             load: usage.load_average,
-            networks: network.into_iter().collect(),
+            networks,
             disk_io: usage.storage.rates(
                 previous.map(|(at, sample)| (&sample.storage, now.saturating_duration_since(*at))),
             ),
             disks: std::mem::take(&mut usage.storage.disks),
             temperatures: std::mem::take(&mut usage.storage.temperatures),
-            warnings: std::mem::take(&mut usage.storage.warnings),
+            warnings: usage.warnings.iter().chain(&usage.storage.warnings).copied().collect(),
             history: std::mem::take(history),
             last_error: None,
         };
@@ -322,6 +353,15 @@ impl Samples {
         }
         self.previous = Some((now, usage));
     }
+}
+
+// The reference excludes loopback and never presents a partial aggregate as complete.
+fn aggregate_rate(networks: &[Network], select: fn(&Network) -> Option<f64>) -> Option<f64> {
+    let mut total = None;
+    for network in networks.iter().filter(|network| network.name != "lo") {
+        total = Some(total.unwrap_or(0.0) + select(network)?);
+    }
+    total
 }
 
 fn cpu_delta(old: &CpuStat, current: &CpuStat) -> Option<f64> {
@@ -343,9 +383,7 @@ fn cpu_delta(old: &CpuStat, current: &CpuStat) -> Option<f64> {
         .map(|(current, old)| current.checked_sub(old));
     // Linux iowait can decrease without indicating a counter reset.
     // Match Server Man parse.go: clamp only that component.
-    let idle = deltas
-        .next()??
-        .checked_add(deltas.next()?.unwrap_or(0))?;
+    let idle = deltas.next()??.checked_add(deltas.next()?.unwrap_or(0))?;
     let active = deltas.try_fold(0_u64, |total, delta| total.checked_add(delta?))?;
     let total = idle.checked_add(active)?;
     (total != 0).then(|| 100.0 * active as f64 / total as f64)
@@ -363,15 +401,17 @@ mod tests {
                 idle: ticks,
                 ..CpuStat::default()
             }],
-            memory: MemoryStat {
-                total_kb: 100,
-                available_kb: 25,
-                ..MemoryStat::default()
+            memory: Memory {
+                total: 100 * 1024,
+                available: 25 * 1024,
+                used: 75 * 1024,
+                ..Memory::default()
             },
-            network: network.map(|rx_bytes| NetworkStat {
-                rx_bytes,
-                tx_bytes: 0,
-            }),
+            network: network
+                .map(|rx_bytes| ("eth0".into(), NetworkStat { rx_bytes, tx_bytes: 0 }))
+                .into_iter()
+                .collect(),
+            warnings: vec![],
             uptime_seconds: None,
             load_average: None,
             processes: None,
@@ -410,29 +450,66 @@ mod tests {
     }
 
     #[test]
+    fn network_aggregate_excludes_loopback_and_rejects_partial_rates() {
+        let row = |name: &str, rate| Network {
+            name: name.into(),
+            rx_bytes: 0,
+            tx_bytes: 0,
+            rx_bytes_per_second: rate,
+            tx_bytes_per_second: rate,
+        };
+        let rows = [row("eth0", Some(10.0)), row("lo", None), row("eth1", Some(20.0))];
+        assert_eq!(aggregate_rate(&rows, |net| net.rx_bytes_per_second), Some(30.0));
+        let rows = [row("eth0", Some(10.0)), row("eth1", None)];
+        assert_eq!(aggregate_rate(&rows, |net| net.rx_bytes_per_second), None);
+        assert_eq!(aggregate_rate(&[row("lo", Some(10.0))], |net| net.rx_bytes_per_second), None);
+    }
+
+    #[test]
+    fn history_expires_and_resets_on_clock_regression() {
+        let mut samples = Samples::default();
+        let start = Instant::now();
+        let at = Utc::now();
+        samples.accept(reading(10, Some(10)), start, at);
+        samples.accept(
+            reading(20, Some(20)),
+            start + Duration::from_secs(1000),
+            at + chrono::Duration::seconds(1000),
+        );
+        assert_eq!(samples.current.history.len(), 1);
+        samples.accept(
+            reading(30, Some(30)),
+            start + Duration::from_secs(1001),
+            at,
+        );
+        assert_eq!(samples.current.history.len(), 1);
+        assert_eq!(samples.current.networks[0].rx_bytes_per_second, None);
+    }
+
+    #[test]
     fn bounded_history_distinguishes_unavailable_and_reset_counters() {
         let mut samples = Samples::default();
         let start = Instant::now();
-        samples.accept(reading(100, Some(100)), "eth0", start);
+        samples.accept(reading(100, Some(100)), start, Utc::now());
         assert!(samples.current.cpu.usage.is_none());
         assert!(samples.current.networks[0].rx_bytes_per_second.is_none());
         samples.accept(
             reading(120, Some(140)),
-            "eth0",
             start + Duration::from_secs(2),
+            Utc::now() + chrono::Duration::seconds(2),
         );
         assert_eq!(samples.current.cpu.usage, Some(50.0));
         assert_eq!(samples.current.networks[0].rx_bytes_per_second, Some(20.0));
-        samples.accept(reading(1, None), "eth0", start + Duration::from_secs(4));
+        samples.accept(reading(1, None), start + Duration::from_secs(4), Utc::now() + chrono::Duration::seconds(4));
         assert!(samples.current.cpu.usage.is_none());
         assert!(samples.current.networks.is_empty());
-        samples.accept(reading(3, Some(2)), "eth0", start + Duration::from_secs(6));
+        samples.accept(reading(3, Some(2)), start + Duration::from_secs(6), Utc::now() + chrono::Duration::seconds(6));
         assert!(samples.current.networks[0].rx_bytes_per_second.is_none());
         for index in 0..HISTORY_LIMIT {
             samples.accept(
                 reading(10 + index as u64, None),
-                "eth0",
                 start + Duration::from_secs(10 + index as u64),
+                Utc::now() + chrono::Duration::seconds(10 + index as i64),
             );
         }
         assert_eq!(samples.current.history.len(), HISTORY_LIMIT);

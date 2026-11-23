@@ -9,7 +9,7 @@
     at: string | null
     intervalSeconds: number
     cpu: { usage: number | null }
-    memory: { total: number; used: number }
+    memory: { total: number; used: number; available: number; cached: number; buffers: number; swapTotal: number; swapUsed: number }
     uptimeSeconds: number | null
     load: number[] | null
     networks: Array<{ name: string; rxBytesPerSecond: number | null; txBytesPerSecond: number | null }>
@@ -60,6 +60,9 @@
     <dl>
       <dt>CPU</dt><dd>{percent(snapshot.cpu.usage)}</dd>
       <dt>Memory</dt><dd>{bytes(snapshot.memory.used)} of {bytes(snapshot.memory.total)}</dd>
+      <dt>Available memory</dt><dd>{bytes(snapshot.memory.available)}</dd>
+      <dt>Cache / buffers</dt><dd>{bytes(snapshot.memory.cached)} / {bytes(snapshot.memory.buffers)}</dd>
+      <dt>Swap</dt><dd>{bytes(snapshot.memory.swapUsed)} of {bytes(snapshot.memory.swapTotal)}</dd>
       <dt>Uptime</dt><dd>{uptime(snapshot.uptimeSeconds)}</dd>
       {#if snapshot.load}<dt>Load average</dt><dd>{snapshot.load.map(value => value.toFixed(2)).join(' / ')}</dd>{/if}
       {#each snapshot.networks as nic (nic.name)}
@@ -90,7 +93,7 @@
         <Sparkline values={snapshot.history.map(point => point.cpu)} times={sampleTimes} windowSeconds={snapshot.intervalSeconds * 60} ceiling={100} label="Recent CPU utilization" />
         <h3>Memory utilization</h3>
         <Sparkline values={snapshot.history.map(point => point.memoryPercent)} times={sampleTimes} windowSeconds={snapshot.intervalSeconds * 60} ceiling={100} label="Recent memory utilization" />
-        <h3>Network throughput</h3>
+        <h3>Network throughput (excluding loopback)</h3>
         <Sparkline values={snapshot.history.map(point => point.rx)} secondary={snapshot.history.map(point => point.tx)} times={sampleTimes} windowSeconds={snapshot.intervalSeconds * 60} label="Recent receive and transmit rates" />
       </div>
     {/if}
