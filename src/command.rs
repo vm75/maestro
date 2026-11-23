@@ -14,6 +14,22 @@ pub struct CommandRunner {
     test_mode: bool,
 }
 
+#[cfg(feature = "linux")]
+pub struct CapturedOutput {
+    pub stdout: Vec<u8>,
+    pub truncated: bool,
+    pub status: std::process::ExitStatus,
+    pub had_stderr: bool,
+}
+
+#[cfg(feature = "linux")]
+impl CapturedOutput {
+    fn require_success(self) -> Result<Self> {
+        anyhow::ensure!(self.status.success(), "command exited unsuccessfully");
+        Ok(self)
+    }
+}
+
 #[cfg(unix)]
 struct ProcessGroupGuard(Option<u32>);
 
@@ -36,6 +52,11 @@ impl Drop for ProcessGroupGuard {
 impl CommandRunner {
     pub fn new(test_mode: bool) -> Self {
         Self { test_mode }
+    }
+
+    #[cfg(feature = "linux")]
+    pub fn is_test_mode(&self) -> bool {
+        self.test_mode
     }
 
     pub async fn run<I, S>(
@@ -88,6 +109,154 @@ impl CommandRunner {
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
             simulated: false,
         })
+    }
+
+    /// Capture only bounded output from a command that must complete within the deadline.
+    #[cfg(feature = "linux")]
+    pub async fn capture_bounded(
+        &self,
+        program: &Path,
+        args: &[&str],
+        deadline: Duration,
+        limit: usize,
+    ) -> Result<Vec<u8>> {
+        self.capture(program, args, deadline, limit, false, &[])
+            .await
+            .and_then(CapturedOutput::require_success)
+            .map(|output| output.stdout)
+    }
+
+    /// Retain the most recent bytes while continuing to drain the child pipe.
+    #[cfg(feature = "linux")]
+    pub async fn capture_tail(
+        &self,
+        program: &Path,
+        args: &[&str],
+        deadline: Duration,
+        limit: usize,
+    ) -> Result<(Vec<u8>, bool)> {
+        self.capture(program, args, deadline, limit, true, &[])
+            .await
+            .and_then(CapturedOutput::require_success)
+            .map(|output| (output.stdout, output.truncated))
+    }
+
+    #[cfg(feature = "linux")]
+    pub async fn capture_status(
+        &self,
+        program: &Path,
+        args: &[&str],
+        deadline: Duration,
+        limit: usize,
+    ) -> Result<CapturedOutput> {
+        self.capture(program, args, deadline, limit, false, &[])
+            .await
+    }
+
+    #[cfg(feature = "linux")]
+    pub async fn capture_package_job(
+        &self,
+        program: &Path,
+        args: &[&str],
+        environment: &[(&str, &str)],
+    ) -> Result<CapturedOutput> {
+        self.capture(
+            program,
+            args,
+            Duration::from_secs(20 * 60),
+            128 * 1024,
+            true,
+            environment,
+        )
+        .await
+    }
+
+    #[cfg(feature = "linux")]
+    async fn capture(
+        &self,
+        program: &Path,
+        args: &[&str],
+        deadline: Duration,
+        limit: usize,
+        tail: bool,
+        environment: &[(&str, &str)],
+    ) -> Result<CapturedOutput> {
+        use std::collections::VecDeque;
+        use tokio::io::AsyncReadExt;
+
+        if self.test_mode {
+            bail!("command capture is unavailable in simulation");
+        }
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .env("LC_ALL", "C")
+            .envs(environment.iter().copied())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        #[cfg(unix)]
+        if !environment.is_empty() {
+            command.process_group(0);
+        }
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("failed to start {}", program.display()))?;
+        #[cfg(unix)]
+        let mut group_guard = ProcessGroupGuard(if environment.is_empty() {
+            None
+        } else {
+            child.id()
+        });
+        let mut stdout = child.stdout.take().context("missing command stdout")?;
+        let mut stderr = child.stderr.take().context("missing command stderr")?;
+        let result = timeout(deadline, async {
+            let read_stderr = async {
+                let mut first = [0];
+                let has_error = stderr.read(&mut first).await? != 0;
+                tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await?;
+                Ok::<_, anyhow::Error>(has_error)
+            };
+            let read_stdout = async {
+                let mut bytes = VecDeque::new();
+                let mut chunk = [0; 8192];
+                let mut truncated = false;
+                loop {
+                    let count = stdout.read(&mut chunk).await?;
+                    if count == 0 {
+                        break;
+                    }
+                    let overflow = (bytes.len() + count).saturating_sub(limit);
+                    if overflow > 0 {
+                        if !tail {
+                            bail!("command output exceeds {limit} bytes");
+                        }
+                        let discard = overflow.min(bytes.len());
+                        bytes.drain(..discard);
+                        bytes.extend(&chunk[overflow - discard..count]);
+                        truncated = true;
+                    } else {
+                        bytes.extend(&chunk[..count]);
+                    }
+                }
+                Ok::<_, anyhow::Error>((bytes.into(), truncated))
+            };
+            let ((stdout, truncated), had_stderr) = tokio::try_join!(read_stdout, read_stderr)?;
+            Ok(CapturedOutput {
+                stdout,
+                truncated,
+                had_stderr,
+                status: child.wait().await?,
+            })
+        })
+        .await
+        .with_context(|| format!("command timed out: {}", program.display()))?;
+        #[cfg(unix)]
+        if result.is_ok() {
+            group_guard.0 = None;
+        }
+        result
     }
 
     /// Run a command and all its hook subprocesses in a dedicated Unix process

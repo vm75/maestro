@@ -5,17 +5,21 @@ cd "$REPO_DIR"
 TMP=$(mktemp -d)
 VERSION=$(awk -F '"' '/^version = "/ { print $2; exit }' Cargo.toml)
 NAME="maestro_${VERSION}-1_aarch64-3.10.ipk"
-trap 'rm -rf "$TMP"; rm -f "dist/$NAME" "dist/$NAME.sha256"' EXIT
-printf '#!/bin/sh\nexit 0\n' > "$TMP/maestro"
-chmod +x "$TMP/maestro"
-bash scripts/package-ipk.sh "v${VERSION}" aarch64-unknown-linux-musl "$TMP/maestro"
+trap 'rm -rf "$TMP"' EXIT
+PACKAGE_DIR="$TMP/ipk"
+BINARY=${1:-"$TMP/maestro"}
+if [[ $# -eq 0 ]]; then
+    printf '#!/bin/sh\nexit 0\n' > "$BINARY"
+    chmod +x "$BINARY"
+fi
+MAESTRO_IPK_OUTPUT_DIR="$PACKAGE_DIR" bash scripts/package-ipk.sh "v${VERSION}" aarch64-unknown-linux-musl "$BINARY"
 (
-  cd dist
+  cd "$PACKAGE_DIR"
   sha256sum -c "$NAME.sha256"
 )
-test "$(tar -tzf "dist/$NAME" | tr '\n' ' ')" = "./debian-binary ./control.tar.gz ./data.tar.gz "
-tar -xzOf "dist/$NAME" ./control.tar.gz > "$TMP/control.tar.gz"
-tar -xzOf "dist/$NAME" ./data.tar.gz > "$TMP/data.tar.gz"
+test "$(tar -tzf "$PACKAGE_DIR/$NAME" | tr '\n' ' ')" = "./debian-binary ./control.tar.gz ./data.tar.gz "
+tar -xzOf "$PACKAGE_DIR/$NAME" ./control.tar.gz > "$TMP/control.tar.gz"
+tar -xzOf "$PACKAGE_DIR/$NAME" ./data.tar.gz > "$TMP/data.tar.gz"
 tar -xOzf "$TMP/control.tar.gz" ./control | grep -Fx 'Architecture: aarch64-3.10'
 tar -xOzf "$TMP/control.tar.gz" ./control | grep -Fx 'Conflicts: router-hub'
 tar -tzf "$TMP/control.tar.gz" | grep -Fx './postinst'
@@ -28,6 +32,13 @@ start_line=$(grep -nF '/opt/etc/init.d/S99maestro restart' "$setup" | tail -1 | 
 ! grep -qF 'LEGACY_CONFIG=' "$setup"
 test -n "$migration_line" && test -n "$start_line" && test "$migration_line" -lt "$start_line"
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/bin/maestro'
+tar -xzOf "$TMP/data.tar.gz" ./opt/bin/maestro > "$TMP/packaged-maestro"
+cmp "$BINARY" "$TMP/packaged-maestro"
+wc -c "$TMP/packaged-maestro" "$PACKAGE_DIR/$NAME"
+if LC_ALL=C grep -aqF '/linux-assets/' "$TMP/packaged-maestro"; then
+    echo "Unexpected Linux UI asset route in the Asuswrt executable" >&2
+    exit 1
+fi
 ! tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/bin/router-hub'
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/etc/init.d/S99maestro'
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/libexec/maestro/setup-merlin.sh'

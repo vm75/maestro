@@ -4,7 +4,11 @@ set -euo pipefail
 # Real, unprivileged Linux integration smoke test. No mocks, host service
 # configuration changes, DNS provider calls, or firewall rule modifications.
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-for tool in cargo nginx openssl curl python3; do
+tools=(nginx openssl curl python3)
+if [[ -z "${MAESTRO_LINUX_SMOKE_BIN:-}" ]]; then
+    tools+=(cargo)
+fi
+for tool in "${tools[@]}"; do
     command -v "$tool" >/dev/null 2>&1 || {
         echo "Missing required command: $tool" >&2
         exit 2
@@ -139,9 +143,16 @@ lan_ip = "127.0.0.1"
 wan_interface = "lo"
 EOF
 
-cd "$repo_root"
-cargo build --quiet --locked
-bin="$repo_root/target/debug/maestro"
+bin=${MAESTRO_LINUX_SMOKE_BIN:-}
+if [[ -z "$bin" ]]; then
+    cd "$repo_root"
+    cargo build --quiet --locked --no-default-features --features linux
+    bin="$repo_root/target/debug/maestro"
+fi
+if [[ ! -x "$bin" ]]; then
+    echo "Maestro binary is not executable: $bin" >&2
+    exit 2
+fi
 "$bin" --config "$lab/maestro.toml" --linux-mode check-config
 "$bin" --config "$lab/maestro.toml" --linux-mode serve >"$lab/logs/maestro.stdout" 2>&1 &
 maestro_pid=$!
@@ -180,6 +191,12 @@ unauth=$(curl --silent --output /dev/null --write-out '%{http_code}' "$api/api/r
 [[ "$unauth" == 401 ]] || { echo "Expected HTTP 401, got $unauth" >&2; exit 1; }
 
 get /api/runtime | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["test_mode"] is False and x["platform"] == "linux", x'
+# Exercise a route that is only compiled with the Linux Cargo feature.
+discovery=$(get /api/tools) || {
+    echo "Linux tool discovery failed. Use a binary built with the linux feature." >&2
+    exit 1
+}
+python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["tools"] and x["modules"], x' <<< "$discovery"
 get /api/system/usage | python3 -c 'import json,sys; x=json.load(sys.stdin); assert "cpu" in x and "memory" in x, x'
 get /api/firewall | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["policy"]["enabled"] is False, x'
 

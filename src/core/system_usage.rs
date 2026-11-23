@@ -63,7 +63,7 @@ pub fn get_system_usage(
     })
 }
 
-fn parse_proc_stat(path: &Path) -> Result<Vec<CpuStat>> {
+pub(super) fn parse_proc_stat(path: &Path) -> Result<Vec<CpuStat>> {
     let content = fs::read_to_string(path).context("failed to read /proc/stat")?;
     let mut cpus = Vec::new();
     for line in content.lines() {
@@ -98,7 +98,7 @@ fn parse_proc_stat(path: &Path) -> Result<Vec<CpuStat>> {
     Ok(cpus)
 }
 
-fn parse_proc_meminfo(path: &Path) -> Result<MemoryStat> {
+pub(super) fn parse_proc_meminfo(path: &Path) -> Result<MemoryStat> {
     let content = fs::read_to_string(path).context("failed to read /proc/meminfo")?;
     let mut stat = MemoryStat::default();
     for line in content.lines() {
@@ -123,7 +123,7 @@ fn parse_proc_meminfo(path: &Path) -> Result<MemoryStat> {
     Ok(stat)
 }
 
-fn parse_proc_net_dev(path: &Path, wan_interface: &str) -> Result<NetworkStat> {
+pub(super) fn parse_proc_net_dev(path: &Path, wan_interface: &str) -> Result<NetworkStat> {
     let content = fs::read_to_string(path).context("failed to read /proc/net/dev")?;
     for line in content.lines().skip(2) {
         let parts: Vec<&str> = line.split_whitespace().collect();
@@ -138,10 +138,10 @@ fn parse_proc_net_dev(path: &Path, wan_interface: &str) -> Result<NetworkStat> {
             });
         }
     }
-    Ok(NetworkStat::default())
+    anyhow::bail!("network interface counters are unavailable")
 }
 
-fn parse_proc_uptime(path: &Path) -> Result<u64> {
+pub(super) fn parse_proc_uptime(path: &Path) -> Result<u64> {
     let content = fs::read_to_string(path).context("failed to read /proc/uptime")?;
     if let Some(uptime_str) = content.split_whitespace().next() {
         if let Ok(uptime_f64) = uptime_str.parse::<f64>() {
@@ -151,7 +151,7 @@ fn parse_proc_uptime(path: &Path) -> Result<u64> {
     Ok(0)
 }
 
-fn parse_proc_loadavg(path: &Path) -> Result<[f64; 3]> {
+pub(super) fn parse_proc_loadavg(path: &Path) -> Result<[f64; 3]> {
     let content = fs::read_to_string(path).context("failed to read /proc/loadavg")?;
     let parts: Vec<&str> = content.split_whitespace().collect();
     if parts.len() >= 3 {

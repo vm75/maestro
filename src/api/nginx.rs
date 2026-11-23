@@ -1019,8 +1019,7 @@ async fn change_enabled(
         }
     }
 
-    let adguard_cfg = super::adguard::get_effective_config(state).await;
-    if adguard_cfg.enabled {
+    if let Some(adguard_cfg) = super::adguard::enabled_config(state).await {
         if let Ok(client) = crate::adguard::AdGuardClient::new(&adguard_cfg) {
             let full_domain = match kind {
                 NginxObjectKind::Domain => domain.to_string(),

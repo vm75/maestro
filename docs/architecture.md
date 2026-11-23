@@ -11,8 +11,8 @@ guide or an aspirational redesign.
 
 ## System context
 
-An administrator uses either the standalone page served by Axum or the same UI
-rendered into a writable Asuswrt `user<n>.asp` extension page. At startup,
+Axum serves the standalone management UI. On Asuswrt, the router UI can also
+be rendered into a writable `user<n>.asp` extension page. At startup,
 Maestro replaces a configured ASUS menu while retaining its index for the
 firmware-provided icon. The service talks to
 configured
@@ -58,7 +58,8 @@ Domain sources for AdGuard, NGINX objects/sites, firewall and WOL live under
 `src/modules/`. The crate-root aliases remain in place for existing callers.
 `src/core/system_usage.rs` contains the common proc-based sampler. The
 `src/platforms/service_manager.rs` contract currently selects the existing
-init-script adapter on both ASUS and Linux; native systemd belongs to Phase 2.
+init-script adapter on both ASUS and Linux. The Linux tool API also exposes
+a native systemd inventory.
 ASUS menu/ASP rendering and router-only upgrade implementations live under
 `src/platforms/`. Rendering, certificate lifecycle, and Ban Shield background
 task startup remain in their existing compatibility locations with the same
@@ -77,6 +78,58 @@ Dashboard contributors load separately, showing unavailable errors per widget.
 See [Phase 1 compatibility and validation](phase1-compatibility.md) for
 rollback and the M1 stop gate. Phase 1 is not considered hardware validated
 until those checks have passed.
+
+## Linux browser shell and tool API
+
+The default Cargo profile is `asuswrt`. Build the Linux backend with
+`--no-default-features --features linux` or select `linux-ui` to include the
+embedded Svelte shell. The Linux tool API, session store, job manager,
+systemd, monitoring, package managers and workload coordinator are compiled
+only with `linux`. Shared REST routes and the existing compatibility UI
+remain available to both builds.
+
+A Linux build with the `linux-ui` feature embeds the static Svelte shell and
+serves its assets under `/linux-assets/` on the Linux platform. The Overview
+and Services pages load on demand. Services queries system and user systemd
+inventories through bounded native calls and displays partial-result warnings. The
+[Linux build guide](linux.md#svelte-shell-build) describes the build commands.
+
+The Overview resource widget reads a shared Linux sampler that takes a
+snapshot every three seconds and retains 60 history points. A failed CPU or
+memory read preserves the last valid sample and reports an error separately
+from the rest of the dashboard. Process activity reads numeric PID stat
+files only, with a cap on scanned processes. It computes CPU usage across
+samples only when a PID's start time matches. The sampler also reads whole-device
+I/O counters, local filesystem capacity, and Linux thermal zones.
+
+Linux status and tool routes accept bearer tokens or an expiring browser
+session. The session API issues an HttpOnly, SameSite=Strict cookie and keeps
+hashed session IDs in memory. Host and Origin validation applies to the
+session and tool routes. Existing REST management routes use bearer
+authentication.
+
+The tool bridge exposes job history, details, and cancellation. The job store
+keeps up to 64 entries in memory and retains the latest 128 KiB of each job's
+output. A management operation holds an exclusive lock in the configured state
+directory through cleanup. Start and completion events go to the owner-only
+`management-audit.jsonl` file. Job details and output are process-local.
+
+The declarative workload foundation stores authored YAML and content-addressed
+history in an owner-only directory. The composite apply coordinator rechecks the reviewed
+fingerprint and runs provider preflight before mutation across supported backends:
+user Podman Quadlet units, rootless/root Podman Compose, Docker Compose, Incus VMs/containers,
+and KVM/libvirt domains. It also coordinates storage directory/disk provisioning and
+declarative Samba/NFS file share configurations. It writes the candidate
+and progress journal before applying changes and publishes the desired YAML
+after every change succeeds. An incomplete journal blocks subsequent saves and
+applies until recovery. Resume verifies native state and skips changes already
+applied. Unknown or drifted state keeps the journal pending. Native adapters
+must verify ownership before mutation.
+
+The tool bridge also exposes a JSON-RPC 2.0 MCP interface at `POST /api/mcp` supporting
+protocol negotiation (`initialize`), tool enumeration (`tools/list`), and execution
+(`tools/call`) sharing the same argument-validation and capability policies as the REST
+tools endpoint.
 
 ## Dependency direction
 
@@ -390,7 +443,7 @@ restarts dnsmasq through the configured service command and arguments.
 - The WOL view polls `/api/wol/status` only while that tab is active. The
   endpoint matches configured MAC addresses against `ip neigh` output and
   checks each resolved IP with a bounded ping.
-- The UI remains a single self-contained HTML/ASP asset and must work without
+- The router UI remains a single self-contained HTML/ASP asset and must work without
   a frontend package manager or third-party CDN.
 - Maestro service (`S99maestro`) cannot be disabled via API request, init
   script, or UI action to ensure management engine availability.

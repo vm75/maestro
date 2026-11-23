@@ -1,6 +1,6 @@
 # Modular platform and UI migration: Router Hub to Maestro
 
-**Status:** Phase 1 merged to `main` as v0.10.5; Phase 1.5 Maestro rebrand implemented on its own branch, M1.5 validation pending  
+**Status:** Phase 1 and Phase 1.5 accepted. Phase 2 implementation is active on `feature/linux-phase2`. Compile-time platform profiles, Linux Svelte shell & operations bridge, systemd services, resource monitoring, package updates, and declarative engine foundation are implemented and passing validation.
 **Phase 1.5 branch:** `refactor/rebrand-maestro`  
 **Baseline:** `vm75/router-hub` `main` at `5e2013f031c965cf0381f868c541d60bb5eac602` (v0.10.4)  
 **Source projects:** [router-hub](https://github.com/vm75/router-hub), [server-man](https://github.com/vm75/server-man)  
@@ -19,7 +19,7 @@ Create one modular Rust management application with common modules, platform-spe
 4. **STOP M1:** complete automated, package, and real ASUS-router feature-parity acceptance. Do not begin the next workstream or merge an incomplete Phase 1.
 5. **Phase 1.5:** rebrand the validated project, including packaging/upgrade compatibility and GitHub repository collision resolution. Do not port Server Man features during the rebrand.
 6. **STOP M1.5:** verify rebranded releases and existing-install migration. Only then begin Phase 2.
-7. **Phase 2:** integrate the Svelte Linux shell and operation infrastructure, Linux services/monitoring/updates, Server Man's declarative Applications engine and native providers, then storage/shares and optional MCP/backup follow-ups.
+7. **Phase 2:** establish the router baseline and compile-time profile gate, then integrate the Svelte Linux shell and operation infrastructure, Linux services/monitoring/updates, Server Man's declarative Applications engine and native providers, then storage/shares and optional MCP/backup follow-ups.
 
 **CI hold:** No automatic GitHub Actions CI on the planning/implementation branch before all three Phase 1 steps are implemented. The existing `ci.yml` triggers are already limited to pushes on `main` and `ci/**`, plus explicit `workflow_dispatch`; there is no ordinary PR trigger. Keep this branch named `refactor/modular-architecture`, **do not push it to `ci/**`, do not merge it into `main`, do not push `v*` tags, and do not manually dispatch CI until Phase 1 implementation is complete and ready for validation. No workflow edits are needed merely to achieve this hold. Keep existing `main` CI and separate manually triggered NGINX/toolchain workflows intact.
 
@@ -238,6 +238,82 @@ Do not start porting the Go Server Man capabilities until acceptance.
 
 Keep the Go implementation available as the behavior/specification reference. Implement vertical slices, each with Rust domain tests, API contract tests, frontend integration and native Linux acceptance. Do not translate Go line by line or erase its native recovery guarantees.
 
+### Current Phase 2 branch review
+
+The `feature/linux-phase2` worktree is based on Maestro v0.11.0 and contains
+in-progress tracked and untracked changes. The table records implementation
+present in that worktree. Native acceptance is tracked separately below.
+
+| Area | Implementation present | Adjustment after plan review |
+| --- | --- | --- |
+| Linux shell and operations | Embedded Svelte shell, tool registry, token browser sessions with Host/Origin checks, tracked jobs and audit | Finish administrator credentials and verify the browser and tool contracts. |
+| Systemd, monitoring and updates | System/user inventory, journal, allowlisted actions, sampled metrics and package status/refresh/install across four managers | Verify mutations, boot persistence and package writes in disposable native guests. |
+| Declarative workloads | Typed YAML, exact history, review, apply, journal, resume and reviewed revert | Validate provider recovery end to end and finish migration of the legacy server stanza. |
+| Providers and UI | Quadlet, Podman and Docker Compose, libvirt, Incus, Samba/NFS, storage provisioning, and Applications and File Sharing pages are present | Reviewed managed-directory provisioning is enabled. Native Compose, libvirt, Incus, disk provisioning and share mutations remain gated pending ownership-safe implementation. Verify ownership, rollback, runtime and boot behavior for each native provider. |
+| Build, registry and routing | The `linux` feature gates the tool router and native modules. `linux-ui` also embeds Svelte. CI has separate profile checks. | Validate the release artifacts, compile-time dependency graph and ASUS hardware resource deltas. |
+| Agent access | HTTP MCP shares the Linux tool registry | Verify transport and permission parity. Stdio and full backup/restore remain optional. |
+
+### Step 4 prerequisite — Platform builds and router resource baseline
+
+Complete this prerequisite before adding more Linux-only dependencies or
+continuing native provider work. Preserve the existing Linux slices and apply
+the boundary at their module and dependency entry points.
+
+- Keep **Axum and Tokio** as the shared HTTP and async infrastructure. Share
+  domain modules, REST contracts, configuration and command execution where
+  both targets use them. Keep the ASUS ASP renderer, Entware init scripts,
+  router upgrade and existing integrations in the router build.
+- Use `asuswrt` and `linux` for platform modes and their matching Cargo
+  features. Keep `asuswrt` as the default for
+  existing build commands and Entware packaging. Select `linux` with
+  `--no-default-features --features linux`. Make `linux-ui` imply `linux`
+  and select it for the Linux UI release. Allow backend-only Linux builds
+  for tests and development. Keep release artifacts and CI target directories
+  distinct. Test the two shipped profiles independently.
+- Apply `#[cfg]` to Linux-only modules and routes, including the tool bridge,
+  session middleware, management jobs, systemd, resource sampler, package
+  managers, declarative coordinator, provider adapters and Svelte assets.
+  Mark Linux-only dependencies optional and attach them to `linux`. The
+  branch adds `quick-xml` for Zypper and `serde_yaml` plus
+  `unsafe-libyaml` for workload YAML. Audit their transitive dependencies with
+  Cargo's resolved graph. The explicit `asuswrt` dependency check confirms
+  that the router graph excludes all three. Apply the module gates in both
+  the binary and library entry points. Shared command, system usage and
+  configuration modules stay available where existing callers need them.
+- Retain runtime discovery for features present in the selected build.
+  Report build exclusion as unsupported and preserve the existing distinctions
+  between configuration-disabled and operationally unavailable capabilities.
+  Test actual route assembly as well as discovery. A runtime platform check,
+  an empty configuration or a stripped symbol list alone cannot establish
+  compile-time exclusion.
+- Replace Tokio `full` with the smallest proven feature set across both
+  builds. Start with the observed runtime, networking, Unix signal, process,
+  filesystem, I/O, synchronization, time and macro uses. Audit features
+  re-enabled through Axum, Reqwest and test dependencies before claiming a
+  reduction. The v0.11.0 manifest explicitly enabled Axum `macros` and `ws`.
+  Phase 2 selects Axum's HTTP/1 server, JSON, query extraction, Tokio and
+  tracing features and specifies Tokio features explicitly. The router CI
+  check rejects WebSocket dependencies and unused Axum or Tokio features
+  if a dependency enables them again.
+  Retain any feature required by existing behavior.
+- Start clients, tasks and caches only for compiled, enabled capabilities
+  that use them. Verify the router creates no Linux sampler, browser session
+  store, job store, package probes or provider state. Check the shared startup
+  path for eagerly initialized optional integrations. Disabled AdGuard
+  skips LAN IP discovery during startup and nginx site changes. Retain the current
+  release optimization settings initially. Compare further tuning against
+  measured resource and functional results.
+- If Rhai is later included, put it and its adapters behind an optional
+  `scripting` Cargo feature excluded from default router builds. Keep it
+  independent of the platform profiles so a future explicit router opt-in can
+  be evaluated against hardware measurements.
+
+**Implementation order.** Record the v0.11.0 baseline and capture current
+build graphs first. Add the profiles and route/module/dependency gates next.
+Then trim unused runtime features and check startup and discovery. Pass the
+profile and router parity gates before resuming Step 4 gaps, Steps 5–6 native
+acceptance and Steps 7–10 in their existing order.
+
 ### Step 4 — Linux UI shell, operations bridge and authentication
 
 - Reuse Server Man's Svelte 5/Vite shell and responsive styles; compile to static assets only in the Linux release. Keep ASUS build and IPK free of the Svelte build toolchain/assets.
@@ -256,7 +332,7 @@ Keep the Go implementation available as the behavior/specification reference. Im
 
 ### Step 6 — Linux monitoring and package updates
 
-- Port bounded Linux resource/process histories, metrics and dashboard widgets with isolated refresh/error handling.
+- Port bounded Linux resource/process histories, metrics and dashboard widgets with isolated refresh/error handling. Start the shared sampler on the first monitoring request so startup and deployments that never read metrics avoid periodic host probes.
 - Port distribution-aware package status/refresh/install for apt, dnf, pacman, zypper, with exact validated operations, job locks, privilege checks, reboot evidence and read-only cached queries.
 - Preserve router `opkg`/self-upgrade behavior as separate platform operations; do not confuse router-specific binary upgrades with Linux OS updates.
 
@@ -296,9 +372,71 @@ All providers appear in **one Applications tab** with type/backend filters and t
 
 For each migrated capability: contract fixtures compared to Go, unit and integration tests, native Linux guest acceptance where it performs host mutations, permission/privilege tests, failure rollback, restart/boot persistence, and UI tests. Ubuntu is the first deployment target; Debian follows according to available native evidence; Arch is not claimed validated merely because package mappings exist. Keep host-specific tests in disposable VMs or other isolated environments.
 
+### Router resource and profile acceptance
+
+Use the published **Maestro v0.11.0** artifacts and immutable tag as the
+router baseline. Record the tag commit, artifact checksums, toolchain, target,
+strip settings, router model and firmware, configuration and workload. Rebuild
+the tag with the same target and toolchain as the candidate when needed to
+separate compiler effects from source changes. Use matching ASUS hardware for
+the runtime comparison and repeat samples under equivalent conditions.
+
+The [published v0.11.0 IPK](https://github.com/vm75/maestro/releases/tag/v0.11.0)
+is 4,258,037 bytes and contains an 8,874,336-byte executable. The downloaded
+IPK passed its published companion checksum. Its SHA-256 is
+`ebf12ca1732e6cdde2fc59918c33fbd569657baa55b741b19a257d901e6a60ac`.
+The local v0.11.0 tag resolves to `4c8b4eb2013b6b60d297bb9c5bc894e3453efde1`.
+The release workflow at that tag specifies Rust 1.85.0 and
+`aarch64-unknown-linux-musl`. The workspace's separate local IPK differs
+from the published artifact. Use the published sizes for release acceptance.
+Hardware measurements remain pending.
+
+With explicit `asuswrt` features and the reduced Axum feature set, the
+Phase 2 candidate built locally to an 8,791,264-byte stripped executable.
+Three repeated IPK packaging runs ranged from 4,135,541 to 4,135,571 bytes,
+with a median of 4,135,546 bytes. Compared with the published v0.11.0
+artifacts, the executable and median IPK were 83,072 bytes (0.94%) and
+122,491 bytes (2.88%) smaller, respectively.
+
+Both the candidate and a rebuild of the immutable v0.11.0 tag used local
+Rust 1.99.0, cross GCC 16.2.0 and `aarch64-unknown-linux-musl`. The rebuilt
+baseline measured 8,856,800 bytes for the executable and a median of
+4,167,464 bytes for the IPK. With matching local tools, the candidate's
+executable was 65,536 bytes smaller (0.74%) and the median IPK was 31,918
+bytes smaller (0.77%). The candidate passed package checksum, payload
+and Linux asset exclusion checks. The pinned release-toolchain CI result
+and on-router measurements remain part of acceptance.
+
+| Measure | Evidence to capture |
+| --- | --- |
+| Stripped executable and IPK size | Record byte counts for the deployed stripped executable and compressed Entware IPK. Compare identical target and packaging options with `wc -c`, inspect the IPK payload, and report absolute and relative deltas. |
+| Idle and peak RSS | After readiness, sample `/proc/<pid>/status` for `VmRSS` in a fixed idle window and during representative active workloads. Record `VmHWM` and the peak sampled RSS. Use fresh starts per scenario and identify helper process memory separately. |
+| Idle and active CPU | Take deltas of Maestro process CPU ticks from `/proc/<pid>/stat` and elapsed monotonic time over identical idle and active windows. Normalize consistently and identify helper process CPU separately. Use the same representative dashboard/API, NGINX and firewall/log workloads. |
+| Startup | Time from service launch to the first successful health response and authenticated readiness request using the same polling cadence. Record repeated cold starts and service restarts, with median and range for both runs. |
+| v0.11.0 parity | Run the M1 router matrix against the baseline and candidate, including ASP/menu entry, token/API behavior, nginx, certificates, firewall and security integrations, init scripts, optional modules, IPK install/upgrade and rollback. Verify actual router hardware and representative persisted state. |
+| Dependency and startup isolation | Compare `cargo tree -e normal,build,features` under explicit features and production targets. Assert that Linux-only crates are absent from the router's resolved build graph even if listed in `Cargo.lock`. Verify no Linux routes/assets in the router runtime or IPK, no Node invocation in router builds, and no Linux tasks, probes or state files on router startup. Verify Linux features resolve and start only in their intended runtime configuration. |
+
+Record raw measurements and run-to-run variance with the acceptance results.
+Investigate unexpected increases and require reviewer sign-off for any
+justified regression. Establish the baseline before setting numeric limits.
+Acceptance requires no unexplained resource regression, proven dependency
+isolation and v0.11.0 router parity.
+
+Add separate CI checks for the default and explicit
+`asuswrt` profile, and for the explicit `linux` profile with its UI feature.
+For the router, check formatting, run locked tests and Clippy, cross-build the AArch64
+musl release, verify the IPK and assert graph, asset and route isolation. The
+IPK check packages the actual cross-built executable, verifies the payload and
+checksum, and reports executable and IPK byte counts in the CI log. For
+Linux, build and check the locked Svelte frontend, run Rust and browser
+contracts, build the native Linux artifact, and run the unprivileged nginx
+smoke test against that release executable. Keep hardware resource
+measurements and native mutation acceptance as separate evidence from CI.
+Use existing manual CI rules and preserve release triggers and tag policy.
+
 The final acceptance matrix must cover:
 
-- Router: unchanged ASP/lightweight UI, APIs, package upgrades, NGINX and security integrations, no Svelte assets.
+- Router: unchanged ASP/lightweight UI, APIs, package upgrades, NGINX and security integrations, no Svelte assets, and accepted v0.11.0 resource and isolation results.
 - Linux: Svelte UI, auth sessions, system/user systemd, monitoring, native package updates, all intended Applications providers, storage/share management and necessary recovery semantics.
 - Cross-platform: correct capability discovery, tab/section composition, optional dashboard contributors, and isolation of unsupported modules.
 - Release: reproducible build artifacts, platform-specific packaging and migrations, stable versioning and safe update paths.
@@ -319,7 +457,7 @@ The final acceptance matrix must cover:
 | Risk | Mitigation |
 | --- | --- |
 | ASUS menu/ASP stops working after JS modularization | Preserve self-contained rendered body/style/script shape; regression test both standalone and ASUS embedding; test on hardware |
-| Router binaries/assets become heavier | Keep embedded renderer, no Svelte/npm in IPK, compare release sizes/RSS against baseline |
+| Router binary size, memory, CPU or startup regresses | Gate Linux code and dependencies at compile time and compare repeated v0.11.0 hardware measurements |
 | UI hides feature operations | Inventory all existing screens, command handlers, modal flows and deep links; matrix-based browser tests |
 | Platform abstraction changes firewall/NGINX semantics | Extract adapters without rewriting operations; stable API and rollback fixtures |
 | Existing config/data or upgrade break | Keep paths/schemas through M1; separate versioned rebrand migration with rollback |
@@ -338,9 +476,16 @@ The final acceptance matrix must cover:
 - [x] Phase 1 release merged/tagged under original name (v0.10.5).
 - [x] Phase 1.5: Maestro selected; original `vm75/server-man` untouched as a Phase 2 reference.
 - [x] Phase 1.5: source, UI, CLI and package rebrand with controlled migration implemented (GitHub repository rename deferred).
-- [ ] M1.5: rebrand compatibility and router deployment validated.
-- [ ] Phase 2: Svelte shell + operation registry and Linux auth.
-- [ ] Phase 2: systemd Services + monitoring + Linux package updates.
-- [ ] Phase 2: declarative coordinator/storage model, provider adapters and Applications UI.
-- [ ] Phase 2: Samba/NFS, provisioning and configuration-health integration.
+- [x] M1.5: rebrand compatibility and router deployment validated (operator confirmation).
+- [x] Phase 2 prerequisite: `asuswrt` and `linux` profiles and CI isolation checks implemented. Local AArch64 build, IPK smoke test, dependency and route isolation, and the full Rust 1.85.0 `asuswrt` test suite (322 tests) passed.
+- [x] Phase 2 AArch64 guest smoke: installed the candidate IPK with Entware in an offline Alpine/QEMU overlay. The service started in `asuswrt` mode, rendered the ASUS ASP and menu entry, served health and authenticated runtime requests, returned 404 for Linux paths, and created no workload state. The guest used lab OpenSSL and loopback settings.
+- [ ] Phase 2 router acceptance: pinned-toolchain CI and matching-hardware resource and parity measurements against v0.11.0.
+- [x] Phase 2 local Linux artifact: pinned Rust 1.85.0 `linux-ui` release built and passed the unprivileged loopback smoke test for Linux tool discovery, token API authentication, metrics and nginx.
+- [x] Phase 2 local Linux browser smoke: headless Chromium verified token sign-in, narrow-viewport navigation, lazy Applications loading, session persistence after reload and sign-out against the loopback release binary. A follow-up run against the updated debug build verified that edits invalidate the current workload preview and a blocked native Compose resource hides Apply.
+- [ ] Phase 2: Svelte shell, operation registry and Linux auth accepted. Token sessions are implemented. Administrator credentials remain pending.
+- [x] Phase 2: systemd Services + monitoring + Linux package updates implemented and tested.
+- [x] Phase 2: declarative coordinator/storage model and Quadlet provider implemented. The native Podman generator accepted the rendered rootless units in dry-run mode. Systemd lifecycle and boot persistence need native guest validation.
+- [ ] Phase 2: Applications UI and native Podman Compose, Docker Compose, libvirt and Incus acceptance.
+- [ ] Phase 2: native Samba/NFS, provisioning and configuration-health acceptance.
+- [x] Phase 2: MCP JSON-RPC protocol interface and agent tools integration.
 - [ ] Phase 2: Linux native acceptance, router parity and releases completed.

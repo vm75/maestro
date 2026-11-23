@@ -169,9 +169,21 @@ impl CommandIpSet {
         if stdin.is_some() {
             command.stdin(Stdio::piped());
         }
-        let mut child = command.spawn().map_err(|error| {
-            BackendError(format!("failed to execute {}: {error}", program.display()))
-        })?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(err) if err.raw_os_error() == Some(26) => {
+                thread::sleep(std::time::Duration::from_millis(20));
+                command.spawn().map_err(|error| {
+                    BackendError(format!("failed to execute {}: {error}", program.display()))
+                })?
+            }
+            Err(error) => {
+                return Err(BackendError(format!(
+                    "failed to execute {}: {error}",
+                    program.display()
+                )));
+            }
+        };
         let stdin_writer = if let Some(bytes) = stdin {
             let mut pipe = child
                 .stdin
@@ -816,6 +828,7 @@ exit 0
             // kernel before any execve call, preventing ETXTBSY under
             // parallel test execution on Linux.
             file.sync_all().unwrap();
+            drop(file);
         }
         #[cfg(not(unix))]
         {

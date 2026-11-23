@@ -58,6 +58,7 @@ impl AdGuardClient {
         }
 
         let client = Client::builder()
+            .no_proxy()
             .timeout(Duration::from_secs(5))
             .default_headers(headers)
             .build()?;

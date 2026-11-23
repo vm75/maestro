@@ -151,7 +151,7 @@ done
 
 printf 'Linux lab ready: %s\n' "$lab"
 printf 'Auth token is stored in %s/maestro.toml\n' "$lab"
-printf 'Start from the repository root:\n  cargo run -- --config data/linux/maestro.toml --linux-mode serve\n'
+printf 'Start from the repository root:\n  cargo run --no-default-features --features linux -- --config data/linux/maestro.toml --linux-mode serve\n'
 echo 'New configs use http://127.0.0.1:3030 and nginx port 8080. Existing files are preserved.'
 echo 'Optional feature tools: ip, ping, wg, wg-quick, dehydrated, ipset, iptables, ip6tables.'
 echo 'Configure their paths before testing those features; firewall enforcement requires an isolated VM or network namespace.'

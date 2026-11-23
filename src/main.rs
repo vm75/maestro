@@ -7,7 +7,7 @@ mod ban_attack;
 mod certificate_http;
 mod command;
 mod config;
-mod core;
+pub mod core;
 mod models;
 mod modules;
 mod nginx_ingress;
@@ -308,7 +308,7 @@ async fn serve(config: AppConfig) -> Result<()> {
             warn!(%error, "unable to render ASUS UI page; continuing with standalone listener");
         }
     } else if config.test_mode || config.platform == Platform::Asuswrt {
-        // Preserve standalone ASUS rendering in simulated and router modes.
+        // Preserve standalone ASUS rendering in simulated and asuswrt modes.
         render_ui_file(&config)?;
     }
 
@@ -321,8 +321,7 @@ async fn serve(config: AppConfig) -> Result<()> {
     state.start_certificate_renewal_loop();
     crate::certificate_http::start_reconciliation(state.clone());
 
-    let adguard_cfg = crate::api::adguard::get_effective_config(&state).await;
-    if adguard_cfg.enabled {
+    if let Some(adguard_cfg) = crate::api::adguard::enabled_config(&state).await {
         let config_clone = state.config.clone();
         tokio::spawn(async move {
             if let Ok(client) = crate::adguard::AdGuardClient::new(&adguard_cfg) {

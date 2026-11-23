@@ -96,10 +96,20 @@ impl AppConfig {
         self.paths.jffs_scripts_dir = fixture_root.join("router/scripts");
         self.paths.wireguard_conf = fixture_root.join("etc/wireguard/wg0.conf");
         self.paths.proc_stat = fixture_root.join("proc/stat");
+        self.paths.sys_root = fixture_root.join("sys");
+        self.paths.os_release = fixture_root.join("etc/os-release");
+        self.paths.package_bin_dir = fixture_root.join("bin");
+        self.paths.ostree_booted = fixture_root.join("run/ostree-booted");
+        self.paths.reboot_required = fixture_root.join("run/reboot-required");
         self.paths.proc_meminfo = fixture_root.join("proc/meminfo");
         self.paths.proc_net_dev = fixture_root.join("proc/net/dev");
         self.paths.proc_uptime = fixture_root.join("proc/uptime");
         self.paths.proc_loadavg = fixture_root.join("proc/loadavg");
+        self.paths.storage_dir = fixture_root.join("storage");
+        self.paths.applications_dir = fixture_root.join("applications");
+        self.paths.quadlet_dir = None;
+        self.paths.samba_conf = fixture_root.join("etc/samba/maestro.conf");
+        self.paths.exports_file = fixture_root.join("etc/exports.d/maestro.exports");
         self.services.init_dir = fixture_root.join("etc/init.d");
         self.services.log_dirs = vec![fixture_root.join("var/log")];
         self.nginx.root_dir = fixture_root.join("etc/nginx");
@@ -119,6 +129,10 @@ impl AppConfig {
         self.nginx.log_dir = fixture_root.join("var/log/nginx");
         self.firewall.log_dirs = vec![fixture_root.join("var/log/nginx")];
         self.commands.dehydrated = fixture_root.join("certs/dehydrated");
+        self.commands.docker = fixture_root.join("bin/docker");
+        self.commands.podman = fixture_root.join("bin/podman");
+        self.commands.incus = fixture_root.join("bin/incus");
+        self.commands.virsh = fixture_root.join("bin/virsh");
         self.certificates.certs_dir = fixture_root.join("certs");
         self.certificates.dns01_hook = fixture_root.join("certs/dehydrated-dns01-hook.sh");
         self.asus_ui.enabled = false;
@@ -154,15 +168,30 @@ impl AppConfig {
             &mut self.paths.jffs_scripts_dir,
             &mut self.paths.wireguard_conf,
             &mut self.paths.proc_stat,
+            &mut self.paths.sys_root,
+            &mut self.paths.os_release,
+            &mut self.paths.package_bin_dir,
+            &mut self.paths.ostree_booted,
+            &mut self.paths.reboot_required,
             &mut self.paths.proc_meminfo,
             &mut self.paths.proc_net_dev,
             &mut self.paths.proc_uptime,
             &mut self.paths.proc_loadavg,
+            &mut self.paths.storage_dir,
+            &mut self.paths.applications_dir,
+            &mut self.paths.samba_conf,
+            &mut self.paths.exports_file,
             &mut self.commands.mount,
             &mut self.commands.tar,
             &mut self.commands.umount,
             &mut self.commands.nginx,
             &mut self.commands.service,
+            &mut self.commands.systemctl,
+            &mut self.commands.journalctl,
+            &mut self.commands.docker,
+            &mut self.commands.podman,
+            &mut self.commands.incus,
+            &mut self.commands.virsh,
             &mut self.commands.ipset,
             &mut self.commands.iptables,
             &mut self.commands.ip6tables,
@@ -192,6 +221,9 @@ impl AppConfig {
             &mut self.certificates.dns01_hook,
         ] {
             resolve(path);
+        }
+        if let Some(directory) = &mut self.paths.quadlet_dir {
+            resolve(directory);
         }
         if let Some(hook) = &mut self.commands.dehydrated_dns01_hook {
             resolve(hook);
@@ -405,10 +437,20 @@ pub struct PathsConfig {
     pub jffs_scripts_dir: PathBuf,
     pub wireguard_conf: PathBuf,
     pub proc_stat: PathBuf,
+    pub sys_root: PathBuf,
+    pub os_release: PathBuf,
+    pub package_bin_dir: PathBuf,
+    pub ostree_booted: PathBuf,
+    pub reboot_required: PathBuf,
     pub proc_meminfo: PathBuf,
     pub proc_net_dev: PathBuf,
     pub proc_uptime: PathBuf,
     pub proc_loadavg: PathBuf,
+    pub storage_dir: PathBuf,
+    pub applications_dir: PathBuf,
+    pub quadlet_dir: Option<PathBuf>,
+    pub samba_conf: PathBuf,
+    pub exports_file: PathBuf,
 }
 
 impl Default for PathsConfig {
@@ -422,10 +464,20 @@ impl Default for PathsConfig {
             jffs_scripts_dir: "/jffs/scripts".into(),
             wireguard_conf: "/opt/etc/wireguard/wg0.conf".into(),
             proc_stat: "/proc/stat".into(),
+            sys_root: "/sys".into(),
+            os_release: "/etc/os-release".into(),
+            package_bin_dir: "/usr/bin".into(),
+            ostree_booted: "/run/ostree-booted".into(),
+            reboot_required: "/run/reboot-required".into(),
             proc_meminfo: "/proc/meminfo".into(),
             proc_net_dev: "/proc/net/dev".into(),
             proc_uptime: "/proc/uptime".into(),
             proc_loadavg: "/proc/loadavg".into(),
+            storage_dir: "/opt/var/lib/maestro/storage".into(),
+            applications_dir: "/opt/var/lib/maestro/applications".into(),
+            quadlet_dir: None,
+            samba_conf: "/etc/samba/smb.conf.d/maestro.conf".into(),
+            exports_file: "/etc/exports.d/maestro.exports".into(),
         }
     }
 }
@@ -438,6 +490,12 @@ pub struct CommandsConfig {
     pub umount: PathBuf,
     pub nginx: PathBuf,
     pub service: PathBuf,
+    pub systemctl: PathBuf,
+    pub journalctl: PathBuf,
+    pub docker: PathBuf,
+    pub podman: PathBuf,
+    pub incus: PathBuf,
+    pub virsh: PathBuf,
     pub ipset: PathBuf,
     pub iptables: PathBuf,
     pub ip6tables: PathBuf,
@@ -461,6 +519,12 @@ impl Default for CommandsConfig {
             umount: "/bin/umount".into(),
             nginx: "/opt/sbin/nginx".into(),
             service: "/sbin/service".into(),
+            systemctl: "/usr/bin/systemctl".into(),
+            journalctl: "/usr/bin/journalctl".into(),
+            docker: "/usr/bin/docker".into(),
+            podman: "/usr/bin/podman".into(),
+            incus: "/usr/bin/incus".into(),
+            virsh: "/usr/bin/virsh".into(),
             ipset: "/opt/sbin/ipset".into(),
             iptables: "/usr/sbin/iptables".into(),
             ip6tables: "/usr/sbin/ip6tables".into(),
@@ -502,6 +566,8 @@ impl Default for AsusUiConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ServicesConfig {
+    pub systemd_system_write_units: Vec<String>,
+    pub systemd_user_write_units: Vec<String>,
     pub init_dir: PathBuf,
     pub log_dirs: Vec<PathBuf>,
     pub status_timeout_seconds: u64,
@@ -512,6 +578,8 @@ pub struct ServicesConfig {
 impl Default for ServicesConfig {
     fn default() -> Self {
         Self {
+            systemd_system_write_units: vec![],
+            systemd_user_write_units: vec![],
             init_dir: "/opt/etc/init.d".into(),
             log_dirs: vec!["/opt/var/log".into(), "/tmp".into()],
             status_timeout_seconds: 5,
@@ -709,12 +777,16 @@ impl Default for AdGuardConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SystemConfig {
+    pub allow_package_writes: bool,
+    pub allow_workload_writes: bool,
     pub wan_interface: String,
 }
 
 impl Default for SystemConfig {
     fn default() -> Self {
         Self {
+            allow_package_writes: false,
+            allow_workload_writes: false,
             wan_interface: "eth0".into(),
         }
     }

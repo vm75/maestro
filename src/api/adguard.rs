@@ -283,13 +283,29 @@ pub async fn update_hosts(
     Ok(Json(entries))
 }
 
-pub async fn get_effective_config(state: &AppState) -> AdGuardConfig {
-    let mut config = if let Some(saved) = &*state.stores.adguard.read().await {
-        saved.clone()
-    } else {
-        state.config.adguard.clone()
-    };
+async fn configured(state: &AppState) -> AdGuardConfig {
+    state
+        .stores
+        .adguard
+        .read()
+        .await
+        .clone()
+        .unwrap_or_else(|| state.config.adguard.clone())
+}
 
+pub async fn get_effective_config(state: &AppState) -> AdGuardConfig {
+    resolve_lan_ip(state, configured(state).await).await
+}
+
+pub(crate) async fn enabled_config(state: &AppState) -> Option<AdGuardConfig> {
+    let config = configured(state).await;
+    if !config.enabled {
+        return None;
+    }
+    Some(resolve_lan_ip(state, config).await)
+}
+
+async fn resolve_lan_ip(state: &AppState, mut config: AdGuardConfig) -> AdGuardConfig {
     // Native Linux has no Asuswrt NVRAM; its LAN IP must be configured explicitly.
     if state.config.platform == crate::config::Platform::Asuswrt
         && (config.lan_ip.is_empty() || config.lan_ip == "192.168.1.1")

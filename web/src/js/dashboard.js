@@ -48,7 +48,7 @@
         const modeEl = document.getElementById('rh-mode');
         if (modeEl) {
           modeEl.textContent = info.test_mode ? 'x64 test mode' :
-            info.platform === 'linux' ? 'Linux mode' : 'Asuswrt-Merlin mode';
+            info.platform === 'linux' ? 'linux' : 'asuswrt';
           modeEl.style.display = 'inline-flex';
         }
       } catch (_) { /* Widget failures do not block the dashboard shell. */ }
