@@ -996,7 +996,11 @@ pub async fn execute_tool(
                     (job.tool.starts_with("services_")
                         || job.tool.starts_with("updates_")
                         || job.tool.starts_with("workloads_")
-                        || job.tool == "applications_action")
+                        || matches!(job.tool.as_str(),
+                            "applications_action"
+                            | "packages_install"
+                            | "dependencies_install"
+                            | "managed_resource_save"))
                         && job.state == crate::core::jobs::JobState::Running
                 }) {
                     return (
