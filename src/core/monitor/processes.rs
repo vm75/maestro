@@ -1,5 +1,5 @@
 use std::os::unix::fs::OpenOptionsExt;
-use std::{collections::BTreeMap, fs, io::Read, path::Path, time::Duration};
+use std::{collections::BTreeMap, fs, io::Read, path::Path};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -27,7 +27,6 @@ struct Counter {
 pub(super) struct Counters {
     rows: BTreeMap<u32, Counter>,
     limited: bool,
-    ticks_per_second: u64,
 }
 
 #[derive(Default, Deserialize)]
@@ -52,7 +51,6 @@ impl Counters {
     pub(super) fn read(proc_root: &Path) -> Option<Self> {
         let entries = fs::read_dir(proc_root).ok()?;
         let page_size = sysconf(libc::_SC_PAGESIZE)?;
-        let ticks_per_second = sysconf(libc::_SC_CLK_TCK)?;
         let mut rows = BTreeMap::new();
         let mut scanned = 0;
         let mut limited = false;
@@ -92,7 +90,6 @@ impl Counters {
         Some(Self {
             rows,
             limited,
-            ticks_per_second,
         })
     }
 
@@ -104,8 +101,10 @@ impl Counters {
         self.limited
     }
 
-    pub(super) fn calculate(&mut self, previous: &Self, elapsed: Duration) {
-        if elapsed.is_zero() || self.ticks_per_second != previous.ticks_per_second {
+    // Match the reference sampler: use aggregate CPU jiffies rather than
+    // assuming a fixed USER_HZ, and cap a process at the sampled core capacity.
+    pub(super) fn calculate(&mut self, previous: &Self, cpu_ticks: u64, cores: usize) {
+        if cpu_ticks == 0 {
             return;
         }
         for (pid, row) in &mut self.rows {
@@ -115,7 +114,8 @@ impl Counters {
                 .filter(|old| old.start == row.start)
                 .and_then(|old| row.ticks.checked_sub(old.ticks))
                 .map(|delta| {
-                    100.0 * delta as f64 / self.ticks_per_second as f64 / elapsed.as_secs_f64()
+                    let capacity = 100.0 * cores as f64;
+                    (capacity * delta as f64 / cpu_ticks as f64).min(capacity)
                 });
         }
     }
@@ -209,11 +209,10 @@ mod tests {
         let counters = |row| Counters {
             rows: BTreeMap::from([(42, row)]),
             limited: false,
-            ticks_per_second: 100,
         };
         let previous = counters(row("hello) world", 10, 1));
         let mut same = counters(row("hello) world", 210, 1));
-        same.calculate(&previous, Duration::from_secs(1));
+        same.calculate(&previous, 400, 4);
         let data = list(Some(&same), Some(Utc::now()), Sort::Cpu, "WORLD", 1);
         assert_eq!(data.matched, 1);
         assert_eq!(data.processes[0].name, "hello) world");
@@ -222,7 +221,16 @@ mod tests {
         assert_eq!(data.processes[0].nice, -2);
         assert_eq!(data.processes[0].threads, 3);
         let mut reused = counters(row("new process", 210, 2));
-        reused.calculate(&previous, Duration::from_secs(1));
+        reused.calculate(&previous, 400, 4);
         assert_eq!(reused.rows[&42].process.cpu, None);
+        let mut excessive = counters(row("busy", 1010, 1));
+        excessive.calculate(&previous, 400, 4);
+        assert_eq!(excessive.rows[&42].process.cpu, Some(400.0));
+        let mut reset = counters(row("reset", 1, 1));
+        reset.calculate(&previous, 400, 4);
+        assert_eq!(reset.rows[&42].process.cpu, None);
+        let mut missing = counters(row("missing aggregate", 210, 1));
+        missing.calculate(&previous, 0, 4);
+        assert_eq!(missing.rows[&42].process.cpu, None);
     }
 }

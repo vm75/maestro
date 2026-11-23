@@ -265,7 +265,7 @@ impl Samples {
                     .cpu
                     .iter()
                     .find(|old| old.name == cpu.name)
-                    .and_then(|old| cpu_delta(old, cpu))
+                    .and_then(|old| cpu_delta(old, cpu).map(|(usage, _)| usage))
             })
         };
         let cpu = Cpu {
@@ -284,6 +284,12 @@ impl Samples {
                 })
                 .collect(),
         };
+        let aggregate_ticks = previous.and_then(|(_, old)| {
+            let old = old.cpu.iter().find(|cpu| cpu.name == "cpu")?;
+            let current = usage.cpu.iter().find(|cpu| cpu.name == "cpu")?;
+            cpu_delta(old, current).map(|(_, total)| total)
+        });
+        let core_count = cpu.cores.len();
         let memory = usage.memory.clone();
         let networks: Vec<_> = usage
             .network
@@ -346,9 +352,11 @@ impl Samples {
             history: std::mem::take(history),
             last_error: None,
         };
-        if let (Some(current), Some((sampled, previous))) = (&mut usage.processes, previous) {
+        if let (Some(current), Some((_, previous)), Some(ticks)) =
+            (&mut usage.processes, previous, aggregate_ticks)
+        {
             if let Some(previous) = &previous.processes {
-                current.calculate(previous, now.saturating_duration_since(*sampled));
+                current.calculate(previous, ticks, core_count);
             }
         }
         self.previous = Some((now, usage));
@@ -364,7 +372,7 @@ fn aggregate_rate(networks: &[Network], select: fn(&Network) -> Option<f64>) -> 
     total
 }
 
-fn cpu_delta(old: &CpuStat, current: &CpuStat) -> Option<f64> {
+fn cpu_delta(old: &CpuStat, current: &CpuStat) -> Option<(f64, u64)> {
     let counters = |cpu: &CpuStat| {
         [
             cpu.idle,
@@ -386,7 +394,7 @@ fn cpu_delta(old: &CpuStat, current: &CpuStat) -> Option<f64> {
     let idle = deltas.next()??.checked_add(deltas.next()?.unwrap_or(0))?;
     let active = deltas.try_fold(0_u64, |total, delta| total.checked_add(delta?))?;
     let total = idle.checked_add(active)?;
-    (total != 0).then(|| 100.0 * active as f64 / total as f64)
+    (total != 0).then(|| (100.0 * active as f64 / total as f64, total))
 }
 
 #[cfg(test)]
@@ -444,7 +452,7 @@ mod tests {
             iowait: 10,
             ..CpuStat::default()
         };
-        assert_eq!(cpu_delta(&old, &current), Some(50.0));
+        assert_eq!(cpu_delta(&old, &current), Some((50.0, 40)));
         current.user = 99;
         assert_eq!(cpu_delta(&old, &current), None);
     }

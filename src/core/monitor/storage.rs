@@ -54,7 +54,7 @@ impl Storage {
                 .push("Disk activity counters are unavailable.");
         }
         if let Some(table) = read_text(&proc_root.join("self/mountinfo"), MAX_TABLE) {
-            for mut disk in mounts(&table).into_iter().take(32) {
+            for mut disk in mounts(&table) {
                 let Ok(stat) = rustix::fs::statvfs(&disk.mount) else {
                     if !result
                         .warnings
@@ -73,6 +73,9 @@ impl Storage {
                     .saturating_mul(stat.f_frsize);
                 disk.available = stat.f_bavail.saturating_mul(stat.f_frsize);
                 result.disks.push(disk);
+                if result.disks.len() == 32 {
+                    break;
+                }
             }
         } else {
             result.warnings.push("Mounted filesystems are unavailable.");
@@ -119,7 +122,10 @@ fn disk_counters(table: &str, sys_root: &Path) -> BTreeMap<String, (u64, u64)> {
         .lines()
         .filter_map(|line| {
             let fields: Vec<_> = line.split_whitespace().collect();
-            let name = *fields.get(2)?;
+            if fields.len() < 14 {
+                return None;
+            }
+            let name = fields[2];
             if name.starts_with("loop")
                 || name.starts_with("ram")
                 || !name
@@ -151,16 +157,17 @@ fn mounts(table: &str) -> Vec<Disk> {
             continue;
         }
         let fields: Vec<_> = left.split_whitespace().collect();
-        let (Some(device_id), Some(mount)) = (fields.get(2), fields.get(4)) else {
+        if fields.len() < 6 {
             continue;
-        };
+        }
+        let (device_id, mount) = (&fields[2], &fields[4]);
         let mount = unescape(mount);
         if !Path::new(&mount).is_absolute() {
             continue;
         }
         let key = (*device_id, filesystem);
         if by_device.get(&key).is_some_and(|old| {
-            (old.mount.len(), old.mount.as_str()) <= (mount.len(), mount.as_str())
+            old.mount.len() <= mount.len()
         }) {
             continue;
         }
@@ -234,19 +241,25 @@ mod tests {
         );
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].mount, "/disk one");
+        let equal = mounts(
+            "1 0 8:1 / /zzz rw - ext4 /dev/sda1 rw\n\
+             2 0 8:1 / /aaa rw - ext4 /dev/sda1 rw",
+        );
+        assert_eq!(equal[0].mount, "/zzz");
     }
 
     #[test]
     fn disk_rates_drop_resets_and_ignore_partitions() {
         let sys = tempfile::tempdir().unwrap();
         fs::create_dir_all(sys.path().join("block/sda")).unwrap();
+        assert!(disk_counters("8 0 sda 1 1 10 1 1 1 20", sys.path()).is_empty());
         let old = Storage {
-            counters: disk_counters("8 0 sda 1 1 10 1 1 1 20", sys.path()),
+            counters: disk_counters("8 0 sda 1 1 10 1 1 1 20 0 0 0 0", sys.path()),
             ..Storage::default()
         };
         let new = Storage {
             counters: disk_counters(
-                "8 0 sda 1 1 14 1 1 1 10\n8 1 sda1 1 1 14 1 1 1 10",
+                "8 0 sda 1 1 14 1 1 1 10 0 0 0 0\n8 1 sda1 1 1 14 1 1 1 10 0 0 0 0",
                 sys.path(),
             ),
             ..Storage::default()

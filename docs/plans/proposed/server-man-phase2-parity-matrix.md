@@ -813,3 +813,15 @@ Ported Server Man's read-only effective Samba configuration, connection-count, N
 ### Source-guided managed lifecycle API increment
 
 Exposed the reference's individual start, stop, restart and scoped log tool contracts through the existing tracked-job/provider path, retaining compatibility with the prior application API. Stop and restart require affirmative confirmation; managed IDs and argument shape are validated. Quadlet logs return the actual bounded reader's truncation flag and source, and the UI uses the reference contracts. Added HTTP/MCP contract fixtures. Native ownership gates remain unchanged. Enable/disable are not yet ported: the reference requires boot-only changes without altering runtime identity, which needs separate fingerprints and native verification. Build and native acceptance remain pending.
+
+
+### Source-guided process CPU and disk sampling increment
+
+Ported the frozen monitor sampler's aggregate-jiffy process CPU calculation,
+including capacity capping and unknown results for missing/reset counters or
+reused PIDs. Disk sampling now rejects incomplete diskstats records, retains
+first-seen equal-length mount aliases and counts successful filesystem reads
+rather than failed probes against the 32-filesystem limit. Existing bounded
+reads and device-name safeguards remain in place. Added source regression
+fixtures. Rust formatting, compilation, fixture execution and native validation
+are pending; no acceptance state is advanced.
