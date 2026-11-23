@@ -25,7 +25,7 @@ struct Manager {
     program: PathBuf,
 }
 
-fn trusted_executable(path: &Path) -> Result<PathBuf> {
+pub(super) fn trusted_executable(path: &Path) -> Result<PathBuf> {
     // Native managers and their symlinks must ultimately resolve inside the
     // root-controlled system binary directories, never a caller's search path.
     let canonical = fs::canonicalize(path).context("native package executable unavailable")?;
