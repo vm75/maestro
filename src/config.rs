@@ -778,6 +778,7 @@ impl Default for AdGuardConfig {
 #[serde(default)]
 pub struct SystemConfig {
     pub allow_package_writes: bool,
+    pub allow_share_writes: bool,
     pub allow_workload_writes: bool,
     pub wan_interface: String,
 }
@@ -786,6 +787,7 @@ impl Default for SystemConfig {
     fn default() -> Self {
         Self {
             allow_package_writes: false,
+            allow_share_writes: false,
             allow_workload_writes: false,
             wan_interface: "eth0".into(),
         }

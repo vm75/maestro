@@ -58,11 +58,12 @@ enum Tool {
     ApplicationsAction,
     ApplicationsLogs,
     SharesList,
+    SharesSambaPassword,
     SharesStatus,
 }
 
 impl Tool {
-    const ALL: [Self; 34] = [
+    const ALL: [Self; 35] = [
         Self::Status,
         Self::Capabilities,
         Self::JobsList,
@@ -96,6 +97,7 @@ impl Tool {
         Self::ApplicationsAction,
         Self::ApplicationsLogs,
         Self::SharesList,
+        Self::SharesSambaPassword,
         Self::SharesStatus,
     ];
 
@@ -262,6 +264,11 @@ impl Tool {
                 "Network shares inventory",
                 "List configured Samba and NFS shares.",
             ),
+            Self::SharesSambaPassword => (
+                "shares_samba_password",
+                "Set Samba password",
+                "Set the trusted workload account's Samba password through the restricted optional helper.",
+            ),
             Self::SharesStatus => (
                 "shares_status",
                 "Shares service status",
@@ -408,7 +415,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                 | Tool::ApplicationsList
                 | Tool::ApplicationsAction
                 | Tool::ApplicationsLogs => "workloads",
-                Tool::SharesList | Tool::SharesStatus => "shares",
+                Tool::SharesList | Tool::SharesSambaPassword | Tool::SharesStatus => "shares",
                 _ => "system",
             };
             let read_only = !matches!(
@@ -421,6 +428,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     | Tool::PackagesInstall
                     | Tool::DependenciesInstall
                     | Tool::ManagedResourceSave
+                    | Tool::SharesSambaPassword
             );
             let input_schema = match tool {
                 Tool::JobsGet | Tool::JobsCancel => json!({
@@ -454,6 +462,15 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                         "additionalProperties":false
                     })
                 },
+                Tool::SharesSambaPassword => json!({
+                    "type": "object",
+                    "properties": {
+                        "password": {"type":"string", "minLength":1, "maxLength":256},
+                        "confirm": {"const":true}
+                    },
+                    "required": ["password","confirm"],
+                    "additionalProperties":false
+                }),
                 Tool::ManagedConfigValidate => json!({
                     "type": "object",
                     "properties": {
@@ -593,7 +610,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     tool,
                     Tool::WorkloadsApply | Tool::WorkloadsResume | Tool::WorkloadsRevert
                         | Tool::ApplicationsAction | Tool::PackagesInstall | Tool::DependenciesInstall
-                        | Tool::ManagedResourceSave
+                        | Tool::ManagedResourceSave | Tool::SharesSambaPassword
                 ),
                 "inputSchema": input_schema
             })
@@ -645,6 +662,8 @@ async fn permissions(state: &AppState) -> Value {
         && state.config.services.systemd_system_write_units
             .iter().any(|unit| systemd::permits(state, systemd::Scope::System, unit) && helper.permits_unit(unit));
     let package_policy = state.config.system.allow_package_writes;
+    let samba_password_policy = state.config.system.allow_share_writes;
+    let samba_password_ready = samba_password_policy && helper.permits_samba_password();
     let package_ready = package_policy && package_updates::available(state) && helper.permits_packages();
     let package_reason = if !package_policy {
         "Package writes are disabled in Maestro configuration."
@@ -669,6 +688,17 @@ async fn permissions(state: &AppState) -> Value {
             "status": if package_ready { "ready" } else { "unavailable" },
             "code": if package_ready { "ready" } else if !package_policy { "writes_disabled" } else { "helper_unavailable" },
             "reason": package_reason
+        },
+        "sambaPassword": {
+            "status": if samba_password_ready { "ready" } else { "unavailable" },
+            "code": if samba_password_ready { "ready" } else if !samba_password_policy { "writes_disabled" } else { "helper_unavailable" },
+            "reason": if !samba_password_policy {
+                "Samba password writes are disabled by Maestro policy."
+            } else if !helper.permits_samba_password() {
+                "An authorized helper with explicit root-owned samba_password policy is required."
+            } else {
+                "Samba password update for the trusted workload account is authorized."
+            }
         }
     })
 }
@@ -1166,6 +1196,42 @@ pub async fn execute_tool(
         }
 
         "updates_status" => (StatusCode::OK, json!(package_updates::status(state).await)),
+
+        "shares_samba_password" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct PasswordArgs {
+                password: String,
+                confirm: bool,
+            }
+            let Ok(input) = serde_json::from_value::<PasswordArgs>(Value::Object(arguments)) else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Expected a Samba password and confirm=true; no username may be selected."),
+                );
+            };
+            if !input.confirm || input.password.len() > 256 || input.password.trim().is_empty()
+                || input.password.contains(['\0', '\r', '\n'])
+            {
+                return (StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Invalid Samba password or missing confirmation."));
+            }
+            if !state.config.system.allow_share_writes {
+                return (StatusCode::FORBIDDEN,
+                    json_err("writes_disabled", "Samba password changes are disabled by administrator policy."));
+            }
+            if !admin::probe().await.permits_samba_password() {
+                return (StatusCode::SERVICE_UNAVAILABLE,
+                    json_err("helper_unavailable", "Samba password changes require an authorized optional helper and root-owned policy."));
+            }
+            // Never place secrets in durable Jobs, audit, tracing fields, logs or
+            // tool result content. The helper uses its authenticated caller UID.
+            match admin::samba_password(input.password).await {
+                Ok(()) => (StatusCode::OK, json!({"status":"Samba password updated"})),
+                Err(_) => (StatusCode::SERVICE_UNAVAILABLE,
+                    json_err("operation_failed", "Samba password update could not be completed. Check the helper and native Samba account.")),
+            }
+        }
 
         "managed_resource_plan" | "managed_resource_save" => {
             let apply = name == "managed_resource_save";

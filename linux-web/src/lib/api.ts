@@ -23,7 +23,7 @@ export interface HelperPermission { status: 'ready' | 'unavailable' | 'unknown';
 export interface Discovery {
   tools: Tool[]
   modules: Module[]
-  permissions?: { helper: HelperPermission; systemServices: { status: string; reason: string }; packageWrites: { status: string; code: string; reason: string } }
+  permissions?: { helper: HelperPermission; systemServices: { status: string; reason: string }; packageWrites: { status: string; code: string; reason: string }; sambaPassword?: { status: string; code: string; reason: string } }
 }
 
 export class ApiError extends Error {

@@ -180,7 +180,7 @@ if [[ "$helper_mode" == install ]]; then
   policy=/etc/maestro/admin-policy.json
   if [[ ! -e "$policy" ]]; then
     staged_policy=$(mktemp /etc/maestro/.maestro-policy.XXXXXX)
-    printf '{"version":1,"workload_uid":%s,"system_units":[],"package_writes":false}\n' "$uid" > "$staged_policy"
+    printf '{"version":1,"workload_uid":%s,"system_units":[],"package_writes":false,"samba_password":false}\n' "$uid" > "$staged_policy"
     chmod 0600 "$staged_policy"
     mv -n -- "$staged_policy" "$policy"
   fi
