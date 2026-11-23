@@ -38,6 +38,7 @@ enum Tool {
     UpdatesStatus,
     PackagesInstall,
     DependenciesInstall,
+    BackupInventory,
     WorkloadsGet,
     WorkloadsPlan,
     WorkloadsApply,
@@ -53,7 +54,7 @@ enum Tool {
 }
 
 impl Tool {
-    const ALL: [Self; 25] = [
+    const ALL: [Self; 26] = [
         Self::Status,
         Self::Capabilities,
         Self::JobsList,
@@ -67,6 +68,7 @@ impl Tool {
         Self::UpdatesStatus,
         Self::PackagesInstall,
         Self::DependenciesInstall,
+        Self::BackupInventory,
         Self::WorkloadsGet,
         Self::WorkloadsPlan,
         Self::WorkloadsApply,
@@ -143,6 +145,11 @@ impl Tool {
                 "dependencies_install",
                 "Install backend dependencies",
                 "Install a fixed set of supported native packages for a selected backend.",
+            ),
+            Self::BackupInventory => (
+                "managed_backup_inventory",
+                "Review backup inputs",
+                "Read bounded private source metadata and native prerequisites; not a restorable backup.",
             ),
             Self::WorkloadsGet => (
                 "workloads_get",
@@ -326,7 +333,8 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                 Tool::ServicesList | Tool::ServicesDetails | Tool::ServicesLogs => "systemd",
                 Tool::MonitorSnapshot | Tool::MonitorProcesses => "monitor",
                 Tool::UpdatesStatus | Tool::PackagesInstall | Tool::DependenciesInstall => "updates",
-                Tool::WorkloadsGet
+                Tool::BackupInventory
+                | Tool::WorkloadsGet
                 | Tool::WorkloadsPlan
                 | Tool::WorkloadsApply
                 | Tool::WorkloadsHistory
@@ -811,6 +819,7 @@ pub async fn execute_tool(
             | "monitor_snapshot"
             | "updates_status"
             | "workloads_get"
+            | "managed_backup_inventory"
             | "workloads_history"
             | "applications_list"
             | "shares_list"
@@ -1044,6 +1053,22 @@ pub async fn execute_tool(
         }
 
         "updates_status" => (StatusCode::OK, json!(package_updates::status(state).await)),
+
+        "managed_backup_inventory" => {
+            // A read-only metadata inventory must never perform any host
+            // mutation or claim the result can be restored.
+            let root = state.config.paths.data_dir.join("workloads");
+            match crate::core::declarative::backup_inventory::inventory(
+                store, &root, &state.config.paths.storage_dir,
+            ) {
+                Ok(snapshot) => (StatusCode::OK, json!(snapshot)),
+                Err(_) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err("backup_inventory_unavailable",
+                        "Backup inventory is unavailable; check authoritative YAML and account-readable input metadata."),
+                ),
+            }
+        }
 
         "workloads_get" => match store.read() {
             Ok(Some(snap)) => (
