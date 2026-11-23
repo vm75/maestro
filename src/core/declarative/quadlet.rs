@@ -1,5 +1,7 @@
 mod provider;
+mod runtime;
 pub use provider::QuadletProvider;
+pub use runtime::ContainerMemberStatus;
 mod publication;
 pub use publication::QuadletArtifacts;
 use std::{collections::BTreeMap, fmt::Write, path::Path};

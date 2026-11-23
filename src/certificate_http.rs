@@ -1525,7 +1525,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let mut config = AppConfig::default();
         config
-            .apply_test_mode(&temp.path().join("test-fixtures/etc/maestro/maestro.toml"))
+            .apply_test_mode(&temp.path().join("test-fixtures/etc/maestro/maestro.yaml"))
             .unwrap();
         config.ensure_directories().unwrap();
         let commands = temp.path().join("commands");

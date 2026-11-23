@@ -38,6 +38,17 @@
   let needsAuth = $state(false)
   let error = $state('')
   let token = $state('')
+  let username = $state('')
+  let password = $state('')
+  let adminConfigured = $state(false)
+  let setupAvailable = $state(false)
+  let setupMode = $state(false)
+
+  async function authMode() {
+    const mode = await request<{adminConfigured: boolean; setupAvailable?: boolean}>('/api/auth/mode')
+    adminConfigured = mode.adminConfigured
+    setupAvailable = mode.setupAvailable ?? false
+  }
 
   function signedOut() {
     status = null
@@ -71,7 +82,13 @@
     loading = true
     error = ''
     try {
-      await request('/api/session', { method: 'POST', body: JSON.stringify({ token }) })
+      await request(setupMode ? '/api/auth/setup' : '/api/session', {
+        method: 'POST', body: JSON.stringify(setupMode ? {token, username, password}
+          : adminConfigured ? {username, password} : {token})
+      })
+      password = ''
+      setupMode = false
+      await authMode()
       token = ''
       await connect()
     } catch (failure) {
@@ -99,7 +116,7 @@
     select()
     window.addEventListener('hashchange', select)
     window.addEventListener('server-man:unauthorized', signedOut)
-    void connect()
+    void authMode().then(connect).catch(failure => { error = message(failure); loading = false })
     return () => {
       window.removeEventListener('hashchange', select)
       window.removeEventListener('server-man:unauthorized', signedOut)
@@ -111,9 +128,20 @@
   <main class="login-screen">
     <form class="panel login-panel" onsubmit={signIn}>
       <img src="/maestro.svg" alt="" width="42" height="42">
-      <h1>Sign in to Maestro</h1>
-      <label for="token">Access token</label>
-      <input id="token" type="password" autocomplete="current-password" bind:value={token} required>
+      <h1>{setupMode ? 'Create administrator' : 'Sign in to Maestro'}</h1>
+      {#if !adminConfigured}
+        <label for="token">{setupMode ? 'Bootstrap access token' : 'Access token'}</label>
+        <input id="token" type="password" autocomplete="off" bind:value={token} required>
+      {/if}
+      {#if adminConfigured || setupMode}
+        <label for="username">Username</label>
+        <input id="username" autocomplete="username" maxlength="64" bind:value={username} required>
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete={setupMode ? 'new-password' : 'current-password'} minlength={setupMode ? 12 : undefined} maxlength="256" bind:value={password} required>
+      {/if}
+      {#if setupAvailable && !adminConfigured}
+        <label><input type="checkbox" bind:checked={setupMode} disabled={loading}> Create an administrator with this bootstrap token</label>
+      {/if}
       {#if error}<p role="alert">{error}</p>{/if}
       <button type="submit" disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}</button>
     </form>

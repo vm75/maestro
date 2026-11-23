@@ -1,6 +1,6 @@
 //! Read-only, bounded inventory for partial (NON-RESTORABLE) Linux capture.
- //! This is not a backup/capture/verification implementation. It never opens
- //! private file contents, follows links or changes native workloads.
+//! This is not a backup/capture/verification implementation. It never opens
+//! private file contents, follows links or changes native workloads.
 use std::{
     fs,
     os::unix::fs::{MetadataExt, PermissionsExt},
@@ -88,17 +88,28 @@ fn issue(
 
 impl BackupInventory {
     fn input(&mut self, input: BackupInput) -> Result<()> {
-        ensure!(self.inputs.len() + self.requirements.len() < MAX_ENTRIES,
-            "backup input inventory exceeds its bounded entry limit");
+        ensure!(
+            self.inputs.len() + self.requirements.len() < MAX_ENTRIES,
+            "backup input inventory exceeds its bounded entry limit"
+        );
         self.inputs.push(input);
         Ok(())
     }
 
-    fn requirement(&mut self, resource: &str, kind: &'static str, description: &'static str) -> Result<()> {
-        ensure!(self.inputs.len() + self.requirements.len() < MAX_ENTRIES,
-            "backup requirements exceed their bounded entry limit");
+    fn requirement(
+        &mut self,
+        resource: &str,
+        kind: &'static str,
+        description: &'static str,
+    ) -> Result<()> {
+        ensure!(
+            self.inputs.len() + self.requirements.len() < MAX_ENTRIES,
+            "backup requirements exceed their bounded entry limit"
+        );
         self.requirements.push(Requirement {
-            resource: resource.to_owned(), kind, description,
+            resource: resource.to_owned(),
+            kind,
+            description,
         });
         Ok(())
     }
@@ -109,9 +120,13 @@ impl BackupInventory {
     fn inspect_path(&mut self, input: &mut BackupInput, path: &Path, directory: bool) {
         if !path.is_absolute() {
             input.inspection = "unavailable";
-            self.issues.push(issue(&input.id, "path", "backup_path_invalid",
+            self.issues.push(issue(
+                &input.id,
+                "path",
+                "backup_path_invalid",
                 "An absolute, validated path is required.",
-                "Review the resource path before capture."));
+                "Review the resource path before capture.",
+            ));
             return;
         }
         let mut current = PathBuf::new();
@@ -120,29 +135,49 @@ impl BackupInventory {
             match fs::symlink_metadata(&current) {
                 Ok(meta) if meta.file_type().is_symlink() => {
                     input.inspection = "unverified_symlink";
-                    self.issues.push(issue(&input.id, "path", "backup_symlink",
+                    self.issues.push(issue(
+                        &input.id,
+                        "path",
+                        "backup_symlink",
                         "A backup input path contains a symlink.",
-                        "Use real directories and review the intended file separately."));
+                        "Use real directories and review the intended file separately.",
+                    ));
                     return;
                 }
                 Ok(_) => {}
                 Err(_) => {
                     input.inspection = "unavailable";
-                    self.issues.push(issue(&input.id, "path", "backup_path_unavailable",
+                    self.issues.push(issue(
+                        &input.id,
+                        "path",
+                        "backup_path_unavailable",
                         "Backup input cannot be inspected with ordinary account permissions.",
-                        "Restore the expected path and appropriate read access."));
+                        "Restore the expected path and appropriate read access.",
+                    ));
                     return;
                 }
             }
         }
         match fs::symlink_metadata(path) {
-            Ok(meta) if if directory { meta.is_dir() } else { meta.is_file() } => {
+            Ok(meta)
+                if if directory {
+                    meta.is_dir()
+                } else {
+                    meta.is_file()
+                } =>
+            {
                 let mode = meta.permissions().mode();
-                if input.sensitive && (meta.uid() != unsafe { libc::geteuid() } || mode & 0o077 != 0) {
+                if input.sensitive
+                    && (meta.uid() != unsafe { libc::geteuid() } || mode & 0o077 != 0)
+                {
                     input.inspection = "unsafe_permissions";
-                    self.issues.push(issue(&input.id, "path", "backup_private_permissions",
+                    self.issues.push(issue(
+                        &input.id,
+                        "path",
+                        "backup_private_permissions",
                         "A sensitive input has unexpected ownership or permissions.",
-                        "Restrict the private input to the workload account."));
+                        "Restrict the private input to the workload account.",
+                    ));
                 } else {
                     input.inspection = "metadata_only";
                     if meta.is_file() {
@@ -153,9 +188,13 @@ impl BackupInventory {
             }
             _ => {
                 input.inspection = "wrong_type";
-                self.issues.push(issue(&input.id, "path", "backup_path_type",
+                self.issues.push(issue(
+                    &input.id,
+                    "path",
+                    "backup_path_type",
                     "Backup input is not the expected file or directory.",
-                    "Restore a correctly typed path before attempting capture."));
+                    "Restore a correctly typed path before attempting capture.",
+                ));
             }
         }
     }
@@ -174,11 +213,19 @@ fn inventory_inputs(
         } else {
             storage_root.join(&storage.path)
         };
-        let kind = if storage.kind == "file" { "disk" } else { "directory" };
+        let kind = if storage.kind == "file" {
+            "disk"
+        } else {
+            "directory"
+        };
         let mut input = BackupInput {
             id: resource.clone(),
             kind,
-            strategy: if storage.external { "external_data" } else { "bundle_copy" },
+            strategy: if storage.external {
+                "external_data"
+            } else {
+                "bundle_copy"
+            },
             path: Some(path.to_string_lossy().into_owned()),
             resources: vec![resource.clone()],
             required: true,
@@ -190,8 +237,10 @@ fn inventory_inputs(
         if storage.external {
             input.inspection = "external_unresolved";
             inventory.issues.push(Issue {
-                severity: "unknown", resource: resource.clone(),
-                field: "path", code: "backup_external_data",
+                severity: "unknown",
+                resource: resource.clone(),
+                field: "path",
+                code: "backup_external_data",
                 message: "External data cannot be captured from this inventory.",
                 remedy: "Review external storage inclusion and consistent capture strategy.",
             });
@@ -207,8 +256,11 @@ fn inventory_inputs(
                 "Perform a bounded, private directory-tree and symlink/mount metadata scan before capture.")?;
         }
         if !storage.mount.is_empty() {
-            inventory.requirement(&resource, "expected_mount",
-                "Verify required filesystem identity, mount state and permissions before capture.")?;
+            inventory.requirement(
+                &resource,
+                "expected_mount",
+                "Verify required filesystem identity, mount state and permissions before capture.",
+            )?;
         }
         if let Some(source) = &storage.source {
             let key = format!("image/{id}");
@@ -227,8 +279,11 @@ fn inventory_inputs(
             };
             inventory.inspect_path(&mut input, &path, false);
             inventory.input(input)?;
-            inventory.requirement(&key, "asset_checksum",
-                "Verify the expected SHA-256 image checksum before capture.")?;
+            inventory.requirement(
+                &key,
+                "asset_checksum",
+                "Verify the expected SHA-256 image checksum before capture.",
+            )?;
         }
     }
     for (id, path) in &config.secrets {
@@ -251,8 +306,11 @@ fn inventory_inputs(
     }
     for (id, service) in &config.services {
         let resource = format!("service/{id}");
-        inventory.requirement(&resource, "workload_consistency",
-            "Verify runtime state and quiesce running workloads before any data capture.")?;
+        inventory.requirement(
+            &resource,
+            "workload_consistency",
+            "Verify runtime state and quiesce running workloads before any data capture.",
+        )?;
         if service.vm.is_some() {
             inventory.requirement(&resource, "native_export",
                 "Capture native libvirt/Incus guest state and dependent disks through its verified backend.")?;
@@ -271,17 +329,28 @@ fn inventory_inputs(
             "Review client writes, export state, account identities and host permissions before capture.")?;
     }
     for id in config.bindings.keys() {
-        inventory.requirement(&format!("binding/{id}"), "host_binding",
-            "Review native networking and host binding prerequisites on the destination.")?;
+        inventory.requirement(
+            &format!("binding/{id}"),
+            "host_binding",
+            "Review native networking and host binding prerequisites on the destination.",
+        )?;
     }
     Ok(())
 }
 
 /// Never returns a completed/restorable backup. No native state or source
 /// contents are touched; missing/unknown data remains an explicit blocker.
-pub fn inventory(store: &Store, private_root: &Path, storage_root: &Path) -> Result<BackupInventory> {
-    let snapshot = store.read()?.context("No authoritative workloads YAML exists to inventory.")?;
-    let config = snapshot.config().context("A valid private configuration is needed for backup inventory.")?;
+pub fn inventory(
+    store: &Store,
+    private_root: &Path,
+    storage_root: &Path,
+) -> Result<BackupInventory> {
+    let snapshot = store
+        .read()?
+        .context("No authoritative workloads YAML exists to inventory.")?;
+    let config = snapshot
+        .config()
+        .context("A valid private configuration is needed for backup inventory.")?;
     let mut result = BackupInventory {
         stage: "inventory",
         revision: snapshot.revision,
@@ -317,7 +386,7 @@ pub fn inventory(store: &Store, private_root: &Path, storage_root: &Path) -> Res
         id: "configuration".to_owned(),
         kind: "configuration",
         strategy: "bundle_copy",
-        path: Some(private_root.join("workloads.yaml").to_string_lossy().into_owned()),
+        path: Some(store.path().to_string_lossy().into_owned()),
         resources: vec![],
         required: true,
         sensitive: true,
@@ -327,8 +396,13 @@ pub fn inventory(store: &Store, private_root: &Path, storage_root: &Path) -> Res
     })?;
     inventory_inputs(&mut result, &config, private_root, storage_root)?;
     // Detect a concurrent author edit before returning a revision claim.
-    ensure!(store.read()?.as_ref().is_some_and(|latest| latest.revision == result.revision),
-        "configuration changed during backup inventory; retry");
+    ensure!(
+        store
+            .read()?
+            .as_ref()
+            .is_some_and(|latest| latest.revision == result.revision),
+        "configuration changed during backup inventory; retry"
+    );
     Ok(result)
 }
 
@@ -341,14 +415,28 @@ mod tests {
     fn backup_inventory_is_nonrestorable_and_does_not_copy_private_data() {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("workloads");
-        fs::create_dir(&directory).unwrap();
         let store = Store::new(directory.clone());
-        store.save(b"version: 1\nsecrets:\n  key: private/key.txt\n", MISSING_REVISION).unwrap();
+        store
+            .save(
+                b"version: 1\nsecrets:\n  key: private/key.txt\n",
+                MISSING_REVISION,
+            )
+            .unwrap();
         let inventory = inventory(&store, &directory, root.path()).unwrap();
         assert_eq!(inventory.stage, "inventory");
         assert!(!inventory.restorable);
-        assert!(inventory.inputs.iter().any(|input| input.id == "secret/key"));
-        assert!(inventory.issues.iter().any(|issue| issue.code == "backup_path_unavailable"));
+        assert!(
+            inventory
+                .inputs
+                .iter()
+                .any(|input| input.id == "secret/key")
+        );
+        assert!(
+            inventory
+                .issues
+                .iter()
+                .any(|issue| issue.code == "backup_path_unavailable")
+        );
         assert!(!directory.join("private/key.txt").exists());
     }
 

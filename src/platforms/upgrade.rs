@@ -263,7 +263,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().join("config");
         std::fs::create_dir(&directory).unwrap();
-        let path = directory.join("maestro.toml");
+        let path = directory.join("maestro.yaml");
         let mut config = AppConfig::default();
         config.apply_test_mode(&path).unwrap();
         config.test_mode = false;

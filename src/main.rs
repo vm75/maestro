@@ -7,6 +7,8 @@ mod ban_attack;
 mod certificate_http;
 mod command;
 mod config;
+mod config_migration;
+mod config_yaml;
 pub mod core;
 mod models;
 mod modules;
@@ -15,7 +17,7 @@ mod nginx_mutation;
 mod nginx_render;
 #[path = "platforms/nginx_upgrade.rs"]
 mod nginx_upgrade;
-mod platforms;
+pub mod platforms;
 mod restore;
 mod state;
 mod storage;
@@ -50,7 +52,7 @@ use crate::{
 #[derive(Debug, Parser)]
 #[command(name = "maestro", version, about)]
 struct Cli {
-    #[arg(long, default_value = "/opt/etc/maestro/maestro.toml")]
+    #[arg(long, default_value = "/opt/etc/maestro/maestro.yaml")]
     config: PathBuf,
 
     #[arg(long, global = true)]
@@ -66,6 +68,15 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Convert legacy TOML once, retaining private .toml.bak originals.
+    MigrateConfig,
+    /// Read one runtime configuration scalar for local diagnostic scripts.
+    ConfigValue {
+        key: String,
+    },
+    /// Create a private Linux YAML authority and bootstrap token as its owner.
+    #[cfg(feature = "linux")]
+    InitLinuxConfig,
     Serve,
     CheckConfig,
     /// Install the bundled nginx configuration, backing up a different nginx.conf.
@@ -144,6 +155,20 @@ fn main() -> Result<()> {
     if let Some(Command::Restore { archive, root }) = &cli.command {
         return restore::run(archive, root, cli.test_mode);
     }
+    #[cfg(feature = "linux")]
+    if matches!(cli.command, Some(Command::InitLinuxConfig)) {
+        crate::core::linux_config::initialize(&cli.config)?;
+        println!(
+            "private Linux configuration ready: {}",
+            cli.config.display()
+        );
+        return Ok(());
+    }
+    if matches!(cli.command, Some(Command::MigrateConfig)) {
+        let path = crate::config_migration::migrate(&cli.config)?;
+        println!("YAML configuration ready: {}", path.display());
+        return Ok(());
+    }
     let mut config = AppConfig::load(&cli.config)?;
     if cli.linux_mode {
         config.platform = Platform::Linux;
@@ -154,14 +179,21 @@ fn main() -> Result<()> {
     config.validate()?;
     #[cfg(not(feature = "linux"))]
     if config.platform == Platform::Linux {
-        anyhow::bail!("Linux mode requires a Linux-feature build; the router profile excludes Linux management");
+        anyhow::bail!(
+            "Linux mode requires a Linux-feature build; the router profile excludes Linux management"
+        );
     }
     #[cfg(feature = "linux")]
     if config.platform == Platform::Linux && !config.test_mode && unsafe { libc::geteuid() } == 0 {
-        anyhow::bail!("Linux Maestro must run as a non-root workload account; privileged host changes require optional maestro-admin");
+        anyhow::bail!(
+            "Linux Maestro must run as a non-root workload account; privileged host changes require optional maestro-admin"
+        );
     }
 
     match cli.command.unwrap_or(Command::Serve) {
+        Command::MigrateConfig => unreachable!("migration precedes configuration loading"),
+        #[cfg(feature = "linux")]
+        Command::InitLinuxConfig => unreachable!("initialization precedes configuration loading"),
         Command::Restore { .. } => unreachable!("restore is handled before configuration loading"),
         Command::Backup { output_dir } => tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -205,6 +237,22 @@ fn main() -> Result<()> {
                         allow_downgrade,
                     },
                 ))
+        }
+        Command::ConfigValue { key } => {
+            let mut value = serde_json::to_value(&config)?;
+            for part in key.split('.') {
+                value = value
+                    .get(part)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("unknown configuration key"))?;
+            }
+            match value {
+                serde_json::Value::String(value) => println!("{value}"),
+                serde_json::Value::Bool(value) => println!("{value}"),
+                serde_json::Value::Number(value) => println!("{value}"),
+                _ => anyhow::bail!("configuration key is not a scalar"),
+            }
+            Ok(())
         }
         Command::CheckConfig => {
             println!("configuration is valid: {}", cli.config.display());
@@ -301,8 +349,8 @@ fn main() -> Result<()> {
 }
 
 async fn serve(config: AppConfig) -> Result<()> {
-    nginx_render::require_migrated_input(&config, "nginx.toml")?;
-    nginx_render::require_migrated_input(&config, "sites.toml")?;
+    nginx_render::require_migrated_input(&config, "nginx.yaml")?;
+    nginx_render::require_migrated_input(&config, "sites.yaml")?;
     config.ensure_directories()?;
     let stores = Stores::load(&config).await?;
     let firewall = FirewallManager::new(config.clone(), stores.clone()).await?;
@@ -371,9 +419,12 @@ async fn serve(config: AppConfig) -> Result<()> {
     let address = SocketAddr::new(bind_ip, config.server.port);
     let listener = TcpListener::bind(address).await?;
     info!(%address, version = env!("CARGO_PKG_VERSION"), test_mode = config.test_mode, "maestro listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(state))
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal(state))
+    .await?;
 
     Ok(())
 }
@@ -482,7 +533,7 @@ mod cli_tests {
         let cli = Cli::try_parse_from([
             "maestro",
             "--config",
-            "/lab/maestro.toml",
+            "/lab/maestro.yaml",
             "--linux-mode",
             "backup",
             "--output-dir",

@@ -69,9 +69,9 @@ On native Linux (`platform = "linux"` or `--linux-mode`), the archive is saved
 alongside the configuration file selected by `--config`:
 
 ```sh
-maestro --config /etc/maestro/maestro.toml --linux-mode backup
+maestro --config /etc/maestro/maestro.yaml --linux-mode backup
 # Optional existing destination directory on either platform:
-maestro --config /etc/maestro/maestro.toml --linux-mode backup --output-dir /srv/backups
+maestro --config /etc/maestro/maestro.yaml --linux-mode backup --output-dir /srv/backups
 ```
 
 The archive includes the configuration directory, running executable, configured
@@ -105,7 +105,7 @@ services whose configuration or certificates will be restored. On a router:
 /opt/etc/init.d/S99maestro stop
 /opt/bin/maestro restore /tmp/maestro-backup-YYYYMMDD-HHMMSS.tar.gz
 # After a successful restore, validate before starting the service:
-/opt/bin/maestro --config /opt/etc/maestro/maestro.toml check-config
+/opt/bin/maestro --config /opt/etc/maestro/maestro.yaml check-config
 /opt/etc/init.d/S99maestro start
 ```
 
@@ -123,8 +123,8 @@ mkdir -m 700 /tmp/maestro-recovery
 maestro restore /tmp/maestro-backup-YYYYMMDD-HHMMSS.tar.gz --root /tmp/maestro-recovery
 ```
 
-Paths in the archive are relative to `/`; for example `etc/maestro/maestro.toml`
-is restored beneath `/tmp/maestro-recovery/etc/maestro/maestro.toml` in this
+Paths in the archive are relative to `/`; for example `etc/maestro/maestro.yaml`
+is restored beneath `/tmp/maestro-recovery/etc/maestro/maestro.yaml` in this
 example. The default root is `/`, restoring original locations. Symbolic links
 retain their archived targets, including absolute targets; inspection-tree links
 can therefore still point outside that tree. Restore never writes through those
@@ -294,7 +294,7 @@ cd "${PACKAGE}"
 
 The package includes the executable, `config/`, `scripts/`, and release
 documentation. Back up the router's configuration and persistent data before
-upgrading; the installer preserves existing `maestro.toml` and should be
+upgrading; the installer preserves existing `maestro.yaml` and should be
 reviewed for your environment. AArch64 musl compatibility requires validation
 on your router CPU and firmware.
 
@@ -324,7 +324,7 @@ The installer:
 
 1. installs the binary as `/opt/bin/maestro` and the Entware init script as
    `/opt/etc/init.d/S99maestro`;
-2. creates `/opt/etc/maestro/maestro.toml` and a random authentication
+2. creates `/opt/etc/maestro/maestro.yaml` and a random authentication
    token on first install;
 3. installs Maestro's main nginx configuration, saving a different existing
    file as `nginx.conf.before-maestro-<unique-id>` and printing its path;
@@ -335,7 +335,7 @@ The installer:
    `/jffs/scripts/firewall-start` (with a background retry loop);
 6. validates the configuration and restarts Maestro.
 
-Review the generated TOML before starting. In particular, set the correct
+Review the generated YAML before starting. In particular, set the correct
 Asuswrt extension page (`user1.asp` through `user20.asp`), `menu_tree`,
 `menu_index`, nginx paths, certificate paths, bind address, and allowed
 origins. The installer’s default paths are examples for a typical Entware

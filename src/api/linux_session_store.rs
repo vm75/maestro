@@ -37,11 +37,20 @@ fn now() -> Result<u64> {
 }
 
 fn hex(value: &[u8]) -> String {
-    value.iter().map(|b| format!("{b:02x}")).collect()
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(value.len() * 2);
+    for byte in value {
+        encoded.push(DIGITS[usize::from(byte >> 4)] as char);
+        encoded.push(DIGITS[usize::from(byte & 15)] as char);
+    }
+    encoded
 }
 
 fn key_from_hex(value: &str) -> Result<SessionKey> {
-    ensure!(value.len() == 64, "invalid session digest");
+    ensure!(
+        value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "invalid session digest"
+    );
     let mut key = [0_u8; 32];
     for (i, slot) in key.iter_mut().enumerate() {
         *slot = u8::from_str_radix(&value[i * 2..i * 2 + 2], 16)
@@ -51,14 +60,30 @@ fn key_from_hex(value: &str) -> Result<SessionKey> {
 }
 
 fn private_metadata(meta: &fs::Metadata, directory: bool) -> Result<()> {
-    ensure!(if directory { meta.is_dir() } else { meta.is_file() }, "invalid session state type");
-    ensure!(meta.uid() == unsafe { libc::geteuid() }, "browser session state has an unexpected owner");
-    ensure!(meta.permissions().mode() & 0o077 == 0, "browser session state is not owner-only");
+    ensure!(
+        if directory {
+            meta.is_dir()
+        } else {
+            meta.is_file()
+        },
+        "invalid session state type"
+    );
+    ensure!(
+        meta.uid() == unsafe { libc::geteuid() },
+        "browser session state has an unexpected owner"
+    );
+    ensure!(
+        meta.permissions().mode() & 0o077 == 0,
+        "browser session state is not owner-only"
+    );
     Ok(())
 }
 
 impl SessionStore {
-    pub fn open(data_dir: &std::path::Path, token: &str) -> Result<(Self, HashMap<SessionKey, u64>)> {
+    pub fn open(
+        data_dir: &std::path::Path,
+        token: &str,
+    ) -> Result<(Self, HashMap<SessionKey, u64>)> {
         let directory = data_dir.join("linux-auth");
         match fs::DirBuilder::new().mode(0o700).create(&directory) {
             Ok(()) => {}
@@ -88,19 +113,34 @@ impl SessionStore {
         };
         let metadata = file.metadata()?;
         private_metadata(&metadata, false)?;
-        ensure!(metadata.len() <= MAX_FILE as u64, "browser sessions file is oversized");
+        ensure!(
+            metadata.len() <= MAX_FILE as u64,
+            "browser sessions file is oversized"
+        );
         let mut data = Vec::new();
         file.take((MAX_FILE + 1) as u64).read_to_end(&mut data)?;
         ensure!(data.len() <= MAX_FILE, "browser sessions file is oversized");
-        let stored: Stored = serde_json::from_slice(&data).context("invalid browser sessions file")?;
-        ensure!(stored.sessions.len() <= MAX_SESSIONS, "too many stored sessions");
-        if stored.scope != self.scope { return Ok(HashMap::new()); }
+        let stored: Stored =
+            serde_json::from_slice(&data).context("invalid browser sessions file")?;
+        ensure!(
+            stored.sessions.len() <= MAX_SESSIONS,
+            "too many stored sessions"
+        );
+        if stored.scope != self.scope {
+            return Ok(HashMap::new());
+        }
         let now = now()?;
         let limit = now.saturating_add(LIFETIME_SECONDS);
-        stored.sessions.into_iter().filter_map(|(key, expiry)| {
-            if expiry <= now || expiry > limit { return None; }
-            Some(key_from_hex(&key).map(|key| (key, expiry)))
-        }).collect()
+        stored
+            .sessions
+            .into_iter()
+            .filter_map(|(key, expiry)| {
+                if expiry <= now || expiry > limit {
+                    return None;
+                }
+                Some(key_from_hex(&key).map(|key| (key, expiry)))
+            })
+            .collect()
     }
 
     /// Atomic, owner-only and durable. Any failure prevents new sessions from
@@ -110,16 +150,31 @@ impl SessionStore {
         let current = now()?;
         let records = Stored {
             scope: self.scope.clone(),
-            sessions: active.iter().filter(|(_, expiry)| **expiry > current)
-                .map(|(key, expiry)| (hex(key), *expiry)).collect(),
+            sessions: active
+                .iter()
+                .filter(|(_, expiry)| **expiry > current)
+                .map(|(key, expiry)| (hex(key), *expiry))
+                .collect(),
         };
-        ensure!(records.sessions.len() <= MAX_SESSIONS, "session limit exceeded");
+        ensure!(
+            records.sessions.len() <= MAX_SESSIONS,
+            "session limit exceeded"
+        );
         let data = serde_json::to_vec(&records)?;
-        ensure!(data.len() <= MAX_FILE, "browser sessions state exceeds limit");
-        let temp = self.directory.join(format!(".browser-sessions-{}", Uuid::new_v4().simple()));
+        ensure!(
+            data.len() <= MAX_FILE,
+            "browser sessions state exceeds limit"
+        );
+        let temp = self
+            .directory
+            .join(format!(".browser-sessions-{}", Uuid::new_v4().simple()));
         let result = (|| -> Result<()> {
-            let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW).open(&temp)?;
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(&temp)?;
             file.write_all(&data)?;
             file.sync_all()?;
             drop(file);
@@ -169,5 +224,13 @@ mod tests {
         fs::write(&target, "{}").unwrap();
         std::os::unix::fs::symlink(&target, &store.path).unwrap();
         assert!(SessionStore::open(temp.path(), "token").is_err());
+    }
+
+    #[test]
+    fn malformed_session_digests_return_errors_without_panicking() {
+        for value in ["aé".repeat(21) + "a", "g".repeat(64), "0".repeat(63)] {
+            assert!(key_from_hex(&value).is_err());
+        }
+        assert_eq!(key_from_hex(&"ab".repeat(32)).unwrap(), [0xab; 32]);
     }
 }

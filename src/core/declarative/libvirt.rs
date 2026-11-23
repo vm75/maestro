@@ -38,12 +38,26 @@ pub fn render_libvirt_domain(service: &Service, id: &str, fingerprint: &str) -> 
 
 pub struct LibvirtProvider {
     pub virsh: PathBuf,
+    pub uri: Option<String>,
     pub runner: CommandRunner,
 }
 
 impl LibvirtProvider {
     pub fn new(virsh: PathBuf, runner: CommandRunner) -> Self {
-        Self { virsh, runner }
+        Self {
+            virsh,
+            runner,
+            uri: None,
+        }
+    }
+
+    fn arguments<'a>(&'a self, arguments: &[&'a str]) -> Vec<&'a str> {
+        let mut result = Vec::new();
+        if let Some(uri) = &self.uri {
+            result.extend(["--connect", uri.as_str()]);
+        }
+        result.extend_from_slice(arguments);
+        result
     }
 
     pub fn matches(&self, service: &Service) -> bool {
@@ -61,7 +75,7 @@ impl LibvirtProvider {
             .runner
             .capture_bounded(
                 &self.virsh,
-                &[cmd, service_id],
+                &self.arguments(&[cmd, service_id]),
                 Duration::from_secs(30),
                 64 * 1024,
             )
@@ -74,7 +88,7 @@ impl LibvirtProvider {
             .runner
             .capture_bounded(
                 &self.virsh,
-                &["dominfo", service_id],
+                &self.arguments(&["dominfo", service_id]),
                 Duration::from_secs(10),
                 16 * 1024,
             )
@@ -134,7 +148,7 @@ impl ApplyProvider for LibvirtProvider {
                     .runner
                     .capture_bounded(
                         &self.virsh,
-                        &["define", temp_str],
+                        &self.arguments(&["define", temp_str]),
                         Duration::from_secs(30),
                         64 * 1024,
                     )
@@ -146,7 +160,7 @@ impl ApplyProvider for LibvirtProvider {
                         .runner
                         .capture_bounded(
                             &self.virsh,
-                            &["autostart", service_id],
+                            &self.arguments(&["autostart", service_id]),
                             Duration::from_secs(15),
                             16 * 1024,
                         )
@@ -157,7 +171,7 @@ impl ApplyProvider for LibvirtProvider {
                         .runner
                         .capture_bounded(
                             &self.virsh,
-                            &["autostart", "--disable", service_id],
+                            &self.arguments(&["autostart", "--disable", service_id]),
                             Duration::from_secs(15),
                             16 * 1024,
                         )
@@ -169,7 +183,7 @@ impl ApplyProvider for LibvirtProvider {
                     .runner
                     .capture_bounded(
                         &self.virsh,
-                        &["destroy", service_id],
+                        &self.arguments(&["destroy", service_id]),
                         Duration::from_secs(20),
                         16 * 1024,
                     )
@@ -178,7 +192,7 @@ impl ApplyProvider for LibvirtProvider {
                     .runner
                     .capture_bounded(
                         &self.virsh,
-                        &["undefine", service_id],
+                        &self.arguments(&["undefine", service_id]),
                         Duration::from_secs(20),
                         16 * 1024,
                     )

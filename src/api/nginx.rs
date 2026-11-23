@@ -823,7 +823,7 @@ pub async fn put_settings(
     }
     files.insert(
         nginx_sites::path(&state.config),
-        toml::to_string_pretty(&sites).map_err(ApiError::internal)?,
+        serde_yaml::to_string(&sites).map_err(ApiError::internal)?,
     );
     let mut transaction = nginx_render::FileTransaction::apply(&state.config, files)?;
     let result = nginx_test(&state).await?;

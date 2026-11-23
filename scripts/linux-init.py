@@ -6,14 +6,14 @@ import signal
 import subprocess
 import sys
 import time
-import tomllib
+import yaml
 
 location = Path(__file__).resolve()
 # Installed copies live under data/linux/init.d.
 repo = location.parents[3] if location.parent.name == 'init.d' else location.parents[1]
-config = Path(os.environ.get('MAESTRO_CONFIG', str(repo / 'data/linux/maestro.toml'))).resolve()
+config = Path(os.environ.get('MAESTRO_CONFIG', str(repo / 'data/linux/maestro.yaml'))).resolve()
 with config.open('rb') as stream:
-    cfg = tomllib.load(stream)
+    cfg = yaml.safe_load(stream)
 service = 'nginx' if Path(sys.argv[0]).name.endswith('nginx') else 'maestro'
 action = sys.argv[1] if len(sys.argv) > 1 else 'check'
 nginx = cfg['nginx']

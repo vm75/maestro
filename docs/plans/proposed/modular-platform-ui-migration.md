@@ -1,5 +1,7 @@
 # Modular platform and UI migration: Router Hub to Maestro
 
+**Configuration decision (2026-11-23):** The user selected YAML across platforms with an explicit one-time TOML migration. Earlier TOML runtime-preservation wording is superseded by value-preserving conversion and private exact-byte backups. Native service configuration and state JSON retain their formats.
+
 **Status:** Phase 1 and Phase 1.5 accepted. Phase 2 implementation is active on `feature/linux-phase2`. Compile-time platform profiles, Linux Svelte shell & operations bridge, systemd services, resource monitoring, package updates, and declarative engine foundation have initial implementation and validation; full Server Man feature parity and native Linux acceptance are **not** complete. Phase 2 requires 100% of the **existing, implemented** Server Man feature set, including partial/in-progress shipped capabilities. See the Phase 2 parity contract and hard gate below.
 **Phase 1.5 branch:** `refactor/rebrand-maestro`  
 **Baseline:** `vm75/router-hub` `main` at `5e2013f031c965cf0381f868c541d60bb5eac602` (v0.10.4)  

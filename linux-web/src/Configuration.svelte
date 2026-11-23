@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { invokeTool, type Discovery, type Status } from './lib/api'
+  import DirectoryBrowser from './DirectoryBrowser.svelte'
+  import HistoryRecovery from './HistoryRecovery.svelte'
+  import ConfigurationEditor from './ConfigurationEditor.svelte'
+  import { invokeTool, type Discovery, type Job, type Status } from './lib/api'
 
   let { status: _status, discovery }: { status: Status; discovery: Discovery } = $props()
 
@@ -28,11 +31,14 @@
   }
 
   let revision = $state<string | null>(null)
-  let history = $state<string[]>([])
+  interface HistoryEntry { revision:string; modifiedAt:string; valid:boolean; error?:string }
+  let history = $state<HistoryEntry[]>([])
+  let historyError = $state('')
   let inventory = $state<Inventory | null>(null)
   let editorKind = $state<'storage' | 'share'>('storage')
   let editId = $state('')
   let editOperation = $state<'save' | 'remove'>('save')
+  let editMode = $state<'now' | 'next_start'>('now')
   let storagePath = $state('')
   let storageKind = $state<'directory' | 'file'>('directory')
   let storageFormat = $state<'raw' | 'qcow2'>('raw')
@@ -59,7 +65,7 @@
   const editKey = $derived(JSON.stringify({
     kind: editorKind, id: editId, operation: editOperation,
     definition: editOperation === 'save' ? editDefinition : undefined,
-    revision: revision ?? 'missing'
+    revision: revision ?? 'missing', mode: editMode
   }))
   const reviewed = $derived(staged?.key === editKey ? staged.result : null)
   let loading = $state(false)
@@ -71,13 +77,16 @@
     if (loading) return
     loading = true
     error = ''
+    historyError = ''
     try {
       const [current, revisions] = await Promise.all([
         invokeTool<{yaml: string; revision: string | null}>('workloads_get', {}),
-        invokeTool<{history: string[]}>('workloads_history', {}),
+        writable ? invokeTool<{entries: HistoryEntry[]}>('managed_config_history', {})
+          .catch(failure => { historyError = failure instanceof Error ? failure.message : 'Could not read history.'; return {entries:[]} })
+          : Promise.resolve({entries:[]}),
       ])
       revision = current.revision
-      history = revisions.history
+      history = revisions.entries
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'Could not read configuration.'
     } finally {
@@ -127,24 +136,25 @@
 
   async function saveTyped() {
     if (!reviewed || editorSaving || !writable || reviewed.blockedResources.length) return
-    if (!window.confirm('Apply the reviewed resource edit now? Native workloads may be interrupted.')) return
+    if (!window.confirm(editMode === 'next_start' ? 'Publish the reviewed definitions for next start? Running workloads may need a later restart.' : 'Apply the reviewed resource edit now? Native workloads may be interrupted.')) return
     editorSaving = true
     editorError = ''
     editorJob = ''
     try {
-      const started = await invokeTool<{job: {id: string; state: string}}>(
+      const started = await invokeTool<{job: Job}>(
         'managed_resource_save', {
-          ...typedArgs(), mode: 'now', fingerprint: reviewed.plan.fingerprint, confirm: true
+          ...typedArgs(), mode: editMode, fingerprint: reviewed.plan.fingerprint, confirm: true
         }
       )
       let job = started.job
       editorJob = 'Apply job: ' + job.id + ' (' + job.state + ')'
       while (job.state === 'running') {
         await new Promise(resolve => setTimeout(resolve, 1000))
-        job = await invokeTool<{id: string; state: string; error?: string}>('jobs_get', {id: job.id})
+        job = await invokeTool<Job>('jobs_get', {id: job.id})
         editorJob = 'Apply job: ' + job.id + ' (' + job.state + ')'
-        if (job.state === 'failed') editorError = job.error ?? 'Resource apply failed.'
       }
+      if (job.state === 'failed') editorError = job.error ?? 'Resource apply failed.'
+      if (job.state === 'cancelled') editorError = 'Resource apply was cancelled.'
       if (job.state === 'succeeded') {
         staged = null
         await inspect()
@@ -166,14 +176,25 @@
     <h2 id="config-title">Authoritative workload configuration</h2>
     <button type="button" onclick={inspect} disabled={loading}>Refresh</button>
   </div>
-  <p>The authoritative workload configuration tracks managed applications, storage, bindings and shares. Existing Maestro server settings remain separate pending the Phase 2 single-authority migration.</p>
+  <p>The authoritative workload configuration tracks managed applications, storage, bindings and shares. Native Linux startup uses this same YAML for server settings. Saving server settings requires a service restart.</p>
   {#if error}<p role="alert">{error}</p>{/if}
   {#if loading}<p role="status">Reading configuration…</p>{/if}
   <dl>
     <dt>Current workload revision</dt><dd>{revision ?? 'No authored YAML revision yet'}</dd>
     <dt>Stored historical revisions</dt><dd>{history.length}</dd>
+    {#if !writable}<dt>Private history</dt><dd>Requires management writes to be enabled.</dd>{/if}
     <dt>Mutation policy</dt><dd>{writable ? 'Workload writes permitted by configuration (provider safety checks still apply)' : 'Workload mutations disabled by administrator policy'}</dd>
   </dl>
+  {#if historyError}<p role="alert">{historyError}</p>{/if}
+  {#if history.length}
+    <h3>Recent private revisions</h3>
+    <p>Up to eight revisions are retained. Configuration history does not restore workload data.</p>
+    <ul>{#each history as entry (entry.revision)}
+      <li><code>{entry.revision}</code> — {entry.modifiedAt} — {entry.valid ? 'Valid configuration' : entry.error ?? 'Unavailable revision'}
+        <HistoryRecovery target={entry.revision} {revision} {writable} onchanged={inspect} />
+      </li>
+    {/each}</ul>
+  {/if}
   <p><a href="#applications">Open Applications to edit and review workload changes</a>. The edit workflow requires a reviewed plan and a current revision fingerprint; the presence of a form does not authorize native mutations.</p>
 </section>
 
@@ -194,6 +215,11 @@
       <label>Resource ID
         <input bind:value={editId} maxlength="63" pattern="[a-z][a-z0-9_-]*"
           placeholder="media" required disabled={editorSaving} />
+      </label>
+      <label>Apply mode
+        <select bind:value={editMode} disabled={editorSaving}>
+          <option value="now">Now</option><option value="next_start">Next start</option>
+        </select>
       </label>
       <label>Operation
         <select bind:value={editOperation} disabled={editorSaving}>
@@ -312,3 +338,7 @@
   th, td { padding: .6rem; text-align: left; border-bottom: 1px solid var(--border); }
   code { overflow-wrap: anywhere; }
 </style>
+
+<DirectoryBrowser />
+
+<ConfigurationEditor {writable} />

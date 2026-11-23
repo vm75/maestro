@@ -14,7 +14,11 @@ use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::Serialize;
 
-use crate::{core::jobs::RunningJob, platforms::{admin, admin_packages}, state::AppState};
+use crate::{
+    core::jobs::RunningJob,
+    platforms::{admin, admin_packages},
+    state::AppState,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -87,7 +91,18 @@ fn detect(
         ) {
         Family::Unsupported
     } else {
-        release.family()
+        match state
+            .config
+            .linux_authority
+            .as_ref()
+            .map(|authority| authority.settings.package_manager.as_str())
+        {
+            Some("apt") => Family::Apt,
+            Some("dnf") => Family::Dnf,
+            Some("pacman") => Family::Pacman,
+            Some("zypper") => Family::Zypper,
+            _ => release.family(),
+        }
     };
     let (title, program, args) = match family {
         Family::Apt => ("APT", "apt-get", APT_ARGS),
@@ -170,7 +185,14 @@ pub async fn status(state: &AppState) -> Status {
     } else if reason.is_some() {
         Some("The native package manager is unavailable.".to_owned())
     } else if !enabled {
-        Some(helper.as_ref().map_or("Privileged helper is unavailable.", |probe| probe.reason.as_str()).to_owned())
+        Some(
+            helper
+                .as_ref()
+                .map_or("Privileged helper is unavailable.", |probe| {
+                    probe.reason.as_str()
+                })
+                .to_owned(),
+        )
     } else {
         None
     };
@@ -182,8 +204,9 @@ pub async fn status(state: &AppState) -> Status {
             reason,
             write_reason,
             can_install: enabled,
-            can_refresh: enabled && (family != Family::Pacman
-                || is_executable(&paths.package_bin_dir.join("checkupdates"))),
+            can_refresh: enabled
+                && (family != Family::Pacman
+                    || is_executable(&paths.package_bin_dir.join("checkupdates"))),
         },
         distribution: release.pretty_name,
         packages: vec![],
@@ -283,7 +306,8 @@ pub async fn permits(state: &AppState, install: bool) -> bool {
     }
     let (_, family, _, program, _) = detect(state);
     availability_reason(state, family, &program).is_none()
-        && (install || family != Family::Pacman
+        && (install
+            || family != Family::Pacman
             || is_executable(&state.config.paths.package_bin_dir.join("checkupdates")))
 }
 
@@ -296,7 +320,11 @@ pub async fn run_job(
         permits(state, install).await,
         "Package operation is unavailable, unprivileged, or outside the independent write policies."
     );
-    let action = if install { "package_upgrade" } else { "package_refresh" };
+    let action = if install {
+        "package_upgrade"
+    } else {
+        "package_refresh"
+    };
     let output = admin::package_operation(action, vec![], None).await?;
     job.append_output(&output);
     let (_, family, _, _, _) = detect(state);
@@ -313,7 +341,10 @@ pub async fn run_named_job(
     job: &RunningJob,
 ) -> anyhow::Result<serde_json::Value> {
     let packages = admin_packages::package_names(names)?;
-    anyhow::ensure!(permits(state, true).await, "Native package installation is not authorized.");
+    anyhow::ensure!(
+        permits(state, true).await,
+        "Native package installation is not authorized."
+    );
     let output = admin::package_operation("package_install", packages.clone(), None).await?;
     job.append_output(&output);
     Ok(serde_json::json!({ "action": "packages installed", "packages": packages }))
@@ -325,11 +356,18 @@ pub async fn run_dependency_job(
     job: &RunningJob,
 ) -> anyhow::Result<serde_json::Value> {
     anyhow::ensure!(
-        matches!(target, "podman" | "docker" | "samba" | "nfs" | "virtualization" | "incus"),
+        matches!(
+            target,
+            "podman" | "docker" | "samba" | "nfs" | "virtualization" | "incus"
+        ),
         "unsupported dependency group"
     );
-    anyhow::ensure!(permits(state, true).await, "Native dependency installation is not authorized.");
-    let output = admin::package_operation("dependency_install", vec![], Some(target.to_owned())).await?;
+    anyhow::ensure!(
+        permits(state, true).await,
+        "Native dependency installation is not authorized."
+    );
+    let output =
+        admin::package_operation("dependency_install", vec![], Some(target.to_owned())).await?;
     job.append_output(&output);
     Ok(serde_json::json!({ "action": "dependencies installed", "target": target }))
 }

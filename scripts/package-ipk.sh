@@ -39,7 +39,7 @@ install -m 0755 scripts/S99maestro "$DATA/opt/etc/init.d/S99maestro"
 install -m 0755 scripts/setup-merlin.sh "$DATA/opt/libexec/maestro/setup-merlin.sh"
 install -m 0755 scripts/dehydrated-dns01-hook.sh "$DATA/opt/share/maestro/dehydrated-dns01-hook.sh"
 install -m 0755 scripts/dehydrated-dns01-hook.sh "$DATA/opt/var/lib/maestro/dehydrated/dehydrated-dns01-hook.sh"
-install -m 0644 config/maestro.example.toml "$DATA/opt/share/maestro/maestro.example.toml"
+install -m 0644 config/maestro.example.yaml "$DATA/opt/share/maestro/maestro.example.yaml"
 install -m 0644 config/firewall-policy.example.json "$DATA/opt/share/maestro/firewall-policy.example.json"
 cat > "$CONTROL/control" <<EOF
 Package: maestro

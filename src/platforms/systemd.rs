@@ -149,8 +149,14 @@ pub async fn inventory(state: &AppState, scope: Scope) -> Result<Inventory> {
         let probe = admin::probe().await;
         if probe.status != "ready" {
             result.permission_reason = Some(probe.reason.clone());
-        } else if write_units(state, scope).iter().any(|unit| !probe.permits_unit(unit)) {
-            result.permission_reason = Some("Some configured system units are not authorized by the root-owned helper policy.".into());
+        } else if write_units(state, scope)
+            .iter()
+            .any(|unit| !probe.permits_unit(unit))
+        {
+            result.permission_reason = Some(
+                "Some configured system units are not authorized by the root-owned helper policy."
+                    .into(),
+            );
         }
         Some(probe)
     } else {
@@ -161,18 +167,32 @@ pub async fn inventory(state: &AppState, scope: Scope) -> Result<Inventory> {
         .map(|mut unit| {
             unit.writable = writable_unit(&unit.name)
                 && write_units(state, scope).contains(&unit.name)
-                && helper.as_ref().is_none_or(|probe| probe.permits_unit(&unit.name));
+                && helper
+                    .as_ref()
+                    .is_none_or(|probe| probe.permits_unit(&unit.name));
             unit
         })
         .collect();
     Ok(result)
 }
 
-
 const DETAIL_PROPERTIES: [&str; 16] = [
-    "Id", "Description", "LoadState", "ActiveState", "SubState", "UnitFileState",
-    "MainPID", "Result", "ExecMainCode", "ExecMainStatus", "ActiveEnterTimestamp",
-    "InactiveEnterTimestamp", "FragmentPath", "CanStart", "CanStop", "CanReload",
+    "Id",
+    "Description",
+    "LoadState",
+    "ActiveState",
+    "SubState",
+    "UnitFileState",
+    "MainPID",
+    "Result",
+    "ExecMainCode",
+    "ExecMainStatus",
+    "ActiveEnterTimestamp",
+    "InactiveEnterTimestamp",
+    "FragmentPath",
+    "CanStart",
+    "CanStop",
+    "CanReload",
 ];
 
 #[derive(Serialize)]
@@ -216,8 +236,16 @@ fn parse_details(bytes: &[u8]) -> Result<Details> {
     let id = values.get("Id").copied().unwrap_or_default();
     ensure!(
         valid_unit(id)
-            && !values.get("LoadState").copied().unwrap_or_default().is_empty()
-            && !values.get("ActiveState").copied().unwrap_or_default().is_empty(),
+            && !values
+                .get("LoadState")
+                .copied()
+                .unwrap_or_default()
+                .is_empty()
+            && !values
+                .get("ActiveState")
+                .copied()
+                .unwrap_or_default()
+                .is_empty(),
         "unsupported systemd detail response"
     );
     let field = |key| values.get(key).copied().unwrap_or_default().to_owned();
@@ -250,7 +278,15 @@ pub async fn details(state: &AppState, scope: Scope, unit: &str) -> Result<Detai
         .runner
         .capture_bounded(
             &state.config.commands.systemctl,
-            &[scope.argument(), "--no-pager", "--no-ask-password", "show", &property, "--", unit],
+            &[
+                scope.argument(),
+                "--no-pager",
+                "--no-ask-password",
+                "show",
+                &property,
+                "--",
+                unit,
+            ],
             TIMEOUT,
             64 * 1024,
         )
@@ -300,7 +336,12 @@ pub const ACTIONS: [&str; 6] = ["start", "stop", "restart", "reload", "enable", 
 pub fn writes_enabled(state: &AppState) -> bool {
     available(state)
         && matches!(state.config.platform, crate::config::Platform::Linux)
-        && state.config.services.systemd_user_write_units.iter().any(|unit| writable_unit(unit))
+        && state
+            .config
+            .services
+            .systemd_user_write_units
+            .iter()
+            .any(|unit| writable_unit(unit))
 }
 
 fn writable_unit(unit: &str) -> bool {
@@ -522,7 +563,9 @@ mod tests {
         assert!(!data.contains("Environment"));
         assert!(!data.contains("ExecStart"));
         assert!(parse_details(b"Id=demo.service\nLoadState=not-found\n").is_err());
-        assert!(parse_details(b"Id=../bad.service\nLoadState=loaded\nActiveState=active\n").is_err());
+        assert!(
+            parse_details(b"Id=../bad.service\nLoadState=loaded\nActiveState=active\n").is_err()
+        );
         assert!(parse_details(b"Id=demo.socket\nLoadState=loaded\nActiveState=active\n").is_err());
         assert!(parse_details(b"garbage").is_err());
     }

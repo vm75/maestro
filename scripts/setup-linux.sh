@@ -16,7 +16,7 @@ if (( missing )); then
     exit 2
 fi
 # Check Python requirements before creating any lab files.
-python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ required"; import jinja2' || {
+python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ required"; import jinja2, yaml' || {
     echo 'Activate a Python 3.11+ environment with requirements.txt installed.' >&2
     exit 2
 }
@@ -70,74 +70,83 @@ server {
 EOF
 fi
 
-if [[ ! -e "$lab/maestro.toml" && ! -L "$lab/maestro.toml" ]]; then
+if [[ ! -e "$lab/maestro.yaml" && ! -L "$lab/maestro.yaml" ]]; then
     token=$(openssl rand -hex 24)
-cat > "$lab/maestro.toml" <<EOF
-platform = "linux"
-test_mode = false
+cat > "$lab/maestro.yaml" <<EOF
+{
+  "platform": "linux",
+  "test_mode": false,
+  "server": {
+    "bind": "127.0.0.1",
+    "port": $api_port,
+    "auth_token": "$token",
+    "allowed_origins": [
+      "http://127.0.0.1:$api_port"
+    ],
+    "daemonize": false
+  },
+  "paths": {
+    "data_dir": "$lab/state",
+    "runtime_dir": "$lab/run",
+    "log_file": "$lab/logs/maestro.log",
+    "hosts_add": "$lab/hosts.add",
+    "dnsmasq_conf_add": "$lab/dnsmasq.conf.add",
+    "wireguard_conf": "$lab/wireguard/wglab.conf",
+    "proc_stat": "/proc/stat",
+    "proc_meminfo": "/proc/meminfo",
+    "proc_net_dev": "/proc/net/dev",
+    "proc_uptime": "/proc/uptime",
+    "proc_loadavg": "/proc/loadavg"
+  },
+  "commands": {
+    "nginx": "$nginx_bin",
+    "dehydrated": "$dehydrated_bin",
+    "openssl": "$(command -v openssl)",
+    "ip": "/usr/sbin/ip",
+    "ping": "/bin/ping"
+  },
+  "asus_ui": {
+    "enabled": false,
+    "rendered_page": "$lab/maestro.asp"
+  },
+  "services": {
+    "init_dir": "$repo_root/data/linux/init.d",
+    "log_dirs": [
+      "$lab/logs"
+    ]
+  },
+  "nginx": {
+    "inputs_dir": "$lab/maestro/nginx",
+    "root_dir": "$lab/nginx",
+    "config_path": "$lab/nginx/nginx.conf",
+    "prefix_path": "$lab/nginx",
+    "pid_path": "$lab/run/nginx.pid",
+    "domains_available_dir": "$lab/nginx/domains-available",
+    "domains_enabled_dir": "$lab/nginx/domains-enabled",
+    "domain_upstream_map_path": "$lab/nginx/conf.d/02_domain_upstream_map.conf",
+    "subdomain_upstream_map_path": "$lab/nginx/conf.d/03_subdomain_upstream_map.conf",
+    "subfolder_upstream_map_path": "$lab/nginx/conf.d/04_subfolder_upstream_map.conf",
+    "http_forwarder_path": "$lab/nginx/conf.d/05-http-to-https.conf",
+    "log_dir": "$lab/var/log/nginx"
+  },
+  "certificates": {
+    "certs_dir": "$lab/certs",
+    "dns01_hook": "$lab/certs/dehydrated-dns01-hook.sh"
+  },
+  "firewall": {
+    "log_dirs": [
+      "$lab/var/log/nginx"
+    ]
+  },
+  "adguard": {
+    "enabled": false,
+    "lan_ip": "127.0.0.1"
+  },
+  "system": {
+    "wan_interface": "lo"
+  }
+}
 
-[server]
-bind = "127.0.0.1"
-port = $api_port
-auth_token = "$token"
-allowed_origins = ["http://127.0.0.1:$api_port"]
-daemonize = false
-
-[paths]
-data_dir = "$lab/state"
-runtime_dir = "$lab/run"
-log_file = "$lab/logs/maestro.log"
-hosts_add = "$lab/hosts.add"
-dnsmasq_conf_add = "$lab/dnsmasq.conf.add"
-wireguard_conf = "$lab/wireguard/wglab.conf"
-proc_stat = "/proc/stat"
-proc_meminfo = "/proc/meminfo"
-proc_net_dev = "/proc/net/dev"
-proc_uptime = "/proc/uptime"
-proc_loadavg = "/proc/loadavg"
-
-[commands]
-nginx = "$nginx_bin"
-dehydrated = "$dehydrated_bin"
-openssl = "$(command -v openssl)"
-ip = "/usr/sbin/ip"
-ping = "/bin/ping"
-
-[asus_ui]
-enabled = false
-rendered_page = "$lab/maestro.asp"
-
-[services]
-init_dir = "$repo_root/data/linux/init.d"
-log_dirs = ["$lab/logs"]
-
-[nginx]
-inputs_dir = "$lab/maestro/nginx"
-root_dir = "$lab/nginx"
-config_path = "$lab/nginx/nginx.conf"
-prefix_path = "$lab/nginx"
-pid_path = "$lab/run/nginx.pid"
-domains_available_dir = "$lab/nginx/domains-available"
-domains_enabled_dir = "$lab/nginx/domains-enabled"
-domain_upstream_map_path = "$lab/nginx/conf.d/02_domain_upstream_map.conf"
-subdomain_upstream_map_path = "$lab/nginx/conf.d/03_subdomain_upstream_map.conf"
-subfolder_upstream_map_path = "$lab/nginx/conf.d/04_subfolder_upstream_map.conf"
-http_forwarder_path = "$lab/nginx/conf.d/05-http-to-https.conf"
-log_dir = "$lab/var/log/nginx"
-
-[certificates]
-certs_dir = "$lab/certs"
-dns01_hook = "$lab/certs/dehydrated-dns01-hook.sh"
-
-[firewall]
-log_dirs = ["$lab/var/log/nginx"]
-
-[adguard]
-enabled = false
-lan_ip = "127.0.0.1"
-
-[system]
-wan_interface = "lo"
 EOF
 
 fi
@@ -150,8 +159,8 @@ for name in S80nginx S99maestro; do
 done
 
 printf 'Linux lab ready: %s\n' "$lab"
-printf 'Auth token is stored in %s/maestro.toml\n' "$lab"
-printf 'Start from the repository root:\n  cargo run --no-default-features --features linux -- --config data/linux/maestro.toml --linux-mode serve\n'
+printf 'Auth token is stored in %s/maestro.yaml\n' "$lab"
+printf 'Start from the repository root:\n  cargo run --no-default-features --features linux -- --config data/linux/maestro.yaml --linux-mode serve\n'
 echo 'New configs use http://127.0.0.1:3030 and nginx port 8080. Existing files are preserved.'
 echo 'Optional feature tools: ip, ping, wg, wg-quick, dehydrated, ipset, iptables, ip6tables.'
 echo 'Configure their paths before testing those features; firewall enforcement requires an isolated VM or network namespace.'

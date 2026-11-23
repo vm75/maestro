@@ -7,7 +7,7 @@ use crate::{
     command::CommandRunner,
     config::AppConfig,
     core::declarative::{
-        ApplyProvider, Change, Config, ObservedResource, RecoveryProvider,
+        ApplyMode, ApplyProvider, Change, Config, ObservedResource, RecoveryProvider,
         compose::ComposeProvider,
         incus::IncusProvider,
         libvirt::LibvirtProvider,
@@ -29,6 +29,9 @@ pub struct ApplicationSummary {
     pub enabled: bool,
     pub state: String,
     pub container_count: usize,
+    pub runtime_matches: Option<bool>,
+    pub restart_required: bool,
+    pub members: Vec<super::quadlet::ContainerMemberStatus>,
     pub lifecycle: bool,
     pub logs: bool,
 }
@@ -63,7 +66,13 @@ impl CompositeProvider {
             QuadletArtifacts::new(directory.clone(), config.paths.storage_dir.clone()).ok()
         });
         let quadlet = quadlet_artifacts.and_then(|artifacts| {
-            QuadletProvider::new(artifacts, runner.clone(), config.commands.systemctl.clone()).ok()
+            QuadletProvider::new(
+                artifacts,
+                runner.clone(),
+                config.commands.systemctl.clone(),
+                config.commands.podman.clone(),
+            )
+            .ok()
         });
 
         let docker_compose = ComposeProvider::new(
@@ -83,7 +92,11 @@ impl CompositeProvider {
         );
 
         let incus = IncusProvider::new(config.commands.incus.clone(), runner.clone());
-        let libvirt = LibvirtProvider::new(config.commands.virsh.clone(), runner.clone());
+        let mut libvirt = LibvirtProvider::new(config.commands.virsh.clone(), runner.clone());
+        libvirt.uri = config
+            .linux_authority
+            .as_ref()
+            .map(|authority| authority.settings.libvirt_uri.clone());
         let storage = StorageProvider::new(config.paths.storage_dir.clone());
         let shares = ShareProvider::new(
             config.paths.samba_conf.clone(),
@@ -128,6 +141,9 @@ impl CompositeProvider {
                 enabled: service.enabled,
                 state,
                 container_count: service.containers.len(),
+                runtime_matches: None,
+                restart_required: false,
+                members: Vec::new(),
                 lifecycle: self.simulated,
                 logs: self.simulated,
             });
@@ -151,7 +167,7 @@ impl CompositeProvider {
             .map(|(index, app)| (index, app.id.clone()))
             .collect();
         let mut inspections = stream::iter(targets)
-            .map(|(index, id)| async move { (index, provider.status(config, &id).await) })
+            .map(|(index, id)| async move { (index, provider.status_details(config, &id).await) })
             .buffer_unordered(4);
         let logs_available = self.journalctl.is_file();
         let mut verified = BTreeSet::new();
@@ -159,8 +175,13 @@ impl CompositeProvider {
             while let Some((index, result)) = inspections.next().await {
                 if let Ok(status) = result {
                     let app = &mut apps[index];
-                    verified.insert(index);
-                    app.state = status.into();
+                    if status.state != "unknown" {
+                        verified.insert(index);
+                    }
+                    app.state = status.state.into();
+                    app.runtime_matches = Some(status.runtime_matches);
+                    app.restart_required = status.restart_required;
+                    app.members = status.members;
                     app.logs = logs_available;
                 }
             }
@@ -286,6 +307,57 @@ impl CompositeProvider {
 }
 
 impl ApplyProvider for CompositeProvider {
+    async fn preflight_mode(
+        &self,
+        change: &Change,
+        previous: &Config,
+        desired: &Config,
+        mode: ApplyMode,
+    ) -> Result<()> {
+        if mode == ApplyMode::Now {
+            return self.preflight(change, previous, desired).await;
+        }
+        self.check_native_scope(change)?;
+        if change.backend == "storage" {
+            return self
+                .storage
+                .preflight_mode(change, previous, desired, mode)
+                .await;
+        }
+        if change.backend == "podman/quadlet" {
+            if let Some(provider) = &self.quadlet {
+                return provider
+                    .preflight_mode(change, previous, desired, mode)
+                    .await;
+            }
+        }
+        anyhow::bail!("next-start publication is unavailable for this provider")
+    }
+    async fn apply_mode(
+        &self,
+        change: &Change,
+        previous: &Config,
+        desired: &Config,
+        mode: ApplyMode,
+    ) -> Result<()> {
+        if mode == ApplyMode::Now {
+            return self.apply(change, previous, desired).await;
+        }
+        self.check_native_scope(change)?;
+        if change.backend == "storage" {
+            return self
+                .storage
+                .apply_mode(change, previous, desired, mode)
+                .await;
+        }
+        if change.backend == "podman/quadlet" {
+            if let Some(provider) = &self.quadlet {
+                return provider.apply_mode(change, previous, desired, mode).await;
+            }
+        }
+        anyhow::bail!("next-start publication is unavailable for this provider")
+    }
+
     async fn preflight(&self, change: &Change, previous: &Config, desired: &Config) -> Result<()> {
         self.check_native_scope(change)?;
         if change.resource.starts_with("storage/") {
@@ -366,6 +438,31 @@ impl ApplyProvider for CompositeProvider {
 }
 
 impl RecoveryProvider for CompositeProvider {
+    async fn observe_mode(
+        &self,
+        change: &Change,
+        previous: &Config,
+        desired: &Config,
+        mode: ApplyMode,
+    ) -> Result<ObservedResource> {
+        if mode == ApplyMode::Now {
+            return self.observe(change, previous, desired).await;
+        }
+        self.check_native_scope(change)?;
+        if change.backend == "storage" {
+            return self
+                .storage
+                .observe_mode(change, previous, desired, mode)
+                .await;
+        }
+        if change.backend == "podman/quadlet" {
+            if let Some(provider) = &self.quadlet {
+                return provider.observe_mode(change, previous, desired, mode).await;
+            }
+        }
+        anyhow::bail!("next-start inspection is unavailable for this provider")
+    }
+
     async fn observe(
         &self,
         change: &Change,

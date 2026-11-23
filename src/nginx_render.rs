@@ -64,7 +64,7 @@ pub struct GlobalSettings {
     pub http_access: Option<crate::nginx_ingress::HttpAccess>,
 }
 
-/// On-disk TOML schema; the HTTP API retains its `shared` field name.
+/// On-disk YAML schema; the HTTP API retains its `shared` field name.
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct NginxSettings {
@@ -80,7 +80,7 @@ struct NginxSettings {
 }
 
 fn encode_global(settings: &GlobalSettings) -> Result<String> {
-    Ok(toml::to_string_pretty(&NginxSettings {
+    Ok(serde_yaml::to_string(&NginxSettings {
         allowed_ips: Some(settings.allowed_ips.clone()),
         free_subdomains: Some(settings.free_subdomains.clone()),
         global: settings.shared.clone(),
@@ -683,7 +683,7 @@ const BUNDLE: &[(&str, &str)] = &[
 ];
 
 pub fn global_path(config: &crate::config::AppConfig) -> std::path::PathBuf {
-    config.nginx.inputs_dir.join("nginx.toml")
+    config.nginx.inputs_dir.join("nginx.yaml")
 }
 
 /// Limit managed writes to the configured input and runtime trees.
@@ -713,6 +713,10 @@ pub(crate) fn ensure_managed_path(
 pub(crate) fn require_migrated_input(config: &crate::config::AppConfig, name: &str) -> Result<()> {
     let path = config.nginx.inputs_dir.join(name);
     ensure_managed_path(config, &path)?;
+    crate::config_migration::require_yaml(&path)?;
+    if name.ends_with(".yaml") {
+        crate::config_migration::require_yaml(&config.nginx.root_dir.join("settings").join(name))?;
+    }
     if !path.try_exists()? {
         let legacy = config.nginx.root_dir.join("settings").join(name);
         ensure_managed_path(config, &legacy)?;
@@ -792,9 +796,10 @@ pub fn with_path_defaults(
 
 pub fn load_global(config: &crate::config::AppConfig) -> Result<GlobalSettings> {
     let path = global_path(config);
-    require_migrated_input(config, "nginx.toml")?;
+    crate::config_migration::require_yaml(&path)?;
+    require_migrated_input(config, "nginx.yaml")?;
     let stored: NginxSettings = match std::fs::read_to_string(&path) {
-        Ok(content) => toml::from_str(&content)?,
+        Ok(content) => crate::config_yaml::decode(&content)?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => NginxSettings {
             http_access: Some(crate::nginx_ingress::HttpAccess::default()),
             ..Default::default()
@@ -981,7 +986,7 @@ pub fn shared_files(
                 .join(name.strip_prefix("settings/").unwrap()),
             content.clone(),
         );
-        // These are concrete nginx includes; text lists and TOML stay in inputs_dir.
+        // These are concrete nginx includes; text lists and YAML stay in inputs_dir.
         if name.ends_with(".conf") {
             files.insert(config.nginx.root_dir.join(name), content);
         }
@@ -1070,7 +1075,7 @@ impl FileTransaction {
             transaction.previous.push((path.clone(), previous));
         }
         if let Some(content) = files.get(&global_path(config)) {
-            let settings: NginxSettings = toml::from_str(content)?;
+            let settings: NginxSettings = crate::config_yaml::decode(content)?;
             GlobalSettings {
                 shared: settings.global.clone(),
                 site_defaults: settings.site_defaults,
@@ -1165,7 +1170,7 @@ pub fn migrate_inputs(config: &crate::config::AppConfig) -> Result<usize> {
                 .filter(|name| !name.ends_with(".jinja"))
         })
         .collect::<Vec<_>>();
-    names.extend(["nginx.toml", "sites.toml"]);
+    names.extend(["nginx.yaml", "sites.yaml"]);
     let mut files = BTreeMap::new();
     let mut removals = Vec::new();
     for name in names {
@@ -1387,7 +1392,7 @@ mod tests {
     fn bootstrap_config(root: &std::path::Path) -> crate::config::AppConfig {
         let mut config = crate::config::AppConfig::default();
         config
-            .apply_test_mode(&root.join("test-fixtures/etc/maestro/maestro.toml"))
+            .apply_test_mode(&root.join("test-fixtures/etc/maestro/maestro.yaml"))
             .unwrap();
         config.test_mode = false;
         // Existing certificate material avoids needing an external command in
@@ -1460,18 +1465,28 @@ mod tests {
         let config = migration_config(temp.path());
         let legacy = config.nginx.root_dir.join("settings");
         let globals = encode_global(&limits()).unwrap();
-        let sites = r#"[sites.app]
-kind = "subdomain"
-domain = "example.test"
-name = "app"
-enabled = true
-upstream = "http://127.0.0.1:8080"
-limit_policy = "api"
-routes = [{path = "/static/", limit_policy = "assets"}]
+        let sites = r#"{
+  "sites": {
+    "app": {
+      "kind": "subdomain",
+      "domain": "example.test",
+      "name": "app",
+      "enabled": true,
+      "upstream": "http://127.0.0.1:8080",
+      "limit_policy": "api",
+      "routes": [
+        {
+          "path": "/static/",
+          "limit_policy": "assets"
+        }
+      ]
+    }
+  }
+}
 "#;
         for (name, content) in [
-            ("nginx.toml", globals.as_str()),
-            ("sites.toml", sites),
+            ("nginx.yaml", globals.as_str()),
+            ("sites.yaml", sites),
             ("allowed_ips.txt", "192.0.2.0/24"),
             ("domains.conf", "custom.test http://127.0.0.1:8000;"),
             ("security_trap_allow.conf", "# custom guard exceptions"),
@@ -1492,8 +1507,8 @@ routes = [{path = "/static/", limit_policy = "assets"}]
             fs::read_to_string(crate::nginx_sites::path(&config)).unwrap(),
             sites
         );
-        assert!(!legacy.join("nginx.toml").exists());
-        assert!(!legacy.join("sites.toml").exists());
+        assert!(!legacy.join("nginx.yaml").exists());
+        assert!(!legacy.join("sites.yaml").exists());
         assert!(!legacy.join("allowed_ips.txt").exists());
         assert!(legacy.join("domains.conf").exists());
         assert!(!config.nginx.inputs_dir.join("proxy.jinja").exists());
@@ -1519,16 +1534,24 @@ routes = [{path = "/static/", limit_policy = "assets"}]
         let temp = tempfile::tempdir().unwrap();
         let config = migration_config(temp.path());
         let legacy = config.nginx.root_dir.join("settings");
-        fs::write(legacy.join("nginx.toml"), "[global]\nhttp_port = 8080").unwrap();
+        fs::write(
+            legacy.join("nginx.yaml"),
+            "{\n  \"global\": {\n    \"http_port\": 8080\n  }\n}\n",
+        )
+        .unwrap();
         fs::write(legacy.join("allowed_ips.txt"), "192.0.2.0/24").unwrap();
         fs::create_dir_all(&config.nginx.inputs_dir).unwrap();
-        fs::write(global_path(&config), "[global]\nhttp_port = 9090").unwrap();
+        fs::write(
+            global_path(&config),
+            "{\n  \"global\": {\n    \"http_port\": 9090\n  }\n}\n",
+        )
+        .unwrap();
         assert!(migrate_inputs(&config).is_err());
         assert!(!config.nginx.inputs_dir.join("allowed_ips.txt").exists());
         assert!(legacy.join("allowed_ips.txt").exists());
         assert_eq!(
             fs::read_to_string(global_path(&config)).unwrap(),
-            "[global]\nhttp_port = 9090"
+            "{\n  \"global\": {\n    \"http_port\": 9090\n  }\n}\n"
         );
     }
 
@@ -1537,20 +1560,24 @@ routes = [{path = "/static/", limit_policy = "assets"}]
         use std::fs;
         for invalid in [
             "invalid TOML [",
-            "[sites.bad]\nkind = 'subdomain'\ndomain = 'example.test'\nname = 'bad'\nlimit_policy = 'missing'",
+            "{\n  \"sites\": {\n    \"bad\": {\n      \"kind\": \"subdomain\",\n      \"domain\": \"example.test\",\n      \"name\": \"bad\",\n      \"limit_policy\": \"missing\"\n    }\n  }\n}\n",
         ] {
             let temp = tempfile::tempdir().unwrap();
             let config = migration_config(temp.path());
             let legacy = config.nginx.root_dir.join("settings");
-            fs::write(legacy.join("nginx.toml"), "[global]\nhttp_port = 8080").unwrap();
-            fs::write(legacy.join("sites.toml"), invalid).unwrap();
+            fs::write(
+                legacy.join("nginx.yaml"),
+                "{\n  \"global\": {\n    \"http_port\": 8080\n  }\n}\n",
+            )
+            .unwrap();
+            fs::write(legacy.join("sites.yaml"), invalid).unwrap();
             fs::write(legacy.join("allowed_ips.txt"), "192.0.2.0/24").unwrap();
             assert!(migrate_inputs(&config).is_err());
             assert_eq!(
-                fs::read_to_string(legacy.join("sites.toml")).unwrap(),
+                fs::read_to_string(legacy.join("sites.yaml")).unwrap(),
                 invalid
             );
-            assert!(legacy.join("nginx.toml").exists());
+            assert!(legacy.join("nginx.yaml").exists());
             assert!(legacy.join("allowed_ips.txt").exists());
             assert!(!global_path(&config).exists());
             assert!(!crate::nginx_sites::path(&config).exists());
@@ -1584,7 +1611,7 @@ routes = [{path = "/static/", limit_policy = "assets"}]
         assert_eq!(fs::read_to_string(&runtime).unwrap(), "old runtime");
         let outside = temp.path().join("outside");
         fs::write(&outside, "outside").unwrap();
-        let link = config.nginx.inputs_dir.join("nginx.toml");
+        let link = config.nginx.inputs_dir.join("nginx.yaml");
         symlink(&outside, &link).unwrap();
         assert!(load_global(&config).is_err());
         assert!(migrate_inputs(&config).is_err());
@@ -1976,7 +2003,7 @@ routes = [{path = "/static/", limit_policy = "assets"}]
             .into_iter()
             .collect();
         assert!(FileTransaction::apply(&config, files).is_err());
-        assert!(!outside.join("nginx.toml").exists());
+        assert!(!outside.join("nginx.yaml").exists());
     }
     #[test]
     fn deployment_globals_preserve_linux_runtime_options_and_normalize_certificates() {
@@ -2000,7 +2027,7 @@ routes = [{path = "/static/", limit_policy = "assets"}]
         config.nginx.http_forwarder_path = root.join("conf.d/05-http-to-https.conf");
         fs::create_dir_all(&config.nginx.inputs_dir).unwrap();
         let input = global_path(&config);
-        fs::write(&input, "[global]\nhttp_port = 19080\nhttps_port = 19443\nnginx_daemon = false\nnginx_user = ''\ndefault_certificate_dir = 'certs/example_test'\n").unwrap();
+        fs::write(&input, "{\n  \"global\": {\n    \"http_port\": 19080,\n    \"https_port\": 19443,\n    \"nginx_daemon\": false,\n    \"nginx_user\": \"\",\n    \"default_certificate_dir\": \"certs/example_test\"\n  }\n}\n").unwrap();
         let mut global = load_global(&config).unwrap();
         global.site_defaults = json!({"enable_streaming": false, "large_upload_max_body_size": "0", "routes": [{"path": "/events", "proxy_transport": "sse"}]}).as_object().unwrap().clone();
         global.allowed_ips = vec!["192.0.2.0/24".into()];
@@ -2029,18 +2056,19 @@ routes = [{path = "/static/", limit_policy = "assets"}]
             assert!(main.contains(&format!("{directive}_temp_path {temp_dir}/{folder};")));
         }
         FileTransaction::apply(&config, files).unwrap().commit();
-        let saved: toml::Value = toml::from_str(&fs::read_to_string(&input).unwrap()).unwrap();
-        assert_eq!(saved["global"]["http_port"].as_integer(), Some(19080));
+        let saved: serde_yaml::Value =
+            crate::config_yaml::decode(&fs::read_to_string(&input).unwrap()).unwrap();
+        assert_eq!(saved["global"]["http_port"].as_i64(), Some(19080));
         let restored = load_global(&config).unwrap();
         assert_eq!(restored.shared, global.shared);
         assert_eq!(restored.site_defaults, global.site_defaults);
         assert_eq!(restored.allowed_ips, global.allowed_ips);
         assert_eq!(restored.free_subdomains, global.free_subdomains);
-        // An explicit empty list in TOML overrides an older generated fragment.
-        let mut saved: toml::Value = saved;
-        saved["allowed_ips"] = toml::Value::Array(Vec::new());
-        saved["global"]["http_port"] = toml::Value::Integer(19081);
-        fs::write(&input, toml::to_string_pretty(&saved).unwrap()).unwrap();
+        // An explicit empty list in YAML overrides an older generated fragment.
+        let mut saved: serde_yaml::Value = saved;
+        saved["allowed_ips"] = serde_yaml::Value::Sequence(Vec::new());
+        saved["global"]["http_port"] = serde_yaml::Value::Number(19081.into());
+        fs::write(&input, serde_yaml::to_string(&saved).unwrap()).unwrap();
         let edited = load_global(&config).unwrap();
         assert!(edited.allowed_ips.is_empty());
         assert_eq!(edited.shared["http_port"], 19081);
@@ -2049,7 +2077,11 @@ routes = [{path = "/static/", limit_policy = "assets"}]
                 .contains("daemon off;")
         );
         fs::remove_file(global_path(&config)).unwrap();
-        fs::write(&input, "[global]\ndefault_certificate_dir = '../outside'\n").unwrap();
+        fs::write(
+            &input,
+            "{\n  \"global\": {\n    \"default_certificate_dir\": \"../outside\"\n  }\n}\n",
+        )
+        .unwrap();
         assert!(load_global(&config).is_err());
         fs::remove_file(&input).unwrap();
         std::os::unix::fs::symlink(root.join("outside"), &input).unwrap();

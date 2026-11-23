@@ -1,6 +1,8 @@
 pub mod adguard;
 pub mod certificates;
 pub mod firewall;
+#[cfg(feature = "linux")]
+mod linux_session_store;
 #[cfg(feature = "linux-ui")]
 mod linux_ui;
 #[cfg(feature = "linux")]
@@ -9,8 +11,6 @@ pub mod nginx;
 pub mod services;
 #[cfg(feature = "linux")]
 mod sessions;
-#[cfg(feature = "linux")]
-mod linux_session_store;
 pub mod system;
 #[cfg(feature = "linux")]
 pub mod tools;

@@ -9,7 +9,7 @@ rust-version = "1.85"
 [features]
 default = ["asuswrt"]
 asuswrt = []
-linux = ["dep:quick-xml", "dep:serde_yaml", "dep:unsafe-libyaml"]
+linux = ["dep:quick-xml", "dep:ring"]
 linux-ui = ["linux"]
 
 [[bin]]
@@ -34,13 +34,14 @@ parking_lot = "0.12"
 minijinja = { version = "3.0.5", default-features = false, features = ["builtins", "macros", "multi_template", "serde", "std_collections"] }
 quick-xml = { version = "0.39.4", optional = true }
 regex = "1"
+ring = { version = "0.17", optional = true }
 regex-automata = { version = "0.4", features = ["hybrid", "syntax", "perf-literal"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = { version = "0.9.34", optional = true }
-unsafe-libyaml = { version = "0.2.11", optional = true }
+serde_yaml = "0.9.34"
+unsafe-libyaml = "0.2.11"
 sha2 = "0.10"
 subtle = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }

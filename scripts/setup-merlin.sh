@@ -13,12 +13,13 @@ MOSQUITTO_PASS="${MOSQUITTO_PASS:-${MOSQUITTO_PASSWD:-}}"
 [ "$(id -u)" = "0" ] || { echo "Run as root on the router." >&2; exit 1; }
 [ -x /opt/bin/maestro ] || { echo "/opt/bin/maestro not installed" >&2; exit 1; }
 # Never start an empty Maestro against an unmigrated Router Hub installation.
-if [ ! -f "$CONFIG_DIR/maestro.toml" ] && [ -f /opt/etc/router-hub/router-hub.toml ]; then
+if [ ! -f "$CONFIG_DIR/maestro.yaml" ] && [ -f /opt/etc/router-hub/router-hub.toml ]; then
     echo "Router Hub config detected: stage the one-time migration described in docs/maestro-migration.md first." >&2
     exit 1
 fi
 # Refuse a configuration still rooted in the old installation.
-if [ -f "$CONFIG_DIR/maestro.toml" ] && grep -Eq '/opt/(etc|var/lib|var/run|var/log)/router-hub' "$CONFIG_DIR/maestro.toml"; then
+if { [ -f "$CONFIG_DIR/maestro.yaml" ] && grep -Eq '/opt/(etc|var/lib|var/run|var/log)/router-hub' "$CONFIG_DIR/maestro.yaml"; } ||
+   { [ -f "$CONFIG_DIR/maestro.toml" ] && grep -Eq '/opt/(etc|var/lib|var/run|var/log)/router-hub' "$CONFIG_DIR/maestro.toml"; }; then
     echo "Maestro configuration still references Router Hub directories; correct it before installing." >&2
     exit 1
 fi
@@ -35,20 +36,26 @@ if [ "${MAESTRO_DEFER_START:-0}" != 1 ] && [ -x /opt/etc/init.d/S99maestro ]; th
     /opt/etc/init.d/S99maestro stop
 fi
 
-if [ ! -f "$CONFIG_DIR/maestro.toml" ]; then
-    cp "$EXAMPLES_DIR/maestro.example.toml" "$CONFIG_DIR/maestro.toml"
-    chmod 0600 "$CONFIG_DIR/maestro.toml"
+if [ ! -f "$CONFIG_DIR/maestro.yaml" ] && [ -f "$CONFIG_DIR/maestro.toml" ]; then
+    /opt/bin/maestro --config "$CONFIG_DIR/maestro.toml" migrate-config
+fi
+if [ ! -f "$CONFIG_DIR/maestro.yaml" ]; then
+    cp "$EXAMPLES_DIR/maestro.example.yaml" "$CONFIG_DIR/maestro.yaml"
+    chmod 0600 "$CONFIG_DIR/maestro.yaml"
     TOKEN="$(openssl rand -hex 24)"
-    sed -i "s/REPLACE-WITH-AT-LEAST-24-RANDOM-CHARACTERS/$TOKEN/" "$CONFIG_DIR/maestro.toml"
-    echo "Created $CONFIG_DIR/maestro.toml. Review rendered_page and menu_tree before starting."
+    sed -i "s/REPLACE-WITH-AT-LEAST-24-RANDOM-CHARACTERS/$TOKEN/" "$CONFIG_DIR/maestro.yaml"
+    echo "Created $CONFIG_DIR/maestro.yaml. Review rendered_page and menu_tree before starting."
 fi
 
+# Convert existing managed TOML inputs once; retain private originals.
+/opt/bin/maestro --config "$CONFIG_DIR/maestro.yaml" migrate-config
+
 # Relocate current-format inputs while Maestro is stopped.
-/opt/bin/maestro --config "$CONFIG_DIR/maestro.toml" migrate-nginx-inputs
+/opt/bin/maestro --config "$CONFIG_DIR/maestro.yaml" migrate-nginx-inputs
 
 # Install the embedded main configuration, backing up a different nginx.conf.
 # Saved inputs, existing shared fragments, and configured nginx paths are retained.
-/opt/bin/maestro --config "$CONFIG_DIR/maestro.toml" init-nginx
+/opt/bin/maestro --config "$CONFIG_DIR/maestro.yaml" init-nginx
 
 # Install default dehydrated DNS-01 challenge hook if not already installed.
 if [ ! -f "$DATA_DIR/dehydrated/dehydrated-dns01-hook.sh" ]; then
@@ -67,7 +74,7 @@ mkdir -p "$DATA_DIR/dehydrated"
 DEHYDRATED_BIN="$DATA_DIR/dehydrated/dehydrated"
 DEHYDRATED_URL="https://raw.githubusercontent.com/dehydrated-io/dehydrated/master/dehydrated"
 
-if ! /opt/bin/maestro --config "$CONFIG_DIR/maestro.toml" update-dehydrated 2>/dev/null || [ ! -s "$DEHYDRATED_BIN" ]; then
+if ! /opt/bin/maestro --config "$CONFIG_DIR/maestro.yaml" update-dehydrated 2>/dev/null || [ ! -s "$DEHYDRATED_BIN" ]; then
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL "$DEHYDRATED_URL" -o "$DEHYDRATED_BIN" 2>/dev/null || \
             curl -fsSL -k "$DEHYDRATED_URL" -o "$DEHYDRATED_BIN" 2>/dev/null || true
@@ -95,7 +102,7 @@ elif [ -n "$MOSQUITTO_USER" ] || [ -n "$MOSQUITTO_PASS" ]; then
     echo "Warning: Both --mosquitto-user and --mosquitto-pass (or MOSQUITTO_USER and MOSQUITTO_PASS env vars) are required." >&2
 fi
 # Repair permissions on existing installations as well as new ones.
-chmod 0600 "$CONFIG_DIR/maestro.toml"
+chmod 0600 "$CONFIG_DIR/maestro.yaml"
 if [ -d /opt/etc/nginx/certs ]; then
     find /opt/etc/nginx/certs -type f -name 'privkey*.pem' -exec chmod 0644 {} \; # read access needed for nobody
 fi
@@ -149,7 +156,7 @@ if ! grep -qF 'Maestro: restore firewall hooks after Asuswrt rebuilds its firewa
 EOF
 fi
 
-/opt/bin/maestro --config "$CONFIG_DIR/maestro.toml" check-config
+/opt/bin/maestro --config "$CONFIG_DIR/maestro.yaml" check-config
 if [ "${MAESTRO_DEFER_START:-0}" != 1 ]; then
     /opt/etc/init.d/S99maestro restart
 fi

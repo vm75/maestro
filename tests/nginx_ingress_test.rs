@@ -33,7 +33,7 @@ async fn setup() -> (tempfile::TempDir, AppState) {
     let temp = tempfile::tempdir().unwrap();
     let mut config = AppConfig::default();
     config
-        .apply_test_mode(&temp.path().join("test-fixtures/etc/maestro/maestro.toml"))
+        .apply_test_mode(&temp.path().join("test-fixtures/etc/maestro/maestro.yaml"))
         .unwrap();
     config.ensure_directories().unwrap();
     fs::write(&config.nginx.config_path, "events {} http {}\n").unwrap();
@@ -207,7 +207,7 @@ async fn old_hostname_collisions_can_be_repaired_through_the_api() {
         .server_name = "example.test".into();
     fs::write(
         nginx_sites::path(&state.config),
-        toml::to_string_pretty(&sites).unwrap(),
+        serde_yaml::to_string(&sites).unwrap(),
     )
     .unwrap();
     let (code, reply) = request(&app, "GET", "/nginx/settings", json!(null)).await;
@@ -1648,13 +1648,13 @@ async fn live_nginx_separates_ingress_and_blocks_paths_before_upstream() {
 async fn documented_ingress_inputs_validate_and_render() {
     let (_temp, state) = setup().await;
     fs::write(
-        state.config.nginx.inputs_dir.join("nginx.toml"),
-        include_str!("../config/nginx/examples/ingress.toml"),
+        state.config.nginx.inputs_dir.join("nginx.yaml"),
+        include_str!("../config/nginx/examples/ingress.yaml"),
     )
     .unwrap();
     fs::write(
         nginx_sites::path(&state.config),
-        include_str!("../config/nginx/examples/ingress-sites.toml"),
+        include_str!("../config/nginx/examples/ingress-sites.yaml"),
     )
     .unwrap();
     let global = nginx_render::load_global(&state.config).unwrap();
@@ -1718,7 +1718,7 @@ async fn documented_ingress_inputs_validate_and_render() {
             .to_string()
             .contains("belongs to both")
     );
-    fs::write(nginx_sites::path(&state.config), "[sites]\n").unwrap();
+    fs::write(nginx_sites::path(&state.config), "{\n  \"sites\": {}\n}\n").unwrap();
     let files = maestro::nginx_ingress::runtime_files(&state.config, &without_profile).unwrap();
     assert!(
         !files[&defaults_path].contains("127.0.0.2:19443"),

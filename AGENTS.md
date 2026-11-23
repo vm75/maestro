@@ -5,8 +5,8 @@
 Maestro is a Rust service for administrators of Asuswrt-Merlin routers. It
 serves a standalone or mounted web UI and a protected Axum API for Entware
 services, nginx configuration, certificates, Wake-on-LAN, firewall bans, and
-optional AdGuard Home integration. Router-sensitive state is kept in TOML and
-atomic JSON files. Managed nginx site inputs live in `<nginx.inputs_dir>/sites.toml`;
+optional AdGuard Home integration. Router-sensitive state is kept in YAML and
+atomic JSON files. Managed nginx site inputs live in `<nginx.inputs_dir>/sites.yaml`;
 custom nginx objects remain authored configuration files.
 
 ## Repository map
@@ -38,16 +38,24 @@ node scripts/test-web-ui.mjs
 
 Useful repository shortcuts are `make check`, `make test`, `make run`,
 `make fmt`, `make clippy`, `make test-nginx`, `make test-lab`, and `make release`.
-`make test-nginx` needs Python 3.11+, Jinja2, nginx, and OpenSSL and uses temporary
+`make test-nginx` needs Python 3.11+, Jinja2, PyYAML, nginx, and OpenSSL and uses temporary
 files and loopback servers. `make run` starts x64 test mode
-with `test-fixtures/etc/maestro/maestro.toml`; it does not execute router commands or send
+with `test-fixtures/etc/maestro/maestro.yaml`; it does not execute router commands or send
 Wake-on-LAN packets.
 
-For **real Linux integration** use `platform = "linux"` (or
-`--linux-mode`) with `test_mode = false`. `make test-linux` runs a
+For **real Linux integration** use `platform: linux` (or
+`--linux-mode`) with `test_mode: false`. `make test-linux` runs a
 temporary unprivileged real-nginx smoke test; it does not exercise live
 firewall enforcement, DNS providers, or router firmware. Keep real firewall
 tests in isolated network namespaces/VMs and always use lab-only paths.
+
+`make test-quadlet` validates rendered definitions with the installed native
+Quadlet generator without starting units (`MAESTRO_QUADLET_GENERATOR` overrides
+its path). `make test-podman` requires a non-root account, rootless Podman and a
+C compiler with static libc and Rust/Cargo. It builds an offline scratch image,
+checks engine lifecycle/fingerprint labels and runs the native metadata-reader
+ownership tests using only fresh verified temporary storage/runtime roots, no pulls and no networking. It cleans up that private lab; it does not
+configure user units. These checks do not establish complete provider acceptance.
 
 For a release artifact, use `./scripts/build-release.sh <rust-target>`.
 Use `make ipk` to build and package the AArch64 musl Entware IPK and checksum

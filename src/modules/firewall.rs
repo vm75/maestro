@@ -601,7 +601,7 @@ mod tests {
         let root = std::env::current_dir().unwrap();
         let mut config = AppConfig::default();
         config
-            .apply_test_mode(&root.join("config/maestro.toml"))
+            .apply_test_mode(&root.join("config/maestro.yaml"))
             .unwrap();
         let data = tempdir().unwrap();
         config.paths.data_dir = data.path().to_path_buf();

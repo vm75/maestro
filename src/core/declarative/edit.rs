@@ -4,7 +4,7 @@
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 
-use super::{Config, Store, Service, Storage, Share, Binding, MISSING_REVISION, parse};
+use super::{Binding, Config, MISSING_REVISION, Service, Share, Storage, Store, parse};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,36 +19,63 @@ pub struct EditInput {
 
 pub fn edit(store: &Store, input: &EditInput) -> Result<Vec<u8>> {
     ensure!(super::id_valid(&input.id), "invalid resource identifier");
-    ensure!(matches!(input.operation.as_str(), "save" | "remove"), "invalid resource operation");
-    ensure!(matches!(input.kind.as_str(), "service" | "storage" | "share" | "binding" | "secret"),
-        "unsupported resource kind");
+    ensure!(
+        matches!(input.operation.as_str(), "save" | "remove"),
+        "invalid resource operation"
+    );
+    ensure!(
+        matches!(
+            input.kind.as_str(),
+            "service" | "storage" | "share" | "binding" | "secret"
+        ),
+        "unsupported resource kind"
+    );
     let current = store.read()?;
-    let actual = current.as_ref().map_or(MISSING_REVISION, |snapshot| snapshot.revision.as_str());
-    ensure!(input.revision == actual, "configuration revision changed; review again");
+    let actual = current
+        .as_ref()
+        .map_or(MISSING_REVISION, |snapshot| snapshot.revision.as_str());
+    ensure!(
+        input.revision == actual,
+        "configuration revision changed; review again"
+    );
 
     // Preserve the recoverability of a malformed existing document. A typed
     // form cannot silently repair or overwrite invalid raw author content.
     let mut config = current.as_ref().map_or_else(
-        || Ok::<Config, anyhow::Error>(Config {
-            version: 1,
-            ..Config::default()
-        }),
+        || {
+            Ok::<Config, anyhow::Error>(Config {
+                version: 1,
+                ..Config::default()
+            })
+        },
         |snapshot| snapshot.config(),
     )?;
 
     let definition = input.definition.as_deref().unwrap_or_default();
-    ensure!(definition.len() <= 256 * 1024, "typed definition exceeds 256 KiB");
+    ensure!(
+        definition.len() <= 256 * 1024,
+        "typed definition exceeds 256 KiB"
+    );
     if input.operation == "remove" {
-        ensure!(input.definition.is_none(), "remove cannot include a replacement definition");
+        ensure!(
+            input.definition.is_none(),
+            "remove cannot include a replacement definition"
+        );
     } else {
-        ensure!(!definition.is_empty() && definition.trim() != "null", "definition is required");
+        ensure!(
+            !definition.is_empty() && definition.trim() != "null",
+            "definition is required"
+        );
     }
 
     macro_rules! edit_map {
         ($map:expr, $ty:ty) => {{
             let target = &mut $map;
             if input.operation == "remove" {
-                ensure!(target.remove(&input.id).is_some(), "resource does not exist");
+                ensure!(
+                    target.remove(&input.id).is_some(),
+                    "resource does not exist"
+                );
             } else {
                 // Structs deny unknown JSON fields. No untyped fragment or shell
                 // value can become a native command through this editor.
@@ -68,8 +95,12 @@ pub fn edit(store: &Store, input: &EditInput) -> Result<Vec<u8>> {
         _ => unreachable!(),
     }
     config.validate()?;
-    let yaml = serde_yaml::to_string(&config).context("could not encode typed workload definition")?;
-    ensure!(yaml.len() <= super::MAX_CONFIG_BYTES, "resulting YAML exceeds the limit");
+    let yaml =
+        serde_yaml::to_string(&config).context("could not encode typed workload definition")?;
+    ensure!(
+        yaml.len() <= super::MAX_CONFIG_BYTES,
+        "resulting YAML exceeds the limit"
+    );
     let parsed = parse(yaml.as_bytes())?;
     ensure!(parsed.version == 1, "resulting version is unsupported");
     Ok(yaml.into_bytes())
@@ -114,17 +145,30 @@ mod tests {
         let revision = store.read().unwrap().unwrap().revision;
         for definition in [
             r#"{"kind":"directory","path":"data","command":"sh"}"#,
-            "null", r#"{"kind":"directory","path":"../escape"}"#,
+            "null",
+            r#"{"kind":"directory","path":"../escape"}"#,
         ] {
             let request = EditInput {
-                kind:"storage".into(), id:"data".into(), operation:"save".into(),
-                definition:Some(definition.into()), revision:revision.clone(),
+                kind: "storage".into(),
+                id: "data".into(),
+                operation: "save".into(),
+                definition: Some(definition.into()),
+                revision: revision.clone(),
             };
             assert!(edit(&store, &request).is_err());
         }
-        assert!(edit(&store, &EditInput {
-            kind:"storage".into(), id:"missing".into(), operation:"remove".into(),
-            definition:None, revision,
-        }).is_err());
+        assert!(
+            edit(
+                &store,
+                &EditInput {
+                    kind: "storage".into(),
+                    id: "missing".into(),
+                    operation: "remove".into(),
+                    definition: None,
+                    revision,
+                }
+            )
+            .is_err()
+        );
     }
 }

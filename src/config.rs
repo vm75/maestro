@@ -19,6 +19,9 @@ pub enum Platform {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
+    #[cfg(feature = "linux")]
+    #[serde(skip)]
+    pub linux_authority: Option<crate::core::linux_config::Authority>,
     pub test_mode: bool,
     pub platform: Platform,
     pub server: ServerConfig,
@@ -37,6 +40,8 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "linux")]
+            linux_authority: None,
             test_mode: false,
             platform: Platform::Asuswrt,
             server: ServerConfig::default(),
@@ -55,10 +60,29 @@ impl Default for AppConfig {
 
 impl AppConfig {
     pub fn load(path: &Path) -> Result<Self> {
+        anyhow::ensure!(
+            path.extension()
+                .is_some_and(|extension| extension == "yaml" || extension == "yml"),
+            "configuration must be YAML; run --config <legacy.toml> migrate-config once"
+        );
+        crate::config_migration::require_yaml(path)?;
         if path.exists() {
-            let raw = fs::read_to_string(path)
+            let raw = crate::config_yaml::read(path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
-            let mut config: Self = toml::from_str(&raw)
+            let document: serde_yaml::Value = crate::config_yaml::decode(&raw)?;
+            if document.get("version").is_some()
+                && document.get("platform").is_none()
+                && document.get("paths").is_none()
+                && document
+                    .get("server")
+                    .is_none_or(|server| server.get("bind").is_none())
+            {
+                #[cfg(feature = "linux")]
+                return crate::core::linux_config::load(path);
+                #[cfg(not(feature = "linux"))]
+                anyhow::bail!("native Linux YAML requires a Linux-feature build");
+            }
+            let mut config: Self = crate::config_yaml::decode(&raw)
                 .with_context(|| format!("failed to parse {}", path.display()))?;
             config.resolve_relative_paths(path);
             Ok(config)
@@ -820,13 +844,27 @@ mod tests {
         assert_eq!(config.firewall.subnet_promotion_window_days, 14);
     }
 
+    #[cfg(not(feature = "linux"))]
+    #[test]
+    fn native_linux_yaml_is_rejected_by_router_only_builds() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("maestro.yaml");
+        fs::write(&path, "version: 1\n").unwrap();
+        assert!(
+            AppConfig::load(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("Linux-feature")
+        );
+    }
+
     #[test]
     fn test_linux_platform_config() {
         let mut config = AppConfig {
             platform: Platform::Linux,
             ..AppConfig::default()
         };
-        let decoded: AppConfig = toml::from_str("platform = \"linux\"").unwrap();
+        let decoded: AppConfig = crate::config_yaml::decode("platform: linux").unwrap();
         assert_eq!(decoded.platform, Platform::Linux);
         config.server.auth_token = "long-test-token-for-linux-integration".into();
         assert!(config.validate().is_ok());
@@ -851,24 +889,33 @@ mod tests {
     #[test]
     fn test_load_resolves_relative_paths_against_config_directory() {
         let temp = tempfile::tempdir().unwrap();
-        let config_path = temp.path().join("etc/maestro/maestro.toml");
+        let config_path = temp.path().join("etc/maestro/maestro.yaml");
         fs::create_dir_all(config_path.parent().unwrap()).unwrap();
         fs::write(
             &config_path,
-            r#"
-                [paths]
-                data_dir = "."
-                log_file = "../../var/log/maestro.log"
-                [services]
-                log_dirs = ["../../var/log"]
-                [firewall]
-                log_dirs = ["../../var/log/nginx"]
-                [nginx]
-                root_dir = "../nginx"
-                inputs_dir = "nginx"
-                config_path = "/absolute/nginx.conf"
-                prefix_path = "../nginx-prefix"
-            "#,
+            r#"{
+  "paths": {
+    "data_dir": ".",
+    "log_file": "../../var/log/maestro.log"
+  },
+  "services": {
+    "log_dirs": [
+      "../../var/log"
+    ]
+  },
+  "firewall": {
+    "log_dirs": [
+      "../../var/log/nginx"
+    ]
+  },
+  "nginx": {
+    "root_dir": "../nginx",
+    "inputs_dir": "nginx",
+    "config_path": "/absolute/nginx.conf",
+    "prefix_path": "../nginx-prefix"
+  }
+}
+"#,
         )
         .unwrap();
 
@@ -974,14 +1021,16 @@ mod tests {
     #[test]
     fn test_dehydrated_and_hook_config_overrides() {
         let temp = tempfile::tempdir().unwrap();
-        let config_path = temp.path().join("maestro.toml");
+        let config_path = temp.path().join("maestro.yaml");
         fs::write(
             &config_path,
-            r#"
-                [commands]
-                dehydrated = "/custom/bin/dehydrated"
-                dehydrated_dns01_hook = "/custom/bin/dns01-hook.sh"
-            "#,
+            r#"{
+  "commands": {
+    "dehydrated": "/custom/bin/dehydrated",
+    "dehydrated_dns01_hook": "/custom/bin/dns01-hook.sh"
+  }
+}
+"#,
         )
         .unwrap();
         let config = AppConfig::load(&config_path).unwrap();
@@ -994,13 +1043,15 @@ mod tests {
             Path::new("/custom/bin/dns01-hook.sh")
         );
 
-        let config_path2 = temp.path().join("maestro2.toml");
+        let config_path2 = temp.path().join("maestro2.yaml");
         fs::write(
             &config_path2,
-            r#"
-                [certificates]
-                dns01_hook = "/custom/certs/hook.sh"
-            "#,
+            r#"{
+  "certificates": {
+    "dns01_hook": "/custom/certs/hook.sh"
+  }
+}
+"#,
         )
         .unwrap();
         let config2 = AppConfig::load(&config_path2).unwrap();

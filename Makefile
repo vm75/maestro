@@ -1,4 +1,4 @@
-.PHONY: check test test-linux test-nginx test-ipk test-ui test-lab run fmt clippy release ipk init-lab run-lab
+.PHONY: check test test-linux test-podman test-quadlet test-nginx test-ipk test-ui test-lab run fmt clippy release ipk init-lab run-lab
 check:
 	cargo check --all-targets
 
@@ -18,11 +18,17 @@ test-ui:
 test-linux:
 	bash scripts/test-linux-integration.sh
 
+test-podman:
+	bash scripts/test-podman-offline.sh
+
+test-quadlet:
+	cargo test --locked --no-default-features --features linux --lib native_generator_accepts_rootless_artifacts -- --ignored
+
 test-lab:
 	bash tests/test_lab_aarch64.sh
 
 run:
-	cargo run -- --config ./test-fixtures/etc/maestro/maestro.toml --test-mode serve
+	cargo run -- --config ./test-fixtures/etc/maestro/maestro.yaml --test-mode serve
 
 fmt:
 	cargo fmt --all

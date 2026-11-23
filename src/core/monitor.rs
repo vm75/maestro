@@ -171,14 +171,22 @@ impl Monitor {
     }
 
     fn start_sampling(config: Arc<AppConfig>) -> Arc<Mutex<Samples>> {
-        let cache = Arc::new(Mutex::new(Samples::default()));
+        let interval = config
+            .linux_authority
+            .as_ref()
+            .map_or(INTERVAL, |authority| {
+                Duration::from_secs(authority.settings.sample_interval_seconds)
+            });
+        let mut initial = Samples::default();
+        initial.current.interval_seconds = interval.as_secs();
+        let cache = Arc::new(Mutex::new(initial));
         if let Some(runtime) = (!config.test_mode)
             .then(tokio::runtime::Handle::try_current)
             .and_then(Result::ok)
         {
             let weak = Arc::downgrade(&cache);
             runtime.spawn(async move {
-                let mut ticker = tokio::time::interval(INTERVAL);
+                let mut ticker = tokio::time::interval(interval);
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     ticker.tick().await;
@@ -292,7 +300,7 @@ impl Samples {
         self.current = Snapshot {
             valid: true,
             at: Some(at),
-            interval_seconds: INTERVAL.as_secs(),
+            interval_seconds: self.current.interval_seconds,
             cpu,
             memory,
             uptime_seconds: usage.uptime_seconds,

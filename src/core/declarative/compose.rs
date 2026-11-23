@@ -42,6 +42,7 @@ fn render_compose(
         .services
         .get(id)
         .ok_or_else(|| anyhow!("missing Compose service"))?;
+    super::container_health::validate(&service.containers)?;
     let mut services = BTreeMap::new();
     let literal = |value: &str| value.replace('$', "$$");
     let words = |values: &[String]| {
@@ -68,8 +69,7 @@ fn render_compose(
                 && container.cap_add.is_empty()
                 && container.uid_maps.is_empty()
                 && container.gid_maps.is_empty()
-                && container.userns_mode.is_empty()
-                && container.healthcheck.is_none(),
+                && container.userns_mode.is_empty(),
             "unsupported Compose container option"
         );
         let mut definition = serde_json::Map::new();
@@ -150,12 +150,29 @@ fn render_compose(
                     "unknown Compose dependency"
                 );
                 ensure!(
-                    condition == "started",
+                    matches!(condition.as_str(), "started" | "healthy"),
                     "unsupported Compose dependency condition"
                 );
-                dependencies.insert(member, json!({"condition": "service_started"}));
+                dependencies.insert(member, json!({"condition": format!("service_{condition}")}));
             }
             definition.insert("depends_on".into(), json!(dependencies));
+        }
+        if let Some(health) = &container.healthcheck {
+            let mut value = serde_json::Map::new();
+            value.insert("test".into(), json!(words(&health.test)));
+            for (name, duration) in [
+                ("interval", &health.interval),
+                ("timeout", &health.timeout),
+                ("start_period", &health.start_period),
+            ] {
+                if !duration.is_empty() {
+                    value.insert(name.into(), json!(duration));
+                }
+            }
+            if health.retries != 0 {
+                value.insert("retries".into(), json!(health.retries));
+            }
+            definition.insert("healthcheck".into(), json!(value));
         }
         if !container.environment.is_empty() {
             let values: BTreeMap<_, _> = container
@@ -414,10 +431,7 @@ impl ApplyProvider for ComposeProvider {
         let directory = self
             .open_app(id, definitions.after.is_some())?
             .ok_or_else(|| anyhow!("missing Compose directory"))?;
-        unix_fs::flock(
-            &directory,
-            unix_fs::FlockOperation::NonBlockingLockExclusive,
-        )?;
+        let directory = store::LockedDirectory::try_acquire(directory)?;
         ensure!(
             read_definition(&directory)?.as_deref()
                 == definitions.before.as_deref().map(str::as_bytes),
@@ -469,6 +483,80 @@ mod tests {
     use crate::core::declarative::{Container, Mount, Operation, Service};
     use std::collections::BTreeMap;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn healthcheck_and_healthy_dependency_are_literal_and_validated() {
+        let mut config = Config::default();
+        let upstream = Container {
+            image: "postgres:16".into(),
+            healthcheck: Some(crate::core::declarative::ContainerHealth {
+                test: vec!["CMD-SHELL".into(), "pg_isready -U $POSTGRES_USER".into()],
+                interval: "10s".into(),
+                timeout: "2s".into(),
+                retries: 3,
+                start_period: "1m30s".into(),
+            }),
+            ..Default::default()
+        };
+        let dependent = Container {
+            image: "app:latest".into(),
+            depends_on: BTreeMap::from([("db".into(), "healthy".into())]),
+            ..Default::default()
+        };
+        config.services.insert(
+            "stack".into(),
+            Service {
+                containers: BTreeMap::from([("db".into(), upstream), ("app".into(), dependent)]),
+                ..Default::default()
+            },
+        );
+        let text = render_compose(
+            &config,
+            "stack",
+            &"a".repeat(64),
+            Path::new("/managed/storage"),
+        )
+        .unwrap();
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&text).unwrap();
+        assert_eq!(
+            parsed["services"]["db"]["healthcheck"]["test"][1].as_str(),
+            Some("pg_isready -U $$POSTGRES_USER")
+        );
+        assert_eq!(
+            parsed["services"]["db"]["healthcheck"]["start_period"].as_str(),
+            Some("1m30s")
+        );
+        assert_eq!(
+            parsed["services"]["app"]["depends_on"]["db"]["condition"].as_str(),
+            Some("service_healthy")
+        );
+        for health in [
+            None,
+            Some(crate::core::declarative::ContainerHealth {
+                test: vec!["CMD-SHELL".into(), "true".into()],
+                interval: "tomorrow".into(),
+                ..Default::default()
+            }),
+        ] {
+            config
+                .services
+                .get_mut("stack")
+                .unwrap()
+                .containers
+                .get_mut("db")
+                .unwrap()
+                .healthcheck = health;
+            assert!(
+                render_compose(
+                    &config,
+                    "stack",
+                    &"a".repeat(64),
+                    Path::new("/managed/storage")
+                )
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn test_render_compose_basic() {

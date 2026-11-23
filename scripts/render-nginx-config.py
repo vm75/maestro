@@ -60,7 +60,6 @@ for path in args.bundle.rglob('*'):
         target.write_text(content)
     else:
         shutil.copyfile(path, target)
-state = args.inputs_dir / 'nginx.toml'
+state = args.inputs_dir / 'nginx.yaml'
 if not state.exists() and not state.is_symlink():
-    values = '\n'.join(f'{key} = {json.dumps(value)}' for key, value in settings.items())
-    state.write_text(f'allowed_ips = []\nfree_subdomains = []\n\n[global]\n{values}\n\n[site_defaults]\n')
+    state.write_text(json.dumps(dict(allowed_ips=[], free_subdomains=[], global_=settings, site_defaults={}), indent=2).replace('"global_":', '"global":') + '\n')

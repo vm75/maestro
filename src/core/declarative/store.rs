@@ -10,8 +10,19 @@ use rustix::fs::{self, Mode, OFlags, RenameFlags};
 
 use super::{Config, MAX_CONFIG_BYTES, parse, revision};
 
-const CURRENT: &str = "workloads.yaml";
+pub(super) const CURRENT: &str = "workloads.yaml";
 const HISTORY: &str = "history";
+pub const HISTORY_LIMIT: usize = 8;
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryEntry {
+    pub revision: String,
+    pub modified_at: chrono::DateTime<chrono::Utc>,
+    pub valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<&'static str>,
+}
 pub const MISSING_REVISION: &str = "missing";
 
 #[derive(Debug)]
@@ -43,11 +54,41 @@ impl Snapshot {
 #[derive(Clone)]
 pub struct Store {
     directory: PathBuf,
+    pub(super) filename: String,
+    pub(super) history_name: String,
 }
 
 impl Store {
     pub fn new(directory: PathBuf) -> Self {
-        Self { directory }
+        Self {
+            directory,
+            filename: CURRENT.into(),
+            history_name: HISTORY.into(),
+        }
+    }
+
+    /// Select the same private YAML path used by Linux startup.
+    pub fn at_path(path: &Path) -> Result<Self> {
+        ensure!(path.is_absolute(), "configuration path must be absolute");
+        let filename = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| anyhow::anyhow!("configuration filename must be UTF-8"))?;
+        ensure!(
+            (filename.ends_with(".yaml") || filename.ends_with(".yml"))
+                && filename != "apply-candidate.yaml"
+                && !filename.starts_with('.'),
+            "invalid configuration filename"
+        );
+        Ok(Self {
+            directory: path.parent().unwrap().to_path_buf(),
+            filename: filename.into(),
+            history_name: format!("{filename}.history"),
+        })
+    }
+
+    pub fn path(&self) -> PathBuf {
+        self.directory.join(&self.filename)
     }
 
     pub fn ensure_directory(&self) -> Result<()> {
@@ -71,7 +112,7 @@ impl Store {
     /// Read the exact authored bytes even when repairing invalid YAML.
     pub fn read(&self) -> Result<Option<Snapshot>> {
         match self.directory() {
-            Ok(directory) => current(&directory),
+            Ok(directory) => current(&directory, &self.filename),
             Err(error)
                 if error.downcast_ref::<rustix::io::Errno>() == Some(&rustix::io::Errno::NOENT) =>
             {
@@ -84,7 +125,7 @@ impl Store {
     pub fn read_history(&self, id: &str) -> Result<Snapshot> {
         ensure!(valid_revision(id), "invalid revision identifier");
         let directory = open_directory(&self.directory)?;
-        let history = open_child_directory(&directory, HISTORY)?;
+        let history = open_child_directory(&directory, &self.history_name)?;
         let snapshot = read_snapshot(&history, &format!("{id}.yaml"))?;
         ensure!(
             snapshot.revision == id,
@@ -94,29 +135,70 @@ impl Store {
     }
 
     pub fn list_history(&self) -> Result<Vec<String>> {
-        if !self.directory.exists() {
-            return Ok(Vec::new());
+        Ok(self
+            .history_entries()?
+            .into_iter()
+            .map(|entry| entry.revision)
+            .collect())
+    }
+
+    pub fn history_entries(&self) -> Result<Vec<HistoryEntry>> {
+        let directory = match self.directory() {
+            Ok(directory) => directory,
+            Err(error) if missing(&error) => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let history = match open_child_directory(&directory, &self.history_name) {
+            Ok(directory) => directory,
+            Err(error) if missing(&error) => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let mut entries = Vec::new();
+        for name in history_names(&history, HISTORY_LIMIT, false)? {
+            ensure!(
+                entries.len() < HISTORY_LIMIT,
+                "configuration history entry limit exceeded"
+            );
+            let revision = name
+                .strip_suffix(".yaml")
+                .expect("validated history name")
+                .to_owned();
+            let modified = fs::statat(&history, &name, fs::AtFlags::SYMLINK_NOFOLLOW)
+                .ok()
+                .and_then(|info| {
+                    chrono::DateTime::from_timestamp(info.st_mtime, info.st_mtime_nsec as u32)
+                })
+                .unwrap_or_else(|| {
+                    chrono::DateTime::from_timestamp(-62_135_596_800, 0).expect("Go zero time")
+                });
+            let (valid, error) = match read_snapshot(&history, &name) {
+                Ok(snapshot) if snapshot.revision == revision => match snapshot.config() {
+                    Ok(_) => (true, None),
+                    Err(_) => (
+                        false,
+                        Some(
+                            "This revision contains invalid configuration; inspect privately for recovery.",
+                        ),
+                    ),
+                },
+                _ => (
+                    false,
+                    Some("History entry is damaged, inaccessible or unsafe."),
+                ),
+            };
+            entries.push(HistoryEntry {
+                revision,
+                modified_at: modified,
+                valid,
+                error,
+            });
         }
-        let directory = open_directory(&self.directory)?;
-        if open_child_directory(&directory, HISTORY).is_err() {
-            return Ok(Vec::new());
-        }
-        let history_path = self.directory.join(HISTORY);
-        let mut revisions = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(history_path) {
-            for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if let Some(rev) = name.strip_suffix(".yaml") {
-                        if valid_revision(rev) {
-                            revisions.push(rev.to_string());
-                        }
-                    }
-                }
-            }
-        }
-        revisions.sort();
-        revisions.reverse();
-        Ok(revisions)
+        entries.sort_by(|a, b| {
+            b.modified_at
+                .cmp(&a.modified_at)
+                .then_with(|| a.revision.cmp(&b.revision))
+        });
+        Ok(entries)
     }
 
     /// Publish valid YAML if the current exact-byte revision matches the review.
@@ -124,23 +206,23 @@ impl Store {
         let candidate = parse(bytes)?;
         let directory = self.lock_directory()?;
         super::journal::ensure_idle(&directory)?;
-        Self::save_locked(&directory, bytes, expected, &candidate)
+        self.save_locked(&directory, bytes, expected, &candidate)
     }
 
-    pub(super) fn lock_directory(&self) -> Result<File> {
+    pub(super) fn lock_directory(&self) -> Result<LockedDirectory> {
         self.ensure_directory()?;
         let directory = open_directory(&self.directory)?;
-        lock(&directory)?;
-        Ok(directory)
+        LockedDirectory::acquire(directory)
     }
 
     pub(super) fn save_locked(
+        &self,
         directory: &File,
         bytes: &[u8],
         expected: &str,
         candidate: &Config,
     ) -> Result<Snapshot> {
-        let previous = current(directory)?;
+        let previous = current(directory, &self.filename)?;
         let old_revision = previous
             .as_ref()
             .map_or(MISSING_REVISION, |value| &value.revision);
@@ -155,15 +237,15 @@ impl Store {
             if let Ok(current) = previous.config() {
                 validate_existing_guests(&current, candidate)?;
             }
-            remember(directory, &previous)?;
-            let latest = current(directory)?;
+            remember(directory, &self.history_name, &previous)?;
+            let latest = current(directory, &self.filename)?;
             if latest.as_ref().map(|value| value.revision.as_str()) != Some(expected) {
                 return Err(RevisionConflict.into());
             }
         }
 
         let first = expected == MISSING_REVISION;
-        match publish(directory, CURRENT, bytes, first) {
+        match publish(directory, &self.filename, bytes, first) {
             Err(error)
                 if first
                     && error.downcast_ref::<rustix::io::Errno>()
@@ -200,6 +282,36 @@ pub(super) fn validate_existing_guests(previous: &Config, candidate: &Config) ->
         );
     }
     Ok(())
+}
+
+/// Explicit unlock prevents an inherited/duplicated open-file description from
+/// retaining the publication lock after the transaction's owner has finished.
+pub(super) struct LockedDirectory(File);
+impl LockedDirectory {
+    fn acquire(directory: File) -> Result<Self> {
+        lock(&directory)?;
+        Ok(Self(directory))
+    }
+    pub(super) fn try_acquire(directory: File) -> Result<Self> {
+        fs::flock(&directory, fs::FlockOperation::NonBlockingLockExclusive)?;
+        Ok(Self(directory))
+    }
+}
+impl std::ops::Deref for LockedDirectory {
+    type Target = File;
+    fn deref(&self) -> &File {
+        &self.0
+    }
+}
+impl std::os::fd::AsFd for LockedDirectory {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        std::os::fd::AsFd::as_fd(&self.0)
+    }
+}
+impl Drop for LockedDirectory {
+    fn drop(&mut self) {
+        let _ = fs::flock(&self.0, fs::FlockOperation::Unlock);
+    }
 }
 
 fn lock(directory: &File) -> Result<()> {
@@ -251,8 +363,8 @@ pub(super) fn valid_revision(id: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-pub(super) fn current(directory: &File) -> Result<Option<Snapshot>> {
-    match read_snapshot(directory, CURRENT) {
+pub(super) fn current(directory: &File, filename: &str) -> Result<Option<Snapshot>> {
+    match read_snapshot(directory, filename) {
         Ok(value) => Ok(Some(value)),
         Err(error)
             if error.downcast_ref::<rustix::io::Errno>() == Some(&rustix::io::Errno::NOENT) =>
@@ -294,13 +406,45 @@ pub(super) fn read_private(directory: &File, name: &str, limit: usize) -> Result
     Ok(bytes)
 }
 
-fn remember(directory: &File, previous: &Snapshot) -> Result<()> {
-    match fs::mkdirat(directory, HISTORY, Mode::from_bits_truncate(0o700)) {
+fn missing(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<rustix::io::Errno>() == Some(&rustix::io::Errno::NOENT)
+}
+
+fn history_names(directory: &File, limit: usize, allow_unexpected: bool) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    let mut scanned = 0;
+    for entry in fs::Dir::read_from(directory)? {
+        let entry = entry?;
+        let raw = entry.file_name().to_bytes();
+        if raw == b"." || raw == b".." {
+            continue;
+        }
+        scanned += 1;
+        ensure!(
+            scanned <= limit,
+            "configuration history scan limit exceeded"
+        );
+        let name = std::str::from_utf8(raw)
+            .ok()
+            .filter(|name| name.strip_suffix(".yaml").is_some_and(valid_revision));
+        let Some(name) = name else {
+            if allow_unexpected {
+                continue;
+            }
+            anyhow::bail!("unexpected configuration history entry");
+        };
+        names.push(name.to_owned());
+    }
+    Ok(names)
+}
+
+pub(super) fn remember(directory: &File, history_name: &str, previous: &Snapshot) -> Result<()> {
+    match fs::mkdirat(directory, history_name, Mode::from_bits_truncate(0o700)) {
         Ok(()) => directory.sync_all()?,
         Err(rustix::io::Errno::EXIST) => {}
         Err(error) => return Err(error.into()),
     }
-    let history = open_child_directory(directory, HISTORY)?;
+    let history = open_child_directory(directory, history_name)?;
     let name = format!("{}.yaml", previous.revision);
     match publish(&history, &name, &previous.bytes, true) {
         Err(error)
@@ -310,10 +454,49 @@ fn remember(directory: &File, previous: &Snapshot) -> Result<()> {
                 read_snapshot(&history, &name)?.bytes == previous.bytes,
                 "historical revision differs from its original bytes"
             );
-            Ok(())
+            let file = fs::openat(
+                &history,
+                &name,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+                Mode::empty(),
+            )?;
+            let file = File::from(file);
+            let info = file.metadata()?;
+            ensure!(
+                info.is_file()
+                    && info.nlink() == 1
+                    && info.uid() == unsafe { libc::geteuid() }
+                    && info.mode() & 0o077 == 0,
+                "historical revision is not a private regular file"
+            );
+            let now = fs::Timespec {
+                tv_sec: 0,
+                tv_nsec: fs::UTIME_NOW,
+            };
+            fs::futimens(
+                &file,
+                &fs::Timestamps {
+                    last_access: now,
+                    last_modification: now,
+                },
+            )?;
         }
-        result => result,
+        result => result?,
     }
+    let mut previous_entries = Vec::new();
+    for entry in history_names(&history, 4096, true)? {
+        if entry == name {
+            continue;
+        }
+        let info = fs::statat(&history, &entry, fs::AtFlags::SYMLINK_NOFOLLOW)?;
+        previous_entries.push((entry, info.st_mtime, info.st_mtime_nsec));
+    }
+    previous_entries.sort_by(|a, b| (b.1, b.2).cmp(&(a.1, a.2)).then_with(|| a.0.cmp(&b.0)));
+    for (entry, _, _) in previous_entries.into_iter().skip(HISTORY_LIMIT - 1) {
+        fs::unlinkat(&history, &entry, fs::AtFlags::empty())?;
+    }
+    history.sync_all()?;
+    Ok(())
 }
 
 pub(super) fn publish(directory: &File, name: &str, bytes: &[u8], exclusive: bool) -> Result<()> {
@@ -353,6 +536,22 @@ mod tests {
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let store = Store::new(directory.path().to_path_buf());
         (directory, store)
+    }
+
+    #[test]
+    fn publication_lock_is_released_even_while_a_duplicate_handle_survives() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let duplicate;
+        {
+            let locked =
+                LockedDirectory::try_acquire(open_directory(root.path()).unwrap()).unwrap();
+            duplicate = locked.try_clone().unwrap();
+            assert!(LockedDirectory::try_acquire(open_directory(root.path()).unwrap()).is_err());
+        }
+        let acquired = LockedDirectory::try_acquire(open_directory(root.path()).unwrap()).unwrap();
+        assert!(duplicate.metadata().unwrap().is_dir());
+        drop(acquired);
     }
 
     #[test]
@@ -474,6 +673,112 @@ services:
     }
 
     #[test]
+    fn history_is_bounded_by_recency_and_reused_bases_are_refreshed() {
+        let (_directory, store) = fixture();
+        let mut revisions = Vec::new();
+        let mut current = store.save(b"version: 1\n", MISSING_REVISION).unwrap();
+        for index in 0..12 {
+            revisions.push(current.revision.clone());
+            current = store
+                .save(
+                    format!("version: 1\n# edit {index}\n").as_bytes(),
+                    &current.revision,
+                )
+                .unwrap();
+        }
+        let entries = store.history_entries().unwrap();
+        assert_eq!(entries.len(), HISTORY_LIMIT);
+        assert_eq!(entries[0].revision, revisions[11]);
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.valid && entry.error.is_none())
+        );
+        assert!(store.read_history(&revisions[0]).is_err());
+        let reused = store.read_history(&revisions[9]).unwrap();
+        current = store.save(&reused.bytes, &current.revision).unwrap();
+        store
+            .save(b"version: 1\n# after reuse\n", &current.revision)
+            .unwrap();
+        let entries = store.history_entries().unwrap();
+        assert_eq!(entries[0].revision, reused.revision);
+        assert_eq!(entries.len(), HISTORY_LIMIT);
+    }
+
+    #[test]
+    fn history_surfaces_damaged_invalid_and_unsafe_entries_without_contents() {
+        let (directory, store) = fixture();
+        let initial = store.save(b"version: 1\n", MISSING_REVISION).unwrap();
+        store
+            .save(b"version: 1\n# next\n", &initial.revision)
+            .unwrap();
+        let path = directory
+            .path()
+            .join(HISTORY)
+            .join(format!("{}.yaml", initial.revision));
+        std::fs::write(&path, "secret tampering").unwrap();
+        let entries = store.history_entries().unwrap();
+        assert!(!entries[0].valid);
+        assert!(entries[0].error.unwrap().contains("unsafe"));
+        assert!(
+            !serde_json::to_string(&entries)
+                .unwrap()
+                .contains("secret tampering")
+        );
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink("/nonexistent", &path).unwrap();
+        assert!(!store.history_entries().unwrap()[0].valid);
+        std::fs::remove_file(&path).unwrap();
+        let invalid = b"version: 1\nsecret: hidden-value\n";
+        let invalid_id = revision(invalid);
+        let invalid_path = directory
+            .path()
+            .join(HISTORY)
+            .join(format!("{invalid_id}.yaml"));
+        std::fs::write(&invalid_path, invalid).unwrap();
+        std::fs::set_permissions(&invalid_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let entries = store.history_entries().unwrap();
+        assert!(!entries[0].valid);
+        assert!(entries[0].error.unwrap().contains("invalid configuration"));
+        assert!(
+            !serde_json::to_string(&entries)
+                .unwrap()
+                .contains("hidden-value")
+        );
+        std::fs::write(directory.path().join(HISTORY).join("foreign"), "retain").unwrap();
+        assert!(store.history_entries().is_err());
+        let current = store.read().unwrap().unwrap();
+        store
+            .save(b"version: 1\n# safe update\n", &current.revision)
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join(HISTORY).join("foreign")).unwrap(),
+            "retain"
+        );
+    }
+
+    #[test]
+    fn selected_authorities_do_not_share_history() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let first = Store::at_path(&directory.path().join("first.yaml")).unwrap();
+        let second = Store::at_path(&directory.path().join("second.yaml")).unwrap();
+        let original = first.save(b"version: 1\n", MISSING_REVISION).unwrap();
+        first
+            .save(b"version: 1\n# first edit\n", &original.revision)
+            .unwrap();
+        assert!(second.history_entries().unwrap().is_empty());
+        let other = second
+            .save(b"version: 1\n# second base\n", MISSING_REVISION)
+            .unwrap();
+        second
+            .save(b"version: 1\n# second edit\n", &other.revision)
+            .unwrap();
+        assert_eq!(first.list_history().unwrap(), [original.revision]);
+        assert_eq!(second.list_history().unwrap(), [other.revision]);
+    }
+
+    #[test]
     fn test_list_history() {
         let (_directory, store) = fixture();
         assert!(store.list_history().unwrap().is_empty());
@@ -484,5 +789,58 @@ services:
         let history = store.list_history().unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0], rev1.revision);
+    }
+
+    #[test]
+    fn selected_authority_keeps_atomic_revisions_and_history() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = directory.path().join("maestro.yaml");
+        let store = Store::at_path(&path).unwrap();
+        let first = store.save(b"version: 1\n", MISSING_REVISION).unwrap();
+        let second = store
+            .save(b"version: 1\n# edited\n", &first.revision)
+            .unwrap();
+        assert_eq!(store.path(), path);
+        assert_eq!(std::fs::read(&path).unwrap(), second.bytes);
+        assert!(!directory.path().join(CURRENT).exists());
+        assert_eq!(
+            store.read_history(&first.revision).unwrap().bytes,
+            first.bytes
+        );
+        assert!(
+            store
+                .save(b"version: 1\n# stale\n", &first.revision)
+                .is_err()
+        );
+        assert!(Store::at_path(Path::new("relative.yaml")).is_err());
+        assert!(Store::at_path(&directory.path().join("apply-candidate.yaml")).is_err());
+    }
+
+    #[test]
+    fn recovery_is_bound_to_the_selected_authority() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let store = Store::at_path(&directory.path().join("maestro.yaml")).unwrap();
+        let first = store.save(b"version: 1\n", MISSING_REVISION).unwrap();
+        let candidate = b"version: 1\n# reviewed\n";
+        let plan = store.preview(candidate, &first.revision).unwrap();
+        let fingerprint = plan.fingerprint.clone();
+        {
+            let directory = store.lock_directory().unwrap();
+            super::super::journal::ApplyJournal::begin(
+                &directory,
+                &store.filename,
+                plan,
+                candidate,
+            )
+            .unwrap();
+        }
+        assert_eq!(store.pending_candidate(&fingerprint).unwrap(), candidate);
+        let other = Store::at_path(&directory.path().join("other.yaml")).unwrap();
+        assert!(other.pending_apply().is_err());
+        assert!(other.pending_candidate(&fingerprint).is_err());
+        assert!(other.save(b"version: 1\n", MISSING_REVISION).is_err());
+        assert!(!other.path().exists());
     }
 }

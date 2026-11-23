@@ -18,7 +18,9 @@ pub fn validate_password(password: &str) -> Result<()> {
     ensure!(
         (1..=256).contains(&password.len())
             && !password.trim().is_empty()
-            && password.chars().all(|ch| ch != '\0' && ch != '\r' && ch != '\n'),
+            && password
+                .chars()
+                .all(|ch| ch != '\0' && ch != '\r' && ch != '\n'),
         "Samba password must be 1–256 nonblank characters without line breaks or NUL"
     );
     Ok(())
@@ -31,17 +33,31 @@ fn caller_name(uid: u32) -> Result<String> {
     let mut buffer = vec![0_i8; 16384];
     let code = unsafe {
         libc::getpwuid_r(
-            uid as libc::uid_t, &mut pwd,
-            buffer.as_mut_ptr(), buffer.len(), &mut found,
+            uid as libc::uid_t,
+            &mut pwd,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut found,
         )
     };
-    ensure!(code == 0 && !found.is_null(), "Trusted workload user cannot be resolved");
-    let name = unsafe { CStr::from_ptr(pwd.pw_name) }.to_str()
-        .context("Invalid trusted workload account name")?.to_owned();
     ensure!(
-        !name.is_empty() && name.len() <= 32
-            && name.bytes().next().is_some_and(|c| c.is_ascii_lowercase() || c == b'_')
-            && name.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_-".contains(&c))
+        code == 0 && !found.is_null(),
+        "Trusted workload user cannot be resolved"
+    );
+    let name = unsafe { CStr::from_ptr(pwd.pw_name) }
+        .to_str()
+        .context("Invalid trusted workload account name")?
+        .to_owned();
+    ensure!(
+        !name.is_empty()
+            && name.len() <= 32
+            && name
+                .bytes()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase() || c == b'_')
+            && name
+                .bytes()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_-".contains(&c))
             && !name.contains(' '),
         "Unsupported workload username"
     );
@@ -76,8 +92,11 @@ pub async fn set_password(caller_uid: u32, password: &str) -> Result<()> {
         .kill_on_drop(true)
         .spawn()
         .context("Could not launch bounded Samba password operation")?;
-    let result = timeout(PASSWORD_TIMEOUT, async {
-        let mut input = child.stdin.take().context("Missing native password stdin")?;
+    timeout(PASSWORD_TIMEOUT, async {
+        let mut input = child
+            .stdin
+            .take()
+            .context("Missing native password stdin")?;
         input.write_all(password.as_bytes()).await?;
         input.write_all(b"\n").await?;
         input.write_all(password.as_bytes()).await?;
@@ -86,8 +105,10 @@ pub async fn set_password(caller_uid: u32, password: &str) -> Result<()> {
         let status = child.wait().await?;
         ensure!(status.success(), "Samba password tool rejected the update");
         Ok::<(), anyhow::Error>(())
-    }).await.context("Samba password operation exceeded its deadline")??;
-    Ok(result)
+    })
+    .await
+    .context("Samba password operation exceeded its deadline")??;
+    Ok(())
 }
 
 #[cfg(test)]

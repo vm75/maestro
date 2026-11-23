@@ -45,10 +45,7 @@ impl QuadletArtifacts {
     pub fn publish(&self, change: &Change, previous: &Config, desired: &Config) -> Result<()> {
         let transition = Transition::new(change, previous, desired, &self.storage_base)?;
         let directory = store::open_directory(&self.directory)?;
-        rustix::fs::flock(
-            &directory,
-            rustix::fs::FlockOperation::NonBlockingLockExclusive,
-        )?;
+        let directory = store::LockedDirectory::try_acquire(directory)?;
         ensure!(
             transition.observe(&directory)? == ObservedResource::Before,
             "Quadlet files differ from the reviewed prior state"

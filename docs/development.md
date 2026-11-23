@@ -65,8 +65,32 @@ With the Python environment active, run `make test-nginx` for the bundled
 nginx policy and loopback tests. `make test-linux` exercises the API with real
 nginx, including managed-site persistence, regeneration, and HTTPS.
 
+`make test-quadlet` runs the opt-in native Quadlet generator test against rendered
+Maestro definitions. It generates into a temporary directory and starts no units.
+Set `MAESTRO_QUADLET_GENERATOR` when the generator is installed somewhere other
+than `/usr/lib/podman/quadlet`.
+
+`make test-podman` runs an offline rootless engine smoke test. It requires Rust/Cargo, Podman,
+a C compiler with static libc, tar, sha256sum and GNU timeout, and must run as a
+non-root workload account on a host permitting rootless containers. The script
+builds its own scratch image, disables remote connections and networking, and
+uses `--pull never`. Storage, runtime, auth and user configuration are scoped to
+a fresh private temporary lab. It checks exact storage roots before creating
+containers and before resetting that lab during cleanup. Existing user units and
+normal Podman storage are preserved. Engine commands have bounded deadlines.
+
+The Podman smoke checks create/start/graceful stop/restart/removal and fingerprint
+labels. It also executes Maestro's real bounded metadata reader against a
+running owned container with a deliberately stale fingerprint, then verifies
+refusal to adopt a stopped foreign object using the configured name. The reader
+checks leave that foreign object unchanged before the lab removes it. These
+checks establish native engine, metadata-reader and generated-definition behavior
+on the executing host. Maestro native ownership, runtime-versus-boot reconciliation,
+interrupted operations and the two installer/helper modes require further
+provider acceptance in disposable guests.
+
 The emulated nginx examples are managed inputs in
-`test-fixtures/etc/maestro/nginx/sites.toml`. Test mode still writes fixture
+`test-fixtures/etc/maestro/nginx/sites.yaml`. Test mode still writes fixture
 files when you save settings; the ASUS page is generated at startup and ignored
 by Git.
 

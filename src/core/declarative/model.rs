@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub version: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server: Option<serde_yaml::Value>,
     pub services: BTreeMap<String, Service>,
     pub storage: BTreeMap<String, Storage>,
     pub shares: BTreeMap<String, Share>,

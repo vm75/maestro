@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import { request, type Discovery, type Status } from './lib/api'
 
   let { status: _status, discovery: initial }: { status: Status; discovery: Discovery } = $props()
-  let current = $state<Discovery>(initial)
+  let current = $state<Discovery>(untrack(() => initial))
   let endpoint = $state('/api/mcp')
   let updating = $state(false)
   let error = $state('')

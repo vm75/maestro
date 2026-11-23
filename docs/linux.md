@@ -21,13 +21,13 @@ To prepare a persistent local setup, run:
 
 ```sh
 ./scripts/setup-linux.sh
-cargo run --no-default-features --features linux -- --config data/linux/maestro.toml --linux-mode serve
+cargo run --no-default-features --features linux -- --config data/linux/maestro.yaml --linux-mode serve
 ```
 
-The setup script checks for required tools and creates `data/linux/maestro.toml`,
+The setup script checks for required tools and creates `data/linux/maestro.yaml`,
 `data/linux/nginx/nginx.conf`, and isolated state, log, and runtime directories.
 It preserves existing files on subsequent runs. New configs bind the API to
-`127.0.0.1:3030`, use nginx port `8080`, generate a random API token in the TOML
+`127.0.0.1:3030`, use nginx port `8080`, generate a random API token in the YAML
 file, and disable firewall enforcement and AdGuard integration. Nginx uses local
 temporary directories so it can run without root. Start nginx through the UI;
 the setup script does not start services or install packages.
@@ -89,7 +89,7 @@ restricted sudoers line for a **reviewed** account is:
 
 The default `package_writes: false` denies package mutations in the
 root-owned policy. Enabling package operations also requires
-`[system].allow_package_writes = true` in the non-root Maestro config,
+`server.allow_writes: true` and `server.privileged_operations: true` for native Linux YAML (or `system.allow_package_writes: true` in the legacy layout) in the non-root Maestro config,
 an authorized helper matching protocol 1 and a supported native manager.
 Native package and dependency operations use fixed root-owned executables,
 validate 1–32 repository names, disallow URLs/flags/versions/repository
@@ -115,12 +115,13 @@ helper readiness and write denials.
 
 ## Systemd service actions
 
-Configure exact units under `[services]`:
+Configure exact units under `services`:
 
-```toml
-[services]
-systemd_system_write_units = ["example.service"]
-systemd_user_write_units = []
+```yaml
+services:
+  systemd_system_write_units:
+  - example.service
+  systemd_user_write_units: []
 ```
 
 Both allowlists default to empty; neither is a grant of root privilege.
@@ -143,7 +144,7 @@ The HTTP and MCP tool schemas enforce explicit `confirm=true` for destructive
 operations; the helper independently validates them, and execution is denied
 unless both non-root configuration and private root-owned policy permit writes.
 
-`[system].allow_package_writes = true` **does not itself elevate Maestro**.
+`server.allow_writes: true` and `server.privileged_operations: true` for native Linux YAML (or `system.allow_package_writes: true` in the legacy layout) **does not itself elevate Maestro**.
 The optional `maestro-admin` must also be installed and narrowly authorized.
 The Updates page reports why protected actions are disabled, while cached
 status remains visible. Named and dependency installation are serialized
@@ -160,23 +161,43 @@ these newly implemented verbs as development-only until acceptance.
 
 Linux sessions now use 256-bit random bearer cookie values and persist only
 their SHA-256 digests and bounded expiry times in
-`[paths].data_dir/linux-auth/browser-sessions.json`, under an owner-only
+`<server.state_dir>/linux-auth/browser-sessions.json`, under an owner-only
 directory. A token rotation invalidates previously persisted sessions.
 Logout persists revocation; malformed, symlinked or unsafe session state
-fails closed. Password-based first-run administrator setup is not yet
-implemented: the browser still uses the configured token for initial sign-in,
-and the mandatory credential/authentication parity gate remains open.
+fails closed. Native Linux YAML supports first-run administrator setup and password login.
+Setup records the password hash in the authoritative YAML; the token file
+remains available for authorized API clients. Native/browser authentication
+acceptance remains open.
 
 ## Workload writes and recovery
 
-Set `[system].allow_workload_writes = true` to allow workload apply, revert,
+Set `server.allow_writes: true` in native Linux YAML (or
+`system.allow_workload_writes: true` in the legacy layout) to allow workload apply, revert,
 recovery and lifecycle actions. The default is read-only. Native apply
 currently accepts reviewed managed-directory provisioning and supported
 Quadlet changes. Plan and revert previews list resources the configured
 provider cannot apply. Removing a storage definition removes its ownership
 marker and preserves the directory contents.
 
-Set `[paths].quadlet_dir` to an existing owner-only directory in the rootless
+`managed_apply_status` reads durable progress, including completed operations,
+per-resource failure and the journal update time, without running native commands.
+It remains readable with management writes disabled. `managed_apply_retry`
+requires management writes and `confirm: true`; it verifies native state and uses
+the recorded apply mode. It never automatically repeats an interrupted removal.
+Inspect that resource explicitly and resolve its native state before retrying.
+If interruption occurred after preparing intent but before saving its YAML,
+automatic retry discards that uncommitted intent and reports `aborted`. It leaves
+configuration and native resources unchanged. A prepared revert instead restores
+the earlier pending operation when its replacement YAML was never saved. Retry
+of a committed desired revision still inspects native state before doing work.
+The Applications recovery panel displays this progress, starts safe retries, and
+explains when uncommitted intent was discarded.
+Native command output is not stored in the durable failure message.
+
+Native Linux YAML selects `${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd/maestro`
+for rootless Quadlet files. Prepare that directory as the workload account with
+owner-only permissions; startup reads settings without creating it. Legacy YAML
+can set `paths.quadlet_dir` to an existing owner-only directory in the rootless
 user manager's Quadlet search path. Maestro verifies generated files and
 loaded units before changing state or reading journals. The Applications
 inventory reports verified systemd state, including mixed member states.
@@ -227,14 +248,14 @@ separate `[services].init_dir`.
 The Linux platform does **not** emulate firmware behaviors such as NVRAM,
 ASUS menu injection, JFFS startup hooks, or router-specific service actions.
 Those still need router validation. Linux keeps its firewall policy within
-`[paths].data_dir` instead of reading or mirroring the router's
+`paths.data_dir` instead of reading or mirroring the router's
 `/opt/etc/maestro/firewall-policy.json`.
 
 ## Service adapters and nginx setup
 
 Linux setup installs executable `S80nginx` and `S99maestro` adapters in
 `data/linux/init.d`. These use the normal Services discovery and actions. They require
-Python 3.11 or newer and default to `data/linux/maestro.toml`; set
+Python 3.11 or newer and default to `data/linux/maestro.yaml`; set
 `MAESTRO_CONFIG` to select another configuration. For an existing
 Maestro setup, set `[services].init_dir` to the absolute path of
 `data/linux/init.d` and rerun `./scripts/setup-linux.sh`. Existing Maestro
@@ -257,7 +278,7 @@ an explicit `[commands].dehydrated` path and restart Maestro.
 Linux setup requires Python Jinja2 (available via `requirements.txt` in the virtual environment), nginx, and openssl. For a new lab it renders
 only the current Jinja bundle, generates a temporary fallback TLS certificate,
 and records its loopback listeners and runtime paths in
-`maestro/nginx/nginx.toml`. HTTP uses port 8080 and HTTPS uses port 8443.
+`maestro/nginx/nginx.yaml`. HTTP uses port 8080 and HTTPS uses port 8443.
 Existing lab configurations are preserved. Before upgrading an existing lab,
 set `nginx.inputs_dir` to its `maestro/nginx` directory and follow the
 [input relocation procedure](migration.md#nginx-input-relocation-in-09).
@@ -333,8 +354,8 @@ The privileged helper policy now has independent default-deny flags:
 ```
 
 Protected package writes additionally require
-`[system].allow_package_writes = true`; Samba password changes require
-`[system].allow_share_writes = true`. These TOML flags authorize neither
+`server.allow_writes: true` and `server.privileged_operations: true` for native Linux YAML (or `system.allow_package_writes: true` in the legacy layout); Samba password changes require
+`system.allow_share_writes: true` in the legacy layout. These YAML flags authorize neither
 capability alone. A matching root-owned helper policy, strict sudoers rule,
 native backend readiness and explicit operation confirmation remain required.
 The Samba password tool never accepts a selected account; the root helper
@@ -342,12 +363,30 @@ resolves the non-root sudo caller and passes the password only via stdin.
 Samba/NFS candidate publication and server setup are still unavailable.
 
 Configuration's new backup panel is **metadata-only and non-restorable**.
+Private configuration history retains up to eight recent revisions and displays
+their timestamps and validity. It is available only when management writes are
+enabled; it contains configuration rather than workload-data backups.
+Each history entry can be inspected and reviewed for restoration through
+`managed_config_revert_plan` and `managed_config_revert`. Restoration uses the
+shared revision-checked apply journal, preserves exact historical YAML bytes,
+and archives the outgoing revision. Native changes require provider readiness;
+server-setting changes require restarting Maestro. Revert may supersede a
+published pending transition when native inspection confirms its removals and
+unchanged resources will not be abandoned. Prepared transitions must be recovered
+first. Native state outside the reviewed before/after definitions, including an
+unchanged but unfinished resource, requires recovery before revert.
+`mode: next_start` is implemented for managed directories and configured rootless
+Quadlet publication. It records the mode in the recovery journal and publishes
+Quadlet definitions without lifecycle commands, allowing existing active units
+to use changed definitions at their next start. Active removals and transitional
+units remain blocked, and running containers may require a later explicit restart.
+Other native providers still require their ownership/lifecycle acceptance work.
 Native capture, manifests, verification, publication, interrupted recovery
 and actual restores must not be inferred from the inventory. The Configuration
 page has typed storage/share editor forms over the existing YAML store; it
 cannot safely complete every reference definition/next-start workflow yet.
-The existing Linux `server` settings still require single-authority migration,
-and first-run administrator username/password authentication is missing.
+Unified-YAML startup and administrator setup/password login are implemented;
+installer migration and complete native next-start publication remain pending.
 
 The new shared MCP dispatcher and stdio executable require official SDK
 contract tests, including protocol negotiation, schema parity and error
@@ -355,3 +394,54 @@ handling. The separate Agent Access and Activity UI flows have not been
 browser-accepted. Consult the
 [Phase 2 parity matrix](plans/proposed/server-man-phase2-parity-matrix.md)
 before claiming completed Server Man functionality.
+
+### Phase 2 unified YAML startup (in development)
+
+Linux builds now accept an absolute `.yaml` or `.yml` path through `--config`.
+The selected file contains `version: 1`, optional `server` settings and the
+workload sections. HTTP and stdio MCP inspect and edit that same document.
+The file and its directory must be private to the workload account; `server.token_file`
+selects a separate owner-only bearer-token file. Server defaults use loopback
+port 8080 and a Maestro directory below `XDG_STATE_HOME` (or `~/.local/state`).
+The default token is next to the selected YAML. Invalid workload definitions
+remain readable for repair when server settings are valid.
+
+This path is not yet the installer's production configuration contract. The
+Configuration page can review and save the authoritative YAML. Save server
+settings separately from resource edits; plans report when Maestro must restart.
+After saving changed server settings, further managed mutations require that
+restart. Next-start publication supports managed directories and prepared
+rootless Quadlet directories; other provider and lifecycle paths remain gated.
+The sign-in
+page can create an administrator using the bootstrap token and a password of
+12–256 bytes. Setup preserves authored comments and resource text, stores a
+fixed-format password hash in the same YAML, revokes
+bootstrap cookies, and switches browser login to username/password. Bearer-token
+access remains available for agents. Browser sessions persist across restart;
+sign-out revokes the selected session. Setup requires loopback HTTP or HTTPS.
+The existing Linux lab layout remains available after its one-time YAML migration. The parity ledger tracks the
+remaining auth, installer, helper and native-provider acceptance work.
+
+
+### Native generator and offline engine checks
+
+Run `make test-quadlet` to validate Maestro-rendered definitions with the local
+Quadlet generator. Run `make test-podman` as the non-root workload account to test
+rootless engine lifecycle and fingerprint-label inspection using an offline,
+private temporary lab. See [development checks](development.md#checks) for
+prerequisites, isolation and cleanup. These targets start no user systemd units.
+The engine smoke uses a locally compiled scratch payload and disables registry
+pulls, remote connections and networking.
+
+Successful generation and engine execution provide host-specific evidence.
+The Podman lab also exercises Maestro's bounded native metadata reader for a
+running owned-but-stale container and a stopped foreign name collision. Quadlet
+application inventory now reports configured member states and a restart notice
+when running fingerprints differ from saved definitions. Unknown identities,
+unexpected members and native-name collisions block lifecycle actions. Start
+requires current running fingerprints; use an explicitly confirmed Restart for
+owned stale containers.
+
+End-to-end Maestro publication/lifecycle in a real user manager, boot policy,
+metadata-only/runtime fingerprint separation, interrupted recovery and both native
+installer/helper modes remain acceptance requirements.

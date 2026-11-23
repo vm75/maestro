@@ -15,7 +15,7 @@ for tool in "${tools[@]}"; do
     }
 done
 
-python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ required"; import jinja2' || {
+python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ required"; import jinja2, yaml' || {
     echo 'Activate a Python 3.11+ environment with requirements.txt installed.' >&2
     exit 2
 }
@@ -77,70 +77,79 @@ server {
 }
 EOF
 
-cat > "$lab/maestro.toml" <<EOF
-platform = "linux"
-test_mode = false
+cat > "$lab/maestro.yaml" <<EOF
+{
+  "platform": "linux",
+  "test_mode": false,
+  "server": {
+    "bind": "127.0.0.1",
+    "port": $api_port,
+    "auth_token": "$token",
+    "allowed_origins": [
+      "http://127.0.0.1:$api_port"
+    ],
+    "daemonize": false
+  },
+  "paths": {
+    "data_dir": "$lab/data",
+    "runtime_dir": "$lab/run",
+    "log_file": "$lab/logs/maestro.log",
+    "hosts_add": "$lab/hosts.add",
+    "dnsmasq_conf_add": "$lab/dnsmasq.conf.add",
+    "wireguard_conf": "$lab/wireguard/wglab.conf",
+    "proc_stat": "/proc/stat",
+    "proc_meminfo": "/proc/meminfo",
+    "proc_net_dev": "/proc/net/dev",
+    "proc_uptime": "/proc/uptime",
+    "proc_loadavg": "/proc/loadavg"
+  },
+  "commands": {
+    "nginx": "$nginx_bin",
+    "openssl": "$(command -v openssl)",
+    "ip": "/usr/sbin/ip",
+    "ping": "/bin/ping"
+  },
+  "asus_ui": {
+    "enabled": false,
+    "rendered_page": "$lab/maestro.asp"
+  },
+  "services": {
+    "init_dir": "$lab/init.d",
+    "log_dirs": [
+      "$lab/logs"
+    ]
+  },
+  "nginx": {
+    "inputs_dir": "$lab/maestro/nginx",
+    "root_dir": "$lab/nginx",
+    "config_path": "$lab/nginx/nginx.conf",
+    "prefix_path": "$lab/nginx",
+    "pid_path": "$lab/run/nginx.pid",
+    "domains_available_dir": "$lab/nginx/domains-available",
+    "domains_enabled_dir": "$lab/nginx/domains-enabled",
+    "domain_upstream_map_path": "$lab/nginx/conf.d/02_domain_upstream_map.conf",
+    "subdomain_upstream_map_path": "$lab/nginx/conf.d/03_subdomain_upstream_map.conf",
+    "subfolder_upstream_map_path": "$lab/nginx/conf.d/04_subfolder_upstream_map.conf",
+    "http_forwarder_path": "$lab/nginx/conf.d/05-http-to-https.conf",
+    "log_dir": "$lab/var/log/nginx"
+  },
+  "certificates": {
+    "certs_dir": "$lab/certs"
+  },
+  "firewall": {
+    "log_dirs": [
+      "$lab/var/log/nginx"
+    ]
+  },
+  "adguard": {
+    "enabled": false,
+    "lan_ip": "127.0.0.1"
+  },
+  "system": {
+    "wan_interface": "lo"
+  }
+}
 
-[server]
-bind = "127.0.0.1"
-port = $api_port
-auth_token = "$token"
-allowed_origins = ["http://127.0.0.1:$api_port"]
-daemonize = false
-
-[paths]
-data_dir = "$lab/data"
-runtime_dir = "$lab/run"
-log_file = "$lab/logs/maestro.log"
-hosts_add = "$lab/hosts.add"
-dnsmasq_conf_add = "$lab/dnsmasq.conf.add"
-wireguard_conf = "$lab/wireguard/wglab.conf"
-proc_stat = "/proc/stat"
-proc_meminfo = "/proc/meminfo"
-proc_net_dev = "/proc/net/dev"
-proc_uptime = "/proc/uptime"
-proc_loadavg = "/proc/loadavg"
-
-[commands]
-nginx = "$nginx_bin"
-openssl = "$(command -v openssl)"
-ip = "/usr/sbin/ip"
-ping = "/bin/ping"
-
-[asus_ui]
-enabled = false
-rendered_page = "$lab/maestro.asp"
-
-[services]
-init_dir = "$lab/init.d"
-log_dirs = ["$lab/logs"]
-
-[nginx]
-inputs_dir = "$lab/maestro/nginx"
-root_dir = "$lab/nginx"
-config_path = "$lab/nginx/nginx.conf"
-prefix_path = "$lab/nginx"
-pid_path = "$lab/run/nginx.pid"
-domains_available_dir = "$lab/nginx/domains-available"
-domains_enabled_dir = "$lab/nginx/domains-enabled"
-domain_upstream_map_path = "$lab/nginx/conf.d/02_domain_upstream_map.conf"
-subdomain_upstream_map_path = "$lab/nginx/conf.d/03_subdomain_upstream_map.conf"
-subfolder_upstream_map_path = "$lab/nginx/conf.d/04_subfolder_upstream_map.conf"
-http_forwarder_path = "$lab/nginx/conf.d/05-http-to-https.conf"
-log_dir = "$lab/var/log/nginx"
-
-[certificates]
-certs_dir = "$lab/certs"
-
-[firewall]
-log_dirs = ["$lab/var/log/nginx"]
-
-[adguard]
-enabled = false
-lan_ip = "127.0.0.1"
-
-[system]
-wan_interface = "lo"
 EOF
 
 bin=${MAESTRO_LINUX_SMOKE_BIN:-}
@@ -153,8 +162,8 @@ if [[ ! -x "$bin" ]]; then
     echo "Maestro binary is not executable: $bin" >&2
     exit 2
 fi
-"$bin" --config "$lab/maestro.toml" --linux-mode check-config
-"$bin" --config "$lab/maestro.toml" --linux-mode serve >"$lab/logs/maestro.stdout" 2>&1 &
+"$bin" --config "$lab/maestro.yaml" --linux-mode check-config
+"$bin" --config "$lab/maestro.yaml" --linux-mode serve >"$lab/logs/maestro.stdout" 2>&1 &
 maestro_pid=$!
 
 api="http://127.0.0.1:$api_port"
@@ -232,10 +241,10 @@ curl --silent --show-error --fail-with-body -X POST \
     "$api/api/nginx/objects/domain" >/dev/null
 [[ -f "$lab/nginx/domains-available/linux.test/root.conf" ]]
 get /api/nginx/objects/domain/linux.test/linux.test | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["settings"]["client_max_body_size"] == "2M", x'
-python3 - "$lab/maestro/nginx/sites.toml" <<'PYSITES'
-import sys, tomllib
+python3 - "$lab/maestro/nginx/sites.yaml" <<'PYSITES'
+import sys, yaml
 with open(sys.argv[1], 'rb') as stream:
-    sites = tomllib.load(stream)['sites']
+    sites = yaml.safe_load(stream)['sites']
 site, = sites.values()
 assert site['domain'] == 'linux.test' and site['enabled'] is True, site
 assert site['client_max_body_size'] == '2M', site

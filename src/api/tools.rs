@@ -45,6 +45,13 @@ enum Tool {
     ManagedConfigModel,
     ManagedConfigHistory,
     ManagedConfigHistoryRead,
+    ManagedConfigPlan,
+    ManagedConfigSave,
+    ManagedApplyStatus,
+    ManagedApplyRetry,
+    ManagedConfigRevertPlan,
+    ManagedConfigRevert,
+    ManagedDirectoryBrowse,
     ManagedResourcePlan,
     ManagedResourceSave,
     WorkloadsGet,
@@ -63,7 +70,7 @@ enum Tool {
 }
 
 impl Tool {
-    const ALL: [Self; 35] = [
+    const ALL: [Self; 42] = [
         Self::Status,
         Self::Capabilities,
         Self::JobsList,
@@ -84,6 +91,13 @@ impl Tool {
         Self::ManagedConfigModel,
         Self::ManagedConfigHistory,
         Self::ManagedConfigHistoryRead,
+        Self::ManagedConfigPlan,
+        Self::ManagedConfigSave,
+        Self::ManagedApplyStatus,
+        Self::ManagedApplyRetry,
+        Self::ManagedConfigRevertPlan,
+        Self::ManagedConfigRevert,
+        Self::ManagedDirectoryBrowse,
         Self::ManagedResourcePlan,
         Self::ManagedResourceSave,
         Self::WorkloadsGet,
@@ -199,6 +213,41 @@ impl Tool {
                 "Read a historical revision",
                 "Inspect exact historical YAML bytes, including invalid recovery revisions.",
             ),
+            Self::ManagedConfigPlan => (
+                "managed_config_plan",
+                "Preview configuration changes",
+                "Validate and preview configuration changes without publication.",
+            ),
+            Self::ManagedConfigSave => (
+                "managed_config_save",
+                "Save and apply configuration",
+                "Persist authoritative configuration and apply affected definitions as a tracked job.",
+            ),
+            Self::ManagedApplyStatus => (
+                "managed_apply_status",
+                "Inspect apply progress",
+                "Read durable per-resource application status without retrying or starting resources.",
+            ),
+            Self::ManagedApplyRetry => (
+                "managed_apply_retry",
+                "Retry configuration apply",
+                "Inspect incomplete application and retry safe publication as a job. Interrupted removals require explicit inspection.",
+            ),
+            Self::ManagedConfigRevertPlan => (
+                "managed_config_revert_plan",
+                "Review configuration revert",
+                "Validate a historical definition and preview affected resources. Reverting configuration does not restore data or reverse client effects.",
+            ),
+            Self::ManagedConfigRevert => (
+                "managed_config_revert",
+                "Revert configuration",
+                "Restore a verified historical definition and reconcile owned resources while preserving workload data.",
+            ),
+            Self::ManagedDirectoryBrowse => (
+                "managed_directory_browse",
+                "Browse directories",
+                "List accessible directory paths without showing file contents.",
+            ),
             Self::ManagedResourcePlan => (
                 "managed_resource_plan",
                 "Preview typed resource edit",
@@ -280,7 +329,7 @@ impl Tool {
 
 pub(super) fn router(state: AppState) -> anyhow::Result<Router<AppState>> {
     let sessions = Sessions::new(state.config.clone())?;
-    let store = Store::new(state.config.paths.data_dir.join("workloads"));
+    let store = crate::core::linux_config::store(&state.config)?;
     let provider = Arc::new(CompositeProvider::new(&state.config, state.runner.clone()));
     Ok(Router::new()
         .route("/status", get(status))
@@ -294,6 +343,7 @@ pub(super) fn router(state: AppState) -> anyhow::Result<Router<AppState>> {
         ))
         .route("/session", post(sessions::login))
         .route("/auth/mode", get(sessions::mode))
+        .route("/auth/setup", post(sessions::setup))
         .layer(Extension(sessions))
         .layer(middleware::from_fn_with_state(
             state.config.clone(),
@@ -403,6 +453,12 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                 | Tool::ManagedConfigModel
                 | Tool::ManagedConfigHistory
                 | Tool::ManagedConfigHistoryRead
+                | Tool::ManagedConfigPlan
+                | Tool::ManagedConfigSave
+                | Tool::ManagedApplyStatus
+                | Tool::ManagedApplyRetry
+                | Tool::ManagedConfigRevertPlan
+                | Tool::ManagedConfigRevert
                 | Tool::ManagedResourcePlan
                 | Tool::ManagedResourceSave
                 | Tool::WorkloadsGet
@@ -415,7 +471,8 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                 | Tool::ApplicationsList
                 | Tool::ApplicationsAction
                 | Tool::ApplicationsLogs => "workloads",
-                Tool::SharesList | Tool::SharesSambaPassword | Tool::SharesStatus => "shares",
+                Tool::SharesList | Tool::SharesSambaPassword | Tool::SharesStatus
+                | Tool::ManagedDirectoryBrowse => "shares",
                 _ => "system",
             };
             let read_only = !matches!(
@@ -427,10 +484,49 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     | Tool::ApplicationsAction
                     | Tool::PackagesInstall
                     | Tool::DependenciesInstall
+                    | Tool::ManagedConfigSave
+                    | Tool::ManagedApplyRetry
+                    | Tool::ManagedConfigRevert
                     | Tool::ManagedResourceSave
                     | Tool::SharesSambaPassword
             );
             let input_schema = match tool {
+                Tool::ManagedApplyStatus => json!({"type":"object","properties":{},"required":[],"additionalProperties":false}),
+                Tool::ManagedApplyRetry => json!({"type":"object","properties":{
+                    "confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."}
+                },"required":["confirm"],"additionalProperties":false}),
+                Tool::ManagedConfigRevertPlan | Tool::ManagedConfigRevert => {
+                    let save = matches!(tool, Tool::ManagedConfigRevert);
+                    let mut properties = json!({
+                        "target":{"type":"string","description":"History revision to inspect or restore","minLength":1,"maxLength":64},
+                        "revision":{"type":"string","description":"Current configuration revision","minLength":1,"maxLength":64}
+                    });
+                    let required = if save {
+                        properties["confirm"] = json!({"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."});
+                        properties["mode"] = json!({"type":"string","description":"Apply now or publish for next start","enum":["now","next_start"]});
+                        vec!["confirm","mode","revision","target"]
+                    } else { vec!["revision","target"] };
+                    json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})
+                },
+                Tool::ManagedConfigPlan | Tool::ManagedConfigSave => {
+                    let save = matches!(tool, Tool::ManagedConfigSave);
+                    let mut properties = json!({
+                        "content": {"type":"string","description":"Workload YAML","minLength":1,"maxLength":1048576},
+                        "revision": {"type":"string","description":"Current configuration revision, or missing","minLength":1,"maxLength":64}
+                    });
+                    let required = if save {
+                        properties["confirm"] = json!({"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."});
+                        properties["mode"] = json!({"type":"string","description":"Apply now or publish changes for next start","enum":["now","next_start"]});
+                        vec!["confirm","content","mode","revision"]
+                    } else { vec!["content","revision"] };
+                    json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})
+                },
+                Tool::ManagedDirectoryBrowse => json!({
+                    "type": "object",
+                    "properties": {"path": {"type": "string", "description": "Directory path to inspect", "maxLength": 4096}},
+                    "required": [],
+                    "additionalProperties": false
+                }),
                 Tool::JobsGet | Tool::JobsCancel => json!({
                     "type": "object",
                     "properties": {
@@ -479,10 +575,11 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     "required": ["content"],
                     "additionalProperties": false
                 }),
+                Tool::ManagedConfigHistory => json!({"type":"object","properties":{},"required":[],"additionalProperties":false}),
                 Tool::ManagedConfigHistoryRead => json!({
                     "type": "object",
                     "properties": {
-                        "target": {"type": "string", "minLength": 64, "maxLength": 64}
+                        "target": {"type": "string", "description":"History revision to inspect or restore", "minLength": 1, "maxLength": 64}
                     },
                     "required": ["target"],
                     "additionalProperties": false
@@ -610,7 +707,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     tool,
                     Tool::WorkloadsApply | Tool::WorkloadsResume | Tool::WorkloadsRevert
                         | Tool::ApplicationsAction | Tool::PackagesInstall | Tool::DependenciesInstall
-                        | Tool::ManagedResourceSave | Tool::SharesSambaPassword
+                        | Tool::ManagedResourceSave | Tool::ManagedConfigSave | Tool::ManagedConfigRevert | Tool::ManagedApplyRetry | Tool::SharesSambaPassword
                 ),
                 "inputSchema": input_schema
             })
@@ -658,13 +755,21 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
 
 async fn permissions(state: &AppState) -> Value {
     let helper = admin::probe().await;
-    let system_ready = systemd::available(state) && state.config.platform == crate::config::Platform::Linux
-        && state.config.services.systemd_system_write_units
-            .iter().any(|unit| systemd::permits(state, systemd::Scope::System, unit) && helper.permits_unit(unit));
+    let system_ready = systemd::available(state)
+        && state.config.platform == crate::config::Platform::Linux
+        && state
+            .config
+            .services
+            .systemd_system_write_units
+            .iter()
+            .any(|unit| {
+                systemd::permits(state, systemd::Scope::System, unit) && helper.permits_unit(unit)
+            });
     let package_policy = state.config.system.allow_package_writes;
     let samba_password_policy = state.config.system.allow_share_writes;
     let samba_password_ready = samba_password_policy && helper.permits_samba_password();
-    let package_ready = package_policy && package_updates::available(state) && helper.permits_packages();
+    let package_ready =
+        package_policy && package_updates::available(state) && helper.permits_packages();
     let package_reason = if !package_policy {
         "Package writes are disabled in Maestro configuration."
     } else if !package_updates::available(state) {
@@ -704,7 +809,9 @@ async fn permissions(state: &AppState) -> Value {
 }
 
 async fn discover(State(state): State<AppState>) -> Json<Value> {
-    Json(json!({ "tools": discover_tools(&state), "modules": modules(&state), "permissions": permissions(&state).await }))
+    Json(
+        json!({ "tools": discover_tools(&state), "modules": modules(&state), "permissions": permissions(&state).await }),
+    )
 }
 
 pub struct ToolContext<'a> {
@@ -759,14 +866,38 @@ async fn invoke(
 pub async fn execute_tool(
     ctx: &ToolContext<'_>,
     name: &str,
-    arguments: Map<String, Value>,
+    mut arguments: Map<String, Value>,
 ) -> (StatusCode, Value) {
+    if name.starts_with("services_") && !arguments.contains_key("scope") {
+        if let Some(authority) = &ctx.state.config.linux_authority {
+            arguments.insert("scope".into(), json!(authority.settings.systemd_scope));
+        }
+    }
     let state = ctx.state;
     let started_at = ctx.started_at;
     let jobs = ctx.jobs;
     let monitor = ctx.monitor;
     let store = ctx.store;
     let provider = ctx.provider;
+    if matches!(
+        name,
+        "managed_config_save"
+            | "managed_apply_retry"
+            | "managed_config_revert"
+            | "managed_resource_save"
+            | "workloads_apply"
+            | "workloads_resume"
+            | "workloads_revert"
+            | "applications_action"
+    ) {
+        if let Err(error) = crate::core::linux_config::mutation_ready(&state.config, store) {
+            return (
+                StatusCode::CONFLICT,
+                json_err("restart_required", &error.to_string()),
+            );
+        }
+    }
+
     if matches!(name, "updates_refresh" | "updates_install") {
         let install = name == "updates_install";
         if (install
@@ -784,9 +915,17 @@ pub async fn execute_tool(
         if !package_updates::permits(state, install).await {
             let policy_disabled = !state.config.system.allow_package_writes;
             return (
-                if policy_disabled { StatusCode::FORBIDDEN } else { StatusCode::SERVICE_UNAVAILABLE },
+                if policy_disabled {
+                    StatusCode::FORBIDDEN
+                } else {
+                    StatusCode::SERVICE_UNAVAILABLE
+                },
                 json_err(
-                    if policy_disabled { "writes_disabled" } else { "helper_unavailable" },
+                    if policy_disabled {
+                        "writes_disabled"
+                    } else {
+                        "helper_unavailable"
+                    },
                     if policy_disabled {
                         "Package writes are disabled by policy."
                     } else {
@@ -825,27 +964,61 @@ pub async fn execute_tool(
         }
         let (named, argument) = if name == "packages_install" {
             let Ok(input) = serde_json::from_value::<PackageArgs>(Value::Object(arguments)) else {
-                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Provide package names and confirm=true."));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Provide package names and confirm=true.",
+                    ),
+                );
             };
             if !input.confirm
                 || crate::platforms::admin_packages::package_names(&input.packages).is_err()
             {
-                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments",
-                    "Provide 1–32 unique bare repository package names and confirm=true."));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Provide 1–32 unique bare repository package names and confirm=true.",
+                    ),
+                );
             }
             (true, input.packages)
         } else {
-            let Ok(input) = serde_json::from_value::<DependencyArgs>(Value::Object(arguments)) else {
-                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Provide a supported dependency target and confirm=true."));
+            let Ok(input) = serde_json::from_value::<DependencyArgs>(Value::Object(arguments))
+            else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Provide a supported dependency target and confirm=true.",
+                    ),
+                );
             };
-            if !input.confirm || !matches!(input.target.as_str(), "podman" | "docker" | "samba" | "nfs" | "virtualization" | "incus") {
-                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Dependency target and confirmation are invalid."));
+            if !input.confirm
+                || !matches!(
+                    input.target.as_str(),
+                    "podman" | "docker" | "samba" | "nfs" | "virtualization" | "incus"
+                )
+            {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Dependency target and confirmation are invalid.",
+                    ),
+                );
             }
             (false, input.target)
         };
         if !package_updates::permits(state, true).await {
-            return (StatusCode::SERVICE_UNAVAILABLE, json_err("helper_unavailable",
-                "Named and dependency package installs require enabled package-write policy and an authorized privileged helper."));
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json_err(
+                    "helper_unavailable",
+                    "Named and dependency package installs require enabled package-write policy and an authorized privileged helper.",
+                ),
+            );
         }
         let state_clone = state.clone();
         if named {
@@ -854,14 +1027,16 @@ pub async fn execute_tool(
                     Ok(result) => running.finish(Outcome::Succeeded(result)),
                     Err(error) => running.finish(Outcome::Failed(error.to_string())),
                 }
-            }).await;
+            })
+            .await;
         }
         return start_job_value(jobs, "dependencies_install", move |running| async move {
             match package_updates::run_dependency_job(&state_clone, &argument, &running).await {
                 Ok(result) => running.finish(Outcome::Succeeded(result)),
                 Err(error) => running.finish(Outcome::Failed(error.to_string())),
             }
-        }).await;
+        })
+        .await;
     }
 
     if let Some(action) = name.strip_prefix("services_").and_then(|action| {
@@ -892,7 +1067,10 @@ pub async fn execute_tool(
         if !matches!(action, "start" | "enable") && input.confirm != Some(true) {
             return (
                 StatusCode::BAD_REQUEST,
-                json_err("confirmation_required", "This destructive service action requires confirm=true."),
+                json_err(
+                    "confirmation_required",
+                    "This destructive service action requires confirm=true.",
+                ),
             );
         }
         if !systemd::permits(state, input.scope, &input.unit) {
@@ -972,6 +1150,33 @@ pub async fn execute_tool(
     }
 
     match name {
+        "managed_directory_browse" => {
+            #[derive(serde::Deserialize)]
+            #[serde(default, deny_unknown_fields)]
+            #[derive(Default)]
+            struct Input {
+                path: String,
+            }
+            let Ok(input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Expected an optional directory path."),
+                );
+            };
+            if input.path.chars().count() > 4096 || input.path.contains('\0') {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Invalid directory path."),
+                );
+            }
+            match crate::core::declarative::browse::browse(&input.path) {
+                Ok(listing) => (StatusCode::OK, json!(listing)),
+                Err(error) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err("unavailable", &error.to_string()),
+                ),
+            }
+        }
         "system_status" => {
             let mut hostname = [0_u8; 256];
             if unsafe { libc::gethostname(hostname.as_mut_ptr().cast(), hostname.len()) } != 0 {
@@ -997,7 +1202,8 @@ pub async fn execute_tool(
 
         "system_capabilities" => {
             let permission_states = permissions(state).await;
-            let privileged_writes = permission_states["systemServices"]["status"].as_str() == Some("ready");
+            let privileged_writes =
+                permission_states["systemServices"]["status"].as_str() == Some("ready");
             (
                 StatusCode::OK,
                 json!({
@@ -1006,7 +1212,7 @@ pub async fn execute_tool(
                     "permissions": permission_states
                 }),
             )
-        },
+        }
 
         "jobs_list" => (StatusCode::OK, json!(jobs.list())),
 
@@ -1026,11 +1232,16 @@ pub async fn execute_tool(
                     (job.tool.starts_with("services_")
                         || job.tool.starts_with("updates_")
                         || job.tool.starts_with("workloads_")
-                        || matches!(job.tool.as_str(),
+                        || matches!(
+                            job.tool,
                             "applications_action"
-                            | "packages_install"
-                            | "dependencies_install"
-                            | "managed_resource_save"))
+                                | "packages_install"
+                                | "dependencies_install"
+                                | "managed_resource_save"
+                                | "managed_config_save"
+                                | "managed_apply_retry"
+                                | "managed_config_revert"
+                        ))
                         && job.state == crate::core::jobs::JobState::Running
                 }) {
                     return (
@@ -1093,7 +1304,10 @@ pub async fn execute_tool(
             let Ok(input) = serde_json::from_value::<DetailsArgs>(Value::Object(arguments)) else {
                 return (
                     StatusCode::BAD_REQUEST,
-                    json_err("invalid_arguments", "Expected a manager scope and exact service unit."),
+                    json_err(
+                        "invalid_arguments",
+                        "Expected a manager scope and exact service unit.",
+                    ),
                 );
             };
             if !systemd::valid_unit(&input.unit) {
@@ -1110,7 +1324,10 @@ pub async fn execute_tool(
                 ),
                 Err(_) => (
                     StatusCode::SERVICE_UNAVAILABLE,
-                    json_err("unavailable", "Service details are unavailable for this systemd bus."),
+                    json_err(
+                        "unavailable",
+                        "Service details are unavailable for this systemd bus.",
+                    ),
                 ),
             }
         }
@@ -1207,72 +1424,140 @@ pub async fn execute_tool(
             let Ok(input) = serde_json::from_value::<PasswordArgs>(Value::Object(arguments)) else {
                 return (
                     StatusCode::BAD_REQUEST,
-                    json_err("invalid_arguments", "Expected a Samba password and confirm=true; no username may be selected."),
+                    json_err(
+                        "invalid_arguments",
+                        "Expected a Samba password and confirm=true; no username may be selected.",
+                    ),
                 );
             };
-            if !input.confirm || input.password.len() > 256 || input.password.trim().is_empty()
+            if !input.confirm
+                || input.password.len() > 256
+                || input.password.trim().is_empty()
                 || input.password.contains(['\0', '\r', '\n'])
             {
-                return (StatusCode::BAD_REQUEST,
-                    json_err("invalid_arguments", "Invalid Samba password or missing confirmation."));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Invalid Samba password or missing confirmation.",
+                    ),
+                );
             }
             if !state.config.system.allow_share_writes {
-                return (StatusCode::FORBIDDEN,
-                    json_err("writes_disabled", "Samba password changes are disabled by administrator policy."));
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err(
+                        "writes_disabled",
+                        "Samba password changes are disabled by administrator policy.",
+                    ),
+                );
             }
             if !admin::probe().await.permits_samba_password() {
-                return (StatusCode::SERVICE_UNAVAILABLE,
-                    json_err("helper_unavailable", "Samba password changes require an authorized optional helper and root-owned policy."));
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err(
+                        "helper_unavailable",
+                        "Samba password changes require an authorized optional helper and root-owned policy.",
+                    ),
+                );
             }
             // Never place secrets in durable Jobs, audit, tracing fields, logs or
             // tool result content. The helper uses its authenticated caller UID.
             match admin::samba_password(input.password).await {
                 Ok(()) => (StatusCode::OK, json!({"status":"Samba password updated"})),
-                Err(_) => (StatusCode::SERVICE_UNAVAILABLE,
-                    json_err("operation_failed", "Samba password update could not be completed. Check the helper and native Samba account.")),
+                Err(_) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err(
+                        "operation_failed",
+                        "Samba password update could not be completed. Check the helper and native Samba account.",
+                    ),
+                ),
             }
         }
 
         "managed_resource_plan" | "managed_resource_save" => {
             let apply = name == "managed_resource_save";
             let mut arguments = arguments;
-            let requested_mode = if apply { arguments.remove("mode") } else { None };
-            let provided_fingerprint = if apply { arguments.remove("fingerprint") } else { None };
-            let confirmation = if apply { arguments.remove("confirm") } else { None };
+            let requested_mode = if apply {
+                arguments.remove("mode")
+            } else {
+                None
+            };
+            let provided_fingerprint = if apply {
+                arguments.remove("fingerprint")
+            } else {
+                None
+            };
+            let confirmation = if apply {
+                arguments.remove("confirm")
+            } else {
+                None
+            };
             let input = match serde_json::from_value::<crate::core::declarative::edit::EditInput>(
                 Value::Object(arguments),
             ) {
                 Ok(input) => input,
-                Err(_) => return (
-                    StatusCode::BAD_REQUEST,
-                    json_err("invalid_arguments", "Expected a typed resource kind, ID, operation, definition and current revision."),
-                ),
+                Err(_) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        json_err(
+                            "invalid_arguments",
+                            "Expected a typed resource kind, ID, operation, definition and current revision.",
+                        ),
+                    );
+                }
             };
             if apply && confirmation != Some(Value::Bool(true)) {
-                return (StatusCode::BAD_REQUEST,
-                    json_err("confirmation_required", "Reviewed resource mutations require confirm=true."));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "confirmation_required",
+                        "Reviewed resource mutations require confirm=true.",
+                    ),
+                );
             }
-            if apply && requested_mode.as_ref().and_then(Value::as_str) != Some("now") {
-                return (StatusCode::SERVICE_UNAVAILABLE,
-                    json_err("deferred_apply_unavailable",
-                        "Deferred next-start publication is not yet safely implemented; no configuration was saved."));
-            }
+            let mode = if apply {
+                match requested_mode.as_ref().and_then(Value::as_str) {
+                    Some("now") => crate::core::declarative::ApplyMode::Now,
+                    Some("next_start") => crate::core::declarative::ApplyMode::NextStart,
+                    _ => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            json_err("invalid_arguments", "Expected mode now or next_start."),
+                        );
+                    }
+                }
+            } else {
+                crate::core::declarative::ApplyMode::Now
+            };
             let candidate = match crate::core::declarative::edit::edit(store, &input) {
                 Ok(bytes) => bytes,
-                Err(error) => return (
-                    StatusCode::CONFLICT,
-                    json_err("edit_invalid_or_conflicted", &error.to_string()),
-                ),
+                Err(error) => {
+                    return (
+                        StatusCode::CONFLICT,
+                        json_err("edit_invalid_or_conflicted", &error.to_string()),
+                    );
+                }
             };
-            let preview = match store.preview(&candidate, &input.revision) {
+            let preview = match crate::core::linux_config::preview(
+                &state.config,
+                store,
+                &candidate,
+                &input.revision,
+            ) {
                 Ok(plan) => plan,
-                Err(error) => return (
-                    StatusCode::CONFLICT,
-                    json_err("plan_unavailable", &error.to_string()),
-                ),
+                Err(error) => {
+                    return (
+                        StatusCode::CONFLICT,
+                        json_err("plan_unavailable", &error.to_string()),
+                    );
+                }
             };
-            let blocked: Vec<String> = provider.blocked_resources(&preview.changes)
-                .into_iter().map(str::to_owned).collect();
+            let blocked: Vec<String> = provider
+                .blocked_resources(&preview.changes)
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
             if !apply {
                 return (
                     StatusCode::OK,
@@ -1284,39 +1569,61 @@ pub async fn execute_tool(
                 );
             }
             if !writes_allowed(state) {
-                return (StatusCode::FORBIDDEN,
-                    json_err("writes_disabled", "Workload mutations are disabled by policy."));
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err(
+                        "writes_disabled",
+                        "Workload mutations are disabled by policy.",
+                    ),
+                );
             }
             if !blocked.is_empty() {
-                return (StatusCode::CONFLICT,
-                    json_err("native_provider_blocked",
-                        "At least one affected resource is not ready for native publication."));
+                return (
+                    StatusCode::CONFLICT,
+                    json_err(
+                        "native_provider_blocked",
+                        "At least one affected resource is not ready for native publication.",
+                    ),
+                );
             }
-            let fingerprint = provided_fingerprint.and_then(|value| value.as_str().map(str::to_owned));
-            let Some(fingerprint) = fingerprint.filter(|value| value == &preview.fingerprint) else {
-                return (StatusCode::CONFLICT,
-                    json_err("review_mismatch", "A fresh exact plan fingerprint must be reviewed before saving."));
+            let fingerprint =
+                provided_fingerprint.and_then(|value| value.as_str().map(str::to_owned));
+            let Some(fingerprint) = fingerprint.filter(|value| value == &preview.fingerprint)
+            else {
+                return (
+                    StatusCode::CONFLICT,
+                    json_err(
+                        "review_mismatch",
+                        "A fresh exact plan fingerprint must be reviewed before saving.",
+                    ),
+                );
             };
             let store_clone = store.clone();
             let provider_clone = provider.clone();
             let expected = input.revision;
             return start_job_value(jobs, "managed_resource_save", move |running| async move {
-                let result = store_clone.apply_review(
-                    &candidate, &expected, &fingerprint, &*provider_clone,
-                ).await;
+                let result = store_clone
+                    .apply_review_mode(&candidate, &expected, &fingerprint, mode, &*provider_clone)
+                    .await;
                 match result {
                     Ok(snapshot) => running.finish(Outcome::Succeeded(
-                        json!({"revision":snapshot.revision, "mode":"now"})
+                        json!({"revision":snapshot.revision, "mode":mode}),
                     )),
                     Err(error) => running.finish(Outcome::Failed(error.to_string())),
                 }
-            }).await;
+            })
+            .await;
         }
 
         "managed_config_read" => {
             if !writes_allowed(state) {
-                return (StatusCode::FORBIDDEN,
-                    json_err("writes_disabled", "Private configuration editing is disabled by policy."));
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err(
+                        "writes_disabled",
+                        "Private configuration editing is disabled by policy.",
+                    ),
+                );
             }
             match store.read() {
                 Ok(Some(raw)) => {
@@ -1331,92 +1638,152 @@ pub async fn execute_tool(
                         }),
                     )
                 }
-                Ok(None) => (StatusCode::OK, json!({
-                    "revision": MISSING_REVISION,
-                    "content": "version: 1\n",
-                    "valid": true
-                })),
-                Err(_) => (StatusCode::SERVICE_UNAVAILABLE,
-                    json_err("unavailable", "Private YAML cannot be read safely.")),
+                Ok(None) => (
+                    StatusCode::OK,
+                    json!({
+                        "revision": MISSING_REVISION,
+                        "content": "version: 1\n",
+                        "valid": true
+                    }),
+                ),
+                Err(_) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err("unavailable", "Private YAML cannot be read safely."),
+                ),
             }
         }
         "managed_config_validate" => {
-            let Some(content) = arguments.get("content").and_then(Value::as_str)
+            let Some(content) = arguments
+                .get("content")
+                .and_then(Value::as_str)
                 .filter(|_| arguments.len() == 1)
             else {
-                return (StatusCode::BAD_REQUEST,
-                    json_err("invalid_arguments", "Expected only a YAML content string."));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Expected only a YAML content string."),
+                );
             };
             if content.len() > crate::core::declarative::MAX_CONFIG_BYTES {
-                return (StatusCode::BAD_REQUEST,
-                    json_err("invalid_arguments", "YAML exceeds 1 MiB."));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "YAML exceeds 1 MiB."),
+                );
             }
             match crate::core::declarative::parse(content.as_bytes()) {
-                Ok(_) => (StatusCode::OK,
+                Ok(_) => (
+                    StatusCode::OK,
                     json!({"valid":true, "runtimeChecked":false, "files":[],
-                        "notice":"Native file and dependency readiness has not been established."})),
-                Err(error) => (StatusCode::BAD_REQUEST,
-                    json_err("invalid_arguments", &error.to_string())),
+                        "notice":"Native file and dependency readiness has not been established."}),
+                ),
+                Err(error) => (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", &error.to_string()),
+                ),
             }
         }
         "managed_config_health" => match store.read() {
             Ok(Some(raw)) => match crate::core::declarative::parse(&raw.bytes) {
-                Ok(_) => (StatusCode::OK,
+                Ok(_) => (
+                    StatusCode::OK,
                     json!({"configured":true, "valid":true, "runtimeChecked":false,
-                        "files":[], "notice":"Native readiness remains unverified."})),
-                Err(error) => (StatusCode::OK,
+                        "files":[], "notice":"Native readiness remains unverified."}),
+                ),
+                Err(error) => (
+                    StatusCode::OK,
                     json!({"configured":true, "valid":false, "runtimeChecked":false,
-                        "error":error.to_string()})),
+                        "error":error.to_string()}),
+                ),
             },
-            Ok(None) => (StatusCode::OK,
-                json!({"configured":false, "runtimeChecked":false})),
-            Err(_) => (StatusCode::SERVICE_UNAVAILABLE,
-                json_err("unavailable", "Cannot read the private configuration safely.")),
+            Ok(None) => (
+                StatusCode::OK,
+                json!({"configured":false, "runtimeChecked":false}),
+            ),
+            Err(_) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json_err(
+                    "unavailable",
+                    "Cannot read the private configuration safely.",
+                ),
+            ),
         },
         "managed_config_model" => {
             if !writes_allowed(state) {
-                return (StatusCode::FORBIDDEN,
-                    json_err("writes_disabled", "Private typed configuration editing is disabled by policy."));
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err(
+                        "writes_disabled",
+                        "Private typed configuration editing is disabled by policy.",
+                    ),
+                );
             }
             match store.read() {
                 Ok(Some(raw)) => match raw.config() {
-                    Ok(config) => (StatusCode::OK, json!({
-                        "config":config,
-                        "revision":raw.revision,
-                        "notice":"Private-file references are paths only; no file contents were read."
-                    })),
-                    Err(_) => (StatusCode::SERVICE_UNAVAILABLE,
-                        json_err("unavailable", "Invalid YAML; use the raw recovery editor.")),
+                    Ok(config) => (
+                        StatusCode::OK,
+                        json!({
+                            "config":config,
+                            "revision":raw.revision,
+                            "notice":"Private-file references are paths only; no file contents were read."
+                        }),
+                    ),
+                    Err(_) => (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        json_err("unavailable", "Invalid YAML; use the raw recovery editor."),
+                    ),
                 },
-                Ok(None) => (StatusCode::OK, json!({
-                    "config":{"version":1,"services":{},"storage":{},"shares":{},"bindings":{},"secrets":{}},
-                    "revision":MISSING_REVISION
-                })),
-                Err(_) => (StatusCode::SERVICE_UNAVAILABLE,
-                    json_err("unavailable", "Typed configuration is not accessible.")),
+                Ok(None) => (
+                    StatusCode::OK,
+                    json!({
+                        "config":{"version":1,"services":{},"storage":{},"shares":{},"bindings":{},"secrets":{}},
+                        "revision":MISSING_REVISION
+                    }),
+                ),
+                Err(_) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err("unavailable", "Typed configuration is not accessible."),
+                ),
             }
         }
         "managed_config_history" => {
             if !writes_allowed(state) {
-                return (StatusCode::FORBIDDEN,
-                    json_err("writes_disabled", "Private configuration history is disabled by policy."));
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err(
+                        "writes_disabled",
+                        "Private configuration history is disabled by policy.",
+                    ),
+                );
             }
-            match store.list_history() {
+            match store.history_entries() {
                 Ok(history) => (StatusCode::OK, json!({"entries":history})),
-                Err(_) => (StatusCode::SERVICE_UNAVAILABLE,
-                    json_err("unavailable", "Private configuration history is not accessible.")),
+                Err(_) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err(
+                        "unavailable",
+                        "Private configuration history is not accessible.",
+                    ),
+                ),
             }
         }
         "managed_config_history_read" => {
             if !writes_allowed(state) {
-                return (StatusCode::FORBIDDEN,
-                    json_err("writes_disabled", "Private configuration history is disabled by policy."));
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err(
+                        "writes_disabled",
+                        "Private configuration history is disabled by policy.",
+                    ),
+                );
             }
-            let Some(revision) = arguments.get("target").and_then(Value::as_str)
+            let Some(revision) = arguments
+                .get("target")
+                .and_then(Value::as_str)
                 .filter(|_| arguments.len() == 1)
             else {
-                return (StatusCode::BAD_REQUEST,
-                    json_err("invalid_arguments", "Expected an exact target revision."));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Expected an exact target revision."),
+                );
             };
             match store.read_history(revision) {
                 Ok(raw) => (
@@ -1427,27 +1794,198 @@ pub async fn execute_tool(
                         "valid":crate::core::declarative::parse(&raw.bytes).is_ok()
                     }),
                 ),
-                Err(_) => (StatusCode::NOT_FOUND,
-                    json_err("not_found", "The requested private revision is not accessible.")),
+                Err(_) => (
+                    StatusCode::NOT_FOUND,
+                    json_err(
+                        "not_found",
+                        "The requested private revision is not accessible.",
+                    ),
+                ),
             }
         }
 
         "managed_backup_inventory" => {
             // A read-only metadata inventory must never perform any host
             // mutation or claim the result can be restored.
-            let root = state.config.paths.data_dir.join("workloads");
+            let authority_path = store.path();
+            let root = authority_path.parent().expect("store path has a parent");
             match crate::core::declarative::backup_inventory::inventory(
-                store, &root, &state.config.paths.storage_dir,
+                store,
+                root,
+                &state.config.paths.storage_dir,
             ) {
                 Ok(snapshot) => (StatusCode::OK, json!(snapshot)),
                 Err(_) => (
                     StatusCode::SERVICE_UNAVAILABLE,
-                    json_err("backup_inventory_unavailable",
-                        "Backup inventory is unavailable; check authoritative YAML and account-readable input metadata."),
+                    json_err(
+                        "backup_inventory_unavailable",
+                        "Backup inventory is unavailable; check authoritative YAML and account-readable input metadata.",
+                    ),
                 ),
             }
         }
 
+        "managed_config_plan"
+        | "managed_config_save"
+        | "managed_config_revert_plan"
+        | "managed_config_revert" => {
+            let revert = matches!(name, "managed_config_revert_plan" | "managed_config_revert");
+            let mut arguments = arguments;
+            if revert {
+                if !writes_allowed(state) {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        json_err(
+                            "writes_disabled",
+                            "Private configuration history is disabled by policy.",
+                        ),
+                    );
+                }
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct RevertInput {
+                    target: String,
+                    revision: String,
+                    mode: Option<String>,
+                    confirm: Option<bool>,
+                }
+                let Ok(input) = serde_json::from_value::<RevertInput>(Value::Object(arguments))
+                else {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        json_err(
+                            "invalid_arguments",
+                            "Expected target and revision, and mode/confirm for revert.",
+                        ),
+                    );
+                };
+                let historical = match store.read_history(&input.target) {
+                    Ok(snapshot) => snapshot,
+                    Err(_) => {
+                        return (
+                            StatusCode::NOT_FOUND,
+                            json_err(
+                                "not_found",
+                                "The requested private revision is not accessible.",
+                            ),
+                        );
+                    }
+                };
+                let Ok(content) = String::from_utf8(historical.bytes) else {
+                    return (
+                        StatusCode::CONFLICT,
+                        json_err(
+                            "invalid_history",
+                            "The selected revision is not valid configuration.",
+                        ),
+                    );
+                };
+                arguments = serde_json::from_value(json!({
+                    "content":content,"revision":input.revision,"mode":input.mode,"confirm":input.confirm
+                })).expect("configuration arguments are an object");
+            }
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Input {
+                content: String,
+                revision: String,
+                mode: Option<String>,
+                confirm: Option<bool>,
+            }
+            let save = matches!(name, "managed_config_save" | "managed_config_revert");
+            let Ok(input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Expected content and revision, and mode/confirm for saves.",
+                    ),
+                );
+            };
+            if input.content.is_empty()
+                || input.content.len() > 1048576
+                || input.revision.is_empty()
+                || input.revision.len() > 64
+                || (!save && (input.mode.is_some() || input.confirm.is_some()))
+                || (save
+                    && (input.confirm != Some(true)
+                        || !matches!(input.mode.as_deref(), Some("now" | "next_start"))))
+            {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Invalid configuration arguments or missing destructive confirmation.",
+                    ),
+                );
+            }
+            if save && !writes_allowed(state) {
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err("writes_disabled", "Workload writes are disabled."),
+                );
+            }
+            if revert {
+                if let Err(error) = store
+                    .validate_revert(input.content.as_bytes(), &input.revision, &**provider)
+                    .await
+                {
+                    return (
+                        StatusCode::CONFLICT,
+                        json_err("revert_unavailable", &error.to_string()),
+                    );
+                }
+            }
+            let plan = match crate::core::linux_config::preview(
+                &state.config,
+                store,
+                input.content.as_bytes(),
+                &input.revision,
+            ) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    return (
+                        StatusCode::CONFLICT,
+                        json_err("plan_unavailable", &error.to_string()),
+                    );
+                }
+            };
+            if !save {
+                return (
+                    StatusCode::OK,
+                    json!({"unavailable":provider.blocked_resources(&plan.changes),"plan":plan}),
+                );
+            }
+            let mode = if input.mode.as_deref() == Some("next_start") {
+                crate::core::declarative::ApplyMode::NextStart
+            } else {
+                crate::core::declarative::ApplyMode::Now
+            };
+            let store = store.clone();
+            let config = state.config.clone();
+            let provider = provider.clone();
+            let job_tool = if revert {
+                "managed_config_revert"
+            } else {
+                "managed_config_save"
+            };
+            start_job_value(jobs, job_tool, move |running| async move {
+                let result = async {
+                    crate::core::linux_config::mutation_ready(&config, &store)?;
+                    let plan = crate::core::linux_config::preview(&config, &store, input.content.as_bytes(), &input.revision)?;
+                    let snapshot = if revert {
+                        store.apply_revert_review_mode(input.content.as_bytes(), &input.revision, &plan.fingerprint, mode, &*provider).await?
+                    } else {
+                        store.apply_review_mode(input.content.as_bytes(), &input.revision, &plan.fingerprint, mode, &*provider).await?
+                    };
+                    Ok::<_, anyhow::Error>(json!({"revision":snapshot.revision,"restartRequired":plan.restart_required,"mode":input.mode}))
+                }.await;
+                match result {
+                    Ok(result) => running.finish(Outcome::Succeeded(result)),
+                    Err(error) => running.finish(Outcome::Failed(error.to_string())),
+                }
+            }).await
+        }
         "workloads_get" => match store.read() {
             Ok(Some(snap)) => (
                 StatusCode::OK,
@@ -1482,7 +2020,12 @@ pub async fn execute_tool(
                 .get("expected")
                 .and_then(Value::as_str)
                 .unwrap_or(current_rev);
-            match store.preview(candidate.as_bytes(), expected) {
+            match crate::core::linux_config::preview(
+                &state.config,
+                store,
+                candidate.as_bytes(),
+                expected,
+            ) {
                 Ok(plan) => (
                     StatusCode::OK,
                     json!({
@@ -1532,7 +2075,21 @@ pub async fn execute_tool(
             let fingerprint = fingerprint.to_string();
             let store_clone = store.clone();
             let provider_clone = provider.clone();
+            let config = state.config.clone();
             start_job_value(jobs, "workloads_apply", move |running| async move {
+                let review = crate::core::linux_config::mutation_ready(&config, &store_clone)
+                    .and_then(|()| {
+                        crate::core::linux_config::preview(
+                            &config,
+                            &store_clone,
+                            candidate.as_bytes(),
+                            &expected,
+                        )
+                    });
+                if let Err(error) = review {
+                    running.finish(Outcome::Failed(error.to_string()));
+                    return;
+                }
                 match store_clone
                     .apply_review(
                         candidate.as_bytes(),
@@ -1559,6 +2116,59 @@ pub async fn execute_tool(
             StatusCode::BAD_REQUEST,
             json_err("invalid_arguments", "Pending journal accepts no arguments."),
         ),
+        "managed_apply_status" => {
+            if !arguments.is_empty() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "No arguments are accepted."),
+                );
+            }
+            match store.apply_status() {
+                Ok(status) => (
+                    StatusCode::OK,
+                    status.unwrap_or_else(|| json!({"stage":"none"})),
+                ),
+                Err(_) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err(
+                        "apply_status_unavailable",
+                        "Apply journal is unreadable or invalid; inspect private state files.",
+                    ),
+                ),
+            }
+        }
+        "managed_apply_retry" => {
+            if !writes_allowed(state) {
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err(
+                        "writes_disabled",
+                        "Workload mutations are disabled by policy.",
+                    ),
+                );
+            }
+            if arguments.len() != 1 || arguments.get("confirm") != Some(&Value::Bool(true)) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("confirmation_required", "Retry requires only confirm=true."),
+                );
+            }
+            let store = store.clone();
+            let provider = provider.clone();
+            start_job_value(jobs, "managed_apply_retry", move |running| async move {
+                let outcome = match store.retry_apply(&*provider).await {
+                    Ok(status) => {
+                        if status["stage"] == "aborted" {
+                            running.append_output("Prepared intent was not committed to YAML; discarded without publishing configuration or changing native resources.\n");
+                        }
+                        Outcome::Succeeded(status)
+                    },
+                    Err(error) => Outcome::Failed(error.to_string()),
+                };
+                running.finish(outcome);
+            })
+            .await
+        }
         "workloads_pending" => match store.pending_apply() {
             Ok(journal) => (StatusCode::OK, json!({"pending": journal})),
             Err(_) => (
@@ -1595,8 +2205,18 @@ pub async fn execute_tool(
             let store = store.clone();
             let provider = provider.clone();
             start_job_value(jobs, "workloads_resume", move |running| async move {
-                let outcome = match store.resume_apply(&fingerprint, &*provider).await {
-                    Ok(snapshot) => Outcome::Succeeded(json!({"revision": snapshot.revision})),
+                let result = async {
+                    let snapshot = store.resume_apply(&fingerprint, &*provider).await?;
+                    let recovery_pending = store.pending_apply()?.is_some();
+                    Ok::<_, anyhow::Error>((snapshot, recovery_pending))
+                }.await;
+                let outcome = match result {
+                    Ok((snapshot, recovery_pending)) => {
+                        if recovery_pending {
+                            running.append_output("Replacement YAML was not committed; the prior interrupted transition has been restored and still requires recovery.\n");
+                        }
+                        Outcome::Succeeded(json!({"revision": snapshot.revision, "recoveryPending": recovery_pending}))
+                    },
                     Err(error) => Outcome::Failed(error.to_string()),
                 };
                 running.finish(outcome);
@@ -1604,6 +2224,13 @@ pub async fn execute_tool(
             .await
         }
 
+        "workloads_history" if !writes_allowed(state) => (
+            StatusCode::FORBIDDEN,
+            json_err(
+                "writes_disabled",
+                "Private configuration history is disabled by policy.",
+            ),
+        ),
         "workloads_history" => match store.list_history() {
             Ok(history) => (StatusCode::OK, json!({ "history": history })),
             Err(e) => (
@@ -1613,6 +2240,16 @@ pub async fn execute_tool(
         },
 
         "workloads_revert" => {
+            if !writes_allowed(state) {
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err(
+                        "writes_disabled",
+                        "Private configuration history is disabled by policy.",
+                    ),
+                );
+            }
+
             let Some(revision) = arguments.get("revision").and_then(Value::as_str) else {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -1639,6 +2276,15 @@ pub async fn execute_tool(
                 .and_then(Value::as_str)
                 .unwrap_or(current_rev);
 
+            if let Err(error) = store
+                .validate_revert(&historical.bytes, expected, &**provider)
+                .await
+            {
+                return (
+                    StatusCode::CONFLICT,
+                    json_err("revert_unavailable", &error.to_string()),
+                );
+            }
             if apply {
                 if !writes_allowed(state) {
                     return (
@@ -1664,7 +2310,12 @@ pub async fn execute_tool(
                 let provider_clone = provider.clone();
                 start_job_value(jobs, "workloads_revert", move |running| async move {
                     match store_clone
-                        .apply_review(&historical.bytes, &expected, &fingerprint, &*provider_clone)
+                        .apply_revert_review(
+                            &historical.bytes,
+                            &expected,
+                            &fingerprint,
+                            &*provider_clone,
+                        )
                         .await
                     {
                         Ok(snapshot) => {
@@ -1680,7 +2331,12 @@ pub async fn execute_tool(
                 })
                 .await
             } else {
-                match store.preview(&historical.bytes, expected) {
+                match crate::core::linux_config::preview(
+                    &state.config,
+                    store,
+                    &historical.bytes,
+                    expected,
+                ) {
                     Ok(plan) => (
                         StatusCode::OK,
                         json!({
@@ -1897,8 +2553,14 @@ async fn status(
     let helper = admin::probe().await;
     let privileged_writes = systemd::available(&state)
         && state.config.platform == crate::config::Platform::Linux
-        && state.config.services.systemd_system_write_units
-            .iter().any(|unit| systemd::permits(&state, systemd::Scope::System, unit) && helper.permits_unit(unit));
+        && state
+            .config
+            .services
+            .systemd_system_write_units
+            .iter()
+            .any(|unit| {
+                systemd::permits(&state, systemd::Scope::System, unit) && helper.permits_unit(unit)
+            });
     Json(json!({
         "hostname": String::from_utf8_lossy(&hostname[..end]),
         "startedAt": started_at,

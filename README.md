@@ -60,7 +60,7 @@ support is not promised.
    The installer creates a token and Maestro configuration on first install,
    installs startup hooks, and restarts Maestro. Migrating Router Hub data
    requires the explicit one-time procedure before installation.
-4. Review `/opt/etc/maestro/maestro.toml` after either installation method: set your bind address,
+4. Review `/opt/etc/maestro/maestro.yaml` after either installation method: set your bind address,
    allowed origins, ASUS page/menu, API URL, and service paths. The shipped
    values are examples. Restart after changes:
 
@@ -69,7 +69,7 @@ support is not promised.
    ```
 
 5. Open the configured ASUS menu entry, or
-   `http://<router-ip>:3030/#token=<auth-token>` using the token from your TOML.
+   `http://<router-ip>:3030/#token=<auth-token>` using the token from your YAML.
 
 On an existing router install, `/opt/bin/maestro upgrade` checks the latest
 stable GitHub release, verifies its IPK checksum, and attempts `opkg install`.
@@ -112,7 +112,9 @@ For testing against real services, follow the [Linux integration guide](docs/lin
 
 ## Configure and use
 
-Start with the [example TOML](config/maestro.example.toml) for paths,
+Existing TOML installations require the [one-time YAML migration](docs/migration.md#one-time-toml-to-yaml-migration) before startup.
+
+Start with the [example YAML](config/maestro.example.yaml) for paths,
 authentication, commands, and integration settings. Then use the UI to manage
 services, sites, certificates, saved devices, and firewall policy.
 
@@ -130,7 +132,7 @@ security, nginx settings, and firewall tuning.
 | Guide | Contents |
 | --- | --- |
 | [Installation](docs/installation.md) | Packages, source builds, installer options, service commands |
-| [Configuration](docs/configuration.md) | TOML sections, nginx settings, Ban Shield tuning, operational notes |
+| [Configuration](docs/configuration.md) | YAML mappings, nginx settings, Ban Shield tuning, operational notes |
 | [Upgrading](docs/maestro-migration.md) | One-time cutover and rollback; no legacy runtime aliases |
 | [Legacy migrations](docs/migration.md) | Historical nginx and storage compatibility |
 | [Development](docs/development.md) | Prerequisites, local checks, certificate tests, API overview |

@@ -8,7 +8,9 @@ use anyhow::{Result, anyhow, ensure};
 use rustix::{fs, io::Errno};
 use serde::{Deserialize, Serialize};
 
-use super::{ApplyProvider, Change, Config, ObservedResource, RecoveryProvider, Storage, store};
+use super::{
+    ApplyMode, ApplyProvider, Change, Config, ObservedResource, RecoveryProvider, Storage, store,
+};
 
 pub(super) const MARKER: &str = ".maestro-storage.json";
 
@@ -156,6 +158,25 @@ fn descend(mut dir: File, path: &str, create: bool) -> Result<Option<File>> {
 }
 
 impl ApplyProvider for StorageProvider {
+    async fn preflight_mode(
+        &self,
+        change: &Change,
+        previous: &Config,
+        desired: &Config,
+        _: ApplyMode,
+    ) -> Result<()> {
+        self.preflight(change, previous, desired).await
+    }
+    async fn apply_mode(
+        &self,
+        change: &Change,
+        previous: &Config,
+        desired: &Config,
+        _: ApplyMode,
+    ) -> Result<()> {
+        self.apply(change, previous, desired).await
+    }
+
     async fn preflight(&self, change: &Change, previous: &Config, desired: &Config) -> Result<()> {
         ensure!(
             self.observe(change, previous, desired).await? == ObservedResource::Before,
@@ -169,7 +190,7 @@ impl ApplyProvider for StorageProvider {
         let base = self
             .base(transition.before.is_none())?
             .ok_or_else(|| anyhow!("storage base is missing"))?;
-        fs::flock(&base, fs::FlockOperation::NonBlockingLockExclusive)?;
+        let base = store::LockedDirectory::try_acquire(base)?;
         let existing = descend(base.try_clone()?, transition.path, false)?;
         ensure!(
             transition.observe(existing.as_ref())? == ObservedResource::Before,
@@ -192,6 +213,16 @@ impl ApplyProvider for StorageProvider {
 }
 
 impl RecoveryProvider for StorageProvider {
+    async fn observe_mode(
+        &self,
+        change: &Change,
+        previous: &Config,
+        desired: &Config,
+        _: ApplyMode,
+    ) -> Result<ObservedResource> {
+        self.observe(change, previous, desired).await
+    }
+
     async fn observe(
         &self,
         change: &Change,

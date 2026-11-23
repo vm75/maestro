@@ -14,6 +14,9 @@
     enabled: boolean
     state: string
     containerCount: number
+    runtimeMatches?: boolean | null
+    restartRequired?: boolean
+    members?: Array<{name: string; state: string}>
     lifecycle: boolean
     logs: boolean
   }
@@ -60,10 +63,13 @@
   let applying = $state(false)
   let applyJob = $state<Job | null>(null)
   let applyError = $state('')
+  let applyMessage = $state('')
 
   let history = $state<string[]>([])
   let actionPending = $state<string | null>(null)
-  let pending = $state<{ plan: Plan; completed: number } | null>(null)
+  let pending = $state<{ plan: Plan; completed: number; mode?: string } | null>(null)
+  interface ApplyStatus { stage: string; updatedAt?: string; resources?: Record<string, {state: string; message?: string}> }
+  let applyStatus = $state<ApplyStatus | null>(null)
   let recoveryChecked = $state(false)
   let recoveryError = $state('')
   const writable = $derived(discovery.modules.some(module => module.id === 'workloads' && module.writable))
@@ -72,7 +78,12 @@
   async function loadPending() {
     recoveryChecked = false
     try {
-      pending = (await invokeTool<{ pending: typeof pending }>('workloads_pending')).pending
+      const [operation, status] = await Promise.all([
+        invokeTool<{ pending: typeof pending }>('workloads_pending'),
+        invokeTool<ApplyStatus>('managed_apply_status'),
+      ])
+      pending = operation.pending
+      applyStatus = status
       recoveryChecked = true
       recoveryError = ''
     } catch (failure) {
@@ -193,12 +204,14 @@
     const reviewed = review
     const interrupted = pending
     if (resume ? !interrupted : !reviewed || !!interrupted || !!reviewed?.blockedResources.length) return
+    if (resume && !window.confirm('Inspect and retry safe publication? Interrupted removals are not replayed automatically.')) return
     applying = true
     applyError = ''
+    applyMessage = ''
     applyJob = null
     try {
       let job = resume && interrupted
-        ? await startJob('workloads_resume', { fingerprint: interrupted.plan.fingerprint })
+        ? await startJob('managed_apply_retry', { confirm: true })
         : await startJob('workloads_apply', {
           candidate: currentYaml,
           expected: reviewed?.plan.baseRevision,
@@ -211,10 +224,12 @@
         applyJob = job
       }
       if (job.state === 'succeeded') {
+        const result = job.result as {stage?: string} | null
+        if (result?.stage === 'aborted') applyMessage = 'The interrupted operation had not saved its YAML. Its prepared intent was discarded; configuration and native resources were preserved.'
         reviewedDraft = null
         await Promise.all([loadApplications(), loadWorkloads(), loadHistory()])
       } else {
-        applyError = 'Application of plan failed. Check job output.'
+        applyError = job.error ?? 'Application of plan failed. Check job output.'
       }
     } catch (e) {
       applyError = e instanceof Error ? e.message : 'Could not apply plan'
@@ -260,10 +275,17 @@
     <section class="panel" aria-labelledby="workload-recovery">
       <h2 id="workload-recovery">Interrupted workload apply</h2>
       <p>{pending.completed} of {pending.plan.changes.length} changes recorded.</p>
+      <p>Recorded apply mode: {pending.mode === 'next_start' ? 'Next start — publish definitions without starting workloads' : 'Now'}.</p>
       <p>Plan fingerprint: <code>{pending.plan.fingerprint}</code></p>
+      {#if applyStatus}
+        <p>Durable stage: {applyStatus.stage}{applyStatus.updatedAt ? ' · ' + applyStatus.updatedAt : ''}</p>
+        <ul>{#each Object.entries(applyStatus.resources ?? {}) as [resource, result]}
+          <li>{resource}: {result.state}{result.message ? ' — ' + result.message : ''}</li>
+        {/each}</ul>
+      {/if}
       {#if writable}
         <button type="button" disabled={applying || !recoveryChecked || actionPending !== null} onclick={() => applyCurrentPlan(true)}>
-          Resume reviewed apply
+          Retry safe publication
         </button>
       {/if}
     </section>
@@ -312,9 +334,15 @@
               {/if}
               <span>Containers: <strong>{app.containerCount}</strong></span>
             </div>
+            {#if app.restartRequired}
+              <p role="status">Running containers differ from the saved configuration. Restart to apply the current definitions.</p>
+            {/if}
+            {#if app.members?.length}
+              <ul>{#each app.members as member (member.name)}<li>{member.name}: {member.state}</li>{/each}</ul>
+            {/if}
             <div class="app-actions">
               {#if writable && app.lifecycle}
-                {#each (!['running', 'stopped'].includes(app.state) ? ['start', 'stop'] : [app.state === 'running' ? 'stop' : 'start']) as action}
+                {#each (app.restartRequired ? ['stop'] : !['running', 'stopped'].includes(app.state) ? ['start', 'stop'] : [app.state === 'running' ? 'stop' : 'start']) as action}
                   <button type="button"
                     disabled={actionPending !== null || applying || !recoveryChecked || !!pending}
                     onclick={() => runAction(app.id, action)}>
@@ -434,6 +462,7 @@
       <p role="alert" class="error-msg">{applyError}</p>
     {/if}
 
+    {#if applyMessage}<p role="status">{applyMessage}</p>{/if}
     {#if applyJob}
       <div class="job-status">
         <p>Apply Job State: <strong>{applyJob.state}</strong></p>

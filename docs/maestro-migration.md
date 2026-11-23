@@ -117,7 +117,8 @@ The normal post-install helper uses only Maestro data. Its
 Maestro JFFS hooks and checks configuration.
 
 ```sh
-/opt/bin/maestro --config /opt/etc/maestro/maestro.toml check-config
+/opt/bin/maestro --config /opt/etc/maestro/maestro.toml migrate-config
+/opt/bin/maestro --config /opt/etc/maestro/maestro.yaml check-config
 /opt/etc/init.d/S99maestro check
 /opt/bin/maestro backup
 ```

@@ -4,12 +4,12 @@ set -euo pipefail
 umask 077
 
 usage() {
-  echo "Usage: install-linux.sh --user ACCOUNT --config /absolute/maestro.toml --binary /path/to/release"
+  echo "Usage: install-linux.sh --user ACCOUNT --config /absolute/maestro.yaml --binary /path/to/release"
   echo "       [--with-helper --helper /path/to/maestro-admin | --remove-helper]"
-  echo "       [--enable-linger] [--dry-run] [--yes]"
+  echo "       [--initialize-config] [--enable-linger] [--dry-run] [--yes]"
 }
 account= config= binary= helper= helper_mode=keep
-yes=0 dry=0 linger=0
+yes=0 dry=0 linger=0 initialize=0
 while (($#)); do
   case "$1" in
     --user|--config|--binary|--helper)
@@ -25,6 +25,7 @@ while (($#)); do
     --remove-helper)
       [[ "$helper_mode" == keep ]] || exit 2
       helper_mode=remove ;;
+    --initialize-config) initialize=1 ;;
     --enable-linger) linger=1 ;;
     --dry-run) dry=1 ;;
     --yes) yes=1 ;;
@@ -69,11 +70,38 @@ home=$(getent passwd "$account" | cut -d: -f6)
    "$group" =~ ^[a-z_][a-z0-9_-]{0,31}$ &&
    "$home" =~ ^/[A-Za-z0-9_./+-]+$ ]] ||
   { echo "Invalid account identity or home directory" >&2; exit 1; }
-[[ -f "$config" && ! -L "$config" && $(stat -c %u -- "$config") == "$uid" ]] ||
-  { echo "Private workload-owned TOML configuration is required" >&2; exit 1; }
-mode=$(stat -c %a -- "$config")
-[[ "$mode" =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 077) == 0 )) ||
-  { echo "Configuration must not be readable by group or others" >&2; exit 1; }
+[[ "$config" == *.yaml || "$config" == *.yml ]] ||
+  { echo "Linux installation requires the unified YAML authority; migrate legacy TOML explicitly" >&2; exit 1; }
+
+as_workload() {
+  if ((EUID == uid)); then
+    env -u XDG_STATE_HOME -u XDG_CONFIG_HOME HOME="$home" "$@"
+  elif ((EUID == 0)); then
+    runuser -u "$account" -- env -u XDG_STATE_HOME -u XDG_CONFIG_HOME HOME="$home" "$@"
+  else
+    echo "Validate as root or the selected workload account" >&2; return 1
+  fi
+}
+config_exists=0
+if [[ -e "$config" || -L "$config" ]]; then
+  config_exists=1
+  [[ -f "$config" && ! -L "$config" && $(stat -c %u -- "$config") == "$uid" ]] ||
+    { echo "Private workload-owned YAML configuration is required" >&2; exit 1; }
+  mode=$(stat -c %a -- "$config")
+  [[ "$mode" =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 077) == 0 )) ||
+    { echo "Configuration must not be readable by group or others" >&2; exit 1; }
+  config_parent=$(dirname -- "$config")
+  [[ -d "$config_parent" && ! -L "$config_parent" && $(stat -c %u -- "$config_parent") == "$uid" ]] ||
+    { echo "Configuration directory must be private and workload-owned" >&2; exit 1; }
+  parent_mode=$(stat -c %a -- "$config_parent")
+  (( (8#$parent_mode & 077) == 0 )) ||
+    { echo "Configuration directory must be owner-only" >&2; exit 1; }
+  as_workload "$binary" --config "$config" check-config
+else
+  ((initialize)) || { echo "Missing YAML; use --initialize-config for explicit private initialization" >&2; exit 1; }
+  # Check that this is a Linux build supporting the initializer, without writes.
+  as_workload "$binary" --config "$config" init-linux-config --help >/dev/null
+fi
 
 service=/etc/systemd/system/maestro.service
 if [[ -e "$service" ]]; then
@@ -93,7 +121,8 @@ Maestro native Linux installation plan
   Root policy: /etc/maestro/admin-policy.json (default denies all protected writes)
   Exact sudoers rule: /etc/sudoers.d/maestro
   Enable lingering: $linger
-  Existing config, data, user/groups and native packages are not modified.
+  Initialize missing private YAML/token: $initialize (config exists: $config_exists)
+  Existing config/token, data, user/groups and native packages are preserved.
   No host package setup, daemon groups or backend initialization is automatic.
 PLAN
 if ((dry)); then exit 0; fi
@@ -101,6 +130,11 @@ if ((dry)); then exit 0; fi
 if ((!yes)); then
   read -r -p "Apply this plan? [y/N] " approval || exit 1
   [[ "$approval" == y || "$approval" == Y ]] || { echo "Cancelled"; exit 1; }
+fi
+
+if ((initialize && !config_exists)); then
+  as_workload "$binary" --config "$config" init-linux-config
+  as_workload "$binary" --config "$config" check-config
 fi
 
 # All target directories must be fixed, root-owned and non-writable by others.

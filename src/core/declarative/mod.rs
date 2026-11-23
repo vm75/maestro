@@ -1,9 +1,13 @@
 mod apply;
 pub mod backup_inventory;
-pub use apply::{ApplyProvider, ObservedResource, RecoveryProvider};
+pub mod browse;
+mod container_health;
+mod revert;
+pub use apply::{ApplyMode, ApplyProvider, ObservedResource, RecoveryProvider};
 pub mod compose;
-pub mod edit;
 pub mod composite;
+pub mod credentials;
+pub mod edit;
 pub mod incus;
 mod journal;
 pub use journal::{ApplyJournal, ApplyPhase};
@@ -14,6 +18,7 @@ pub mod quadlet;
 pub use composite::{ApplicationSummary, CompositeProvider, ShareSummary};
 pub use plan::{Change, Operation, Plan};
 pub use quadlet::{QuadletArtifacts, QuadletProvider, managed_unit, render_quadlet};
+pub mod server;
 pub mod shares;
 pub mod storage;
 mod store;
@@ -45,10 +50,10 @@ pub fn parse(input: &[u8]) -> Result<Config> {
         .map_err(|_| anyhow!("invalid or duplicate YAML mapping key"))?;
     ensure!(shape.is_mapping(), "configuration must be a YAML mapping");
     ensure!(string_keys(&shape), "YAML mapping keys must be strings");
-    ensure!(
-        shape.get("server").is_none(),
-        "legacy server settings must be migrated to Maestro configuration"
-    );
+    server::read(
+        input,
+        &server::Settings::defaults(Path::new("/"), Path::new("/")),
+    )?;
     let mut config: Config = serde_yaml::from_slice(input)
         .map_err(|_| anyhow!("unknown configuration field or incorrect field type"))?;
     config.validate()?;
@@ -289,6 +294,7 @@ impl Config {
                             "missing environment file reference"
                         );
                     }
+                    container_health::validate(&service.containers)?;
                     dependency_order(service.containers.keys().map(String::as_str), |name| {
                         service.containers.get(name).map(|container| {
                             container.depends_on.keys().map(String::as_str).collect()

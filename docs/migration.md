@@ -25,7 +25,7 @@ relocation command. For a manual binary upgrade:
    router-hub --config /opt/etc/router-hub/router-hub.toml migrate-nginx-inputs
    ```
 
-4. Review the relocated `nginx.toml`, `sites.toml`, and `.conf`/`.txt` data
+4. Review the relocated `nginx.yaml`, `sites.yaml`, and `.conf`/`.txt` data
    fragments. Start Router Hub and save Global settings to regenerate and validate
    the combined runtime tree before reloading a running nginx.
 
@@ -84,16 +84,16 @@ the current Jinja bundle. Prepare and validate nginx separately before switching
 Router Hub versions.
 
 - Remove the obsolete `nginx.templates_dir` option from `router-hub.toml`.
-- Use `<nginx.inputs_dir>/nginx.toml` for shared settings under `[global]`, site defaults
+- Use `<nginx.inputs_dir>/nginx.yaml` for shared settings under `[global]`, site defaults
   under `[site_defaults]`, and top-level `allowed_ips` and `free_subdomains` lists.
   Copy any entries from `allowed_ips.txt` and `free_subdomains.txt` into these
   lists; strip comments. The fragments are generated outputs after saving.
-  Copy any separately stored global JSON settings manually into the TOML schema.
-- Put managed site inputs in `<nginx.inputs_dir>/sites.toml` using the
-  [current examples](../config/nginx/examples/sites.toml). Remove `output` fields;
+  Copy any separately stored global JSON settings manually into the YAML schema.
+- Put managed site inputs in `<nginx.inputs_dir>/sites.yaml` using the
+  [current examples](../config/nginx/examples/sites.yaml). Remove `output` fields;
   output paths are derived from site identity. Preserve upstreams, hostnames,
   enablement and per-site settings. Copy settings from generated `router-hub-settings` comments when needed,
-  but review and save them in TOML; saving shared settings no longer adopts
+  but review and save them in YAML; saving shared settings no longer adopts
   generated files automatically or treats their comments as managed inputs.
 - Replace `enable_no_cache` and `enable_pwa` with `cache_policy` in site defaults,
   sites, routes and nested children. An existing explicit `cache_policy` wins;
@@ -120,3 +120,42 @@ Confirm that firewall policy, allowlists, active unexpired bans, certificates,
 and nginx sites have the expected behavior. Keep the backup until verification
 is complete. To roll back, stop the new service and restore the matching old
 binary, configuration and state backup together.
+
+## One-time TOML to YAML migration
+
+Maestro now reads and writes YAML configuration on both ASUS and Linux. Existing
+TOML configuration is conversion input only; it is never a runtime fallback.
+Stop the service before migrating. For an existing Maestro installation:
+
+```sh
+/opt/etc/init.d/S99maestro stop
+/opt/bin/maestro --config /opt/etc/maestro/maestro.toml migrate-config
+/opt/bin/maestro --config /opt/etc/maestro/maestro.yaml check-config
+/opt/etc/init.d/S99maestro start
+```
+
+For Linux, run `migrate-config` as the workload account with its actual legacy
+configuration path. Update any custom service command or `--config` argument to
+the resulting `.yaml` path. The router installer performs this conversion once
+while its service is stopped. Existing native Linux YAML needs no conversion.
+
+The command preserves configured values, relative path meanings and credentials.
+It converts the main configuration and managed `nginx.toml`/`sites.toml` inputs,
+and relocates old nginx input files through the existing migration workflow.
+Exact original bytes, including comments, remain in private `.toml.bak` files;
+converted YAML is normalized and does not copy TOML comments. State, journals,
+certificates and authored native nginx configuration are not format-converted.
+
+Migration refuses symlinks, conflicting destinations, changed source files and
+invalid TOML. It never overwrites a different YAML file or backup. After success,
+the active TOML source is removed. Repeating the command against its old path is
+safe and preserves later YAML edits. If interrupted, rerun it; matching completed
+files are retained and conflicting files require inspection. Keep backups private:
+they contain the original credentials. Do not run an older binary against the
+same installation until its supported configuration has been restored while the
+service is stopped.
+
+For new installations, use `config/maestro.example.yaml` on ASUS or the non-root
+`init-linux-config` command on Linux. JSON persistence files and native service
+configuration retain their existing formats. Cargo's TOML build manifests are
+unrelated to Maestro's operator configuration.

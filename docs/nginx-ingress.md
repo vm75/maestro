@@ -141,7 +141,7 @@ The shared **Public HTTP** mode controls all managed HTTP listeners:
 HTTP-01 names without an enabled redirect on the legacy listener receive a
 challenge-only handler there. Ordinary requests to those names return `404`.
 
-New configurations default to validation-only. Existing `nginx.toml` inputs
+New configurations default to validation-only. Existing `nginx.yaml` inputs
 without `http_access` retain always-on behavior until explicitly migrated.
 Validation-only disables ordinary HTTP redirects. HTTP endpoints/redirects in a
 profile cannot override the shared mode. Redirect profiles need an unambiguous
@@ -209,9 +209,9 @@ firmware or with external forwarding.
 ## Stored inputs and API
 
 Named collections and `http_access` are top-level tables in
-`<nginx.inputs_dir>/nginx.toml`, alongside `[global]` and `[site_defaults]`.
-See the synthetic [global inputs](../config/nginx/examples/ingress.toml) and
-[site inputs](../config/nginx/examples/ingress-sites.toml). Replace example
+`<nginx.inputs_dir>/nginx.yaml`, alongside `global` and `site_defaults`.
+See the synthetic [global inputs](../config/nginx/examples/ingress.yaml) and
+[site inputs](../config/nginx/examples/ingress-sites.yaml). Replace example
 addresses and paths before use; saving through the UI handles these tables.
 
 Authenticated API clients use the existing `/api/nginx/settings` and object

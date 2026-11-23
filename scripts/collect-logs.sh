@@ -10,7 +10,7 @@
 #   OUTPUT_DIR=/tmp
 #   MAX_LOG_BYTES=1048576      # 1 MiB per configured log
 #   SAMPLE_SECONDS=0           # set e.g. 600 to get a 10-minute counter delta
-#   MAESTRO_CONFIG=/opt/etc/maestro/maestro.toml
+#   MAESTRO_CONFIG=/opt/etc/maestro/maestro.yaml
 #
 # Example:
 #   chmod 700 collect-maestro-diagnostics.sh
@@ -27,7 +27,7 @@ export PATH
 OUTPUT_DIR="${OUTPUT_DIR:-/tmp}"
 MAX_LOG_BYTES="${MAX_LOG_BYTES:-1048576}"
 SAMPLE_SECONDS="${SAMPLE_SECONDS:-0}"
-CONFIG="${MAESTRO_CONFIG:-/opt/etc/maestro/maestro.toml}"
+CONFIG="${MAESTRO_CONFIG:-/opt/etc/maestro/maestro.yaml}"
 
 STAMP="$(date '+%Y%m%d-%H%M%S' 2>/dev/null || echo unknown-time)"
 HOST="$(hostname 2>/dev/null || echo router)"
@@ -59,53 +59,14 @@ have() {
     command -v "$1" >/dev/null 2>&1
 }
 
-toml_get() {
-    # Usage: toml_get section key file
-    section="$1"
-    key="$2"
-    file="$3"
-    [ -r "$file" ] || return 0
-    awk -v want_section="$section" -v want_key="$key" '
-        /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
-            s=$0
-            gsub(/^[[:space:]]*\[/, "", s)
-            gsub(/\][[:space:]]*$/, "", s)
-            inside=(s == want_section)
-            next
-        }
-        inside {
-            line=$0
-            sub(/[[:space:]]*#.*/, "", line)
-            if (line ~ "^[[:space:]]*" want_key "[[:space:]]*=") {
-                sub("^[[:space:]]*" want_key "[[:space:]]*=[[:space:]]*", "", line)
-                gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-                if (line ~ /^".*"$/) {
-                    sub(/^"/, "", line)
-                    sub(/"$/, "", line)
-                }
-                print line
-                exit
-            }
-        }
-    ' "$file"
+yaml_get() {
+    section="$1" key="$2" file="$3"
+    "${MAESTRO_BIN:-/opt/bin/maestro}" --config "$file" config-value "$section.$key" 2>/dev/null || true
 }
 
-sanitize_toml() {
-    src="$1"
-    dst="$2"
-    awk '
-        {
-            low=tolower($0)
-            if (low ~ /^[[:space:]]*[a-z0-9_.-]*(auth_token|password|passwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|token)[a-z0-9_.-]*[[:space:]]*=/) {
-                eq=index($0, "=")
-                if (eq > 0) {
-                    print substr($0, 1, eq) " \"<redacted>\""
-                    next
-                }
-            }
-            print
-        }
-    ' "$src" > "$dst"
+sanitize_yaml() {
+    # Omit arbitrary authored YAML instead of attempting unsafe text redaction.
+    printf '# Private configuration omitted from diagnostic archive.\n' > "$2"
 }
 
 run_to_file() {
@@ -262,20 +223,20 @@ SET4="maestro_bans4"
 SET6="maestro_bans6"
 
 if [ -r "$CONFIG" ]; then
-    sanitize_toml "$CONFIG" "$WORK/maestro/maestro.sanitized.toml"
+    sanitize_yaml "$CONFIG" "$WORK/maestro/maestro.sanitized.yaml"
 
-    v="$(toml_get paths data_dir "$CONFIG")"; [ -n "$v" ] && DATA_DIR="$v"
-    v="$(toml_get server bind "$CONFIG")"; [ -n "$v" ] && BIND="$v"
-    v="$(toml_get server port "$CONFIG")"; [ -n "$v" ] && PORT="$v"
-    AUTH_TOKEN="$(toml_get server auth_token "$CONFIG")"
+    v="$(yaml_get paths data_dir "$CONFIG")"; [ -n "$v" ] && DATA_DIR="$v"
+    v="$(yaml_get server bind "$CONFIG")"; [ -n "$v" ] && BIND="$v"
+    v="$(yaml_get server port "$CONFIG")"; [ -n "$v" ] && PORT="$v"
+    AUTH_TOKEN="$(yaml_get server auth_token "$CONFIG")"
 
-    IPSET_CFG="$(toml_get commands ipset "$CONFIG")"
-    IPTABLES_CFG="$(toml_get commands iptables "$CONFIG")"
-    IP6TABLES_CFG="$(toml_get commands ip6tables "$CONFIG")"
-    NGINX_CFG="$(toml_get commands nginx "$CONFIG")"
+    IPSET_CFG="$(yaml_get commands ipset "$CONFIG")"
+    IPTABLES_CFG="$(yaml_get commands iptables "$CONFIG")"
+    IP6TABLES_CFG="$(yaml_get commands ip6tables "$CONFIG")"
+    NGINX_CFG="$(yaml_get commands nginx "$CONFIG")"
 
-    v="$(toml_get firewall set_name_v4 "$CONFIG")"; [ -n "$v" ] && SET4="$v"
-    v="$(toml_get firewall set_name_v6 "$CONFIG")"; [ -n "$v" ] && SET6="$v"
+    v="$(yaml_get firewall set_name_v4 "$CONFIG")"; [ -n "$v" ] && SET4="$v"
+    v="$(yaml_get firewall set_name_v6 "$CONFIG")"; [ -n "$v" ] && SET6="$v"
 else
     printf 'config not readable: %s\n' "$CONFIG" >"$WORK/maestro/config-missing.txt"
 fi
@@ -500,7 +461,7 @@ nginx/security-log-config.filtered.txt
 
 Privacy / review before sharing
 -------------------------------
-The main TOML is sanitized and obvious token/password/secret/API-key assignments
+The private main YAML is omitted and obvious token/password/secret/API-key assignments
 are redacted. Certificate definitions, AdGuard data, hosts files, Wi-Fi config,
 full NVRAM, routing tables, and full nginx configuration are NOT collected.
 

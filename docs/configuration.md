@@ -2,32 +2,32 @@
 
 [← Back to README](../README.md)
 
-Use [`config/maestro.example.toml`](../config/maestro.example.toml) as the
+Use [`config/maestro.example.yaml`](../config/maestro.example.yaml) as the
 reference. The main sections are:
 
-- `[server]` — bind address, port, bearer token, CORS origins, and request
+- `server` — bind address, port, bearer token, CORS origins, and request
   limits;
-- `[paths]` — persistent data, runtime, configurable `hosts.add` path, and
+- `paths` — persistent data, runtime, configurable `hosts.add` path, and
   `jffs_scripts_dir` for router backups;
-- `[commands]` — absolute paths to nginx, Entware utilities, firewall tools,
+- `commands` — absolute paths to nginx, Entware utilities, firewall tools,
   dehydrated (defaults to `/opt/var/lib/maestro/dehydrated/dehydrated`), OpenSSL,
   NVRAM, network commands, and `tar` for backups;
-- `[asus_ui]` — extension-page rendering and ASUS menu integration;
-- `[services]` — Entware init directory, log roots, and timeouts;
-- `[nginx]` — nginx root/configuration, managed object trees, generated
+- `asus_ui` — extension-page rendering and ASUS menu integration;
+- `services` — Entware init directory, log roots, and timeouts;
+- `nginx` — nginx root/configuration, managed object trees, generated
   includes, and log limits;
-- `[certificates]` — dehydrated certificate directory, default DNS-01 hook
+- `certificates` — dehydrated certificate directory, default DNS-01 hook
   (`dns01_hook`, defaults to `/opt/var/lib/maestro/dehydrated/dehydrated-dns01-hook.sh`),
   and renewal policy;
-- `[firewall]` — matching, scoring, retention, subnet promotion, resource
+- `firewall` — matching, scoring, retention, subnet promotion, resource
   bounds, and command limits.
 
 The Ban Shield tab can edit the attack thresholds, score/promotion/reputation
 retention, reputation-aware re-promotion threshold, and ban durations. Those
 edits are stored as an optional `tuning` override in `firewall-policy.json` and
 are applied to the running ban engine immediately. When no override exists,
-`maestro.toml` remains the source of those values. Prefix sizes, command
-paths, and resource caps stay TOML-only because changing them live has broader
+`maestro.yaml` remains the source of those values. Prefix sizes, command
+paths, and resource caps stay YAML-only because changing them live has broader
 runtime consequences.
 
 The shipped defaults retain scores and subnet promotion history for 14 days,
@@ -72,7 +72,7 @@ definitions and deployed nginx certificates can be imported at startup.
   embeds the configured token because the ASUS page and Axum listener are
   separate request contexts.
 - Production configuration rejects placeholder or short tokens. Protect the
-  TOML and JSON files because certificate DNS hook settings may contain
+  YAML and JSON files because certificate DNS hook settings may contain
   credentials.
 - The built-in listener is HTTP-only. If the UI is loaded through HTTPS, set
   `asus_ui.api_base_url` to an HTTPS reverse proxy to avoid mixed-content
@@ -109,13 +109,13 @@ login protection, and SSE. The same guide opens from each site editor while
 keeping unsaved settings in place.
 
 `[nginx].inputs_dir` defaults to `/opt/etc/maestro/nginx`. This directory
-holds `nginx.toml`, `sites.toml`, and render-data fragments such as
+holds `nginx.yaml`, `sites.yaml`, and render-data fragments such as
 `access_log_suppress.conf` and `security_trap_allow.conf`. Edit input fragments
 there; generated copies under nginx's tree are replaced on regeneration.
 `nginx.root_dir` remains `/opt/etc/nginx` and contains final configuration,
 runtime includes, and administrator-authored custom sites. Jinja templates remain
 embedded in the binary and are not installed as editable configuration.
-Relative `inputs_dir` values resolve against `maestro.toml`'s directory.
+Relative `inputs_dir` values resolve against `maestro.yaml`'s directory.
 Back up both the inputs directory and custom nginx files. For existing installs,
 follow the [0.9 input relocation procedure](migration.md#nginx-input-relocation-in-09).
 
@@ -125,14 +125,14 @@ WAN adapter limitations.
 
 In Nginx → Global settings, configure listeners, workers, DNS, PWA headers,
 client IP/CIDR allowlists, shared domain suffixes, and site defaults. Settings are
-stored atomically in `<nginx.inputs_dir>/nginx.toml`. Saving renders
+stored atomically in `<nginx.inputs_dir>/nginx.yaml`. Saving renders
 the shared runtime files and all managed sites, tests the combined tree with
 `nginx -t`, and reloads a running nginx. Failure restores the previous files.
 An empty LAN allowlist denies all clients for LAN-only locations.
-`nginx.toml` under that directory is the single source of global inputs: `[global]` contains
-shared nginx options, `[site_defaults]` contains inherited site policies, and
+`nginx.yaml` under that directory is the single source of global inputs: `global` contains
+shared nginx options, `site_defaults` contains inherited site policies, and
 root-level `allowed_ips` and `free_subdomains` arrays contain the allowlists.
-Text allowlist fragments are generated from TOML. Relative fallback
+Text allowlist fragments are generated from YAML. Relative fallback
 certificate directories resolve beneath the configured nginx root; traversal
 is rejected. Global settings also save `nginx_daemon`, `nginx_user`, and
 `temp_dir`. When Maestro runs as non-root, generated nginx configuration omits
@@ -158,11 +158,11 @@ Per-site controls inherit global defaults; explicit No and a size of `0` remain
 overrides. Clearing an override restores inheritance. Route policies accept JSON
 using the documented settings in the bundle guide. Managed inputs, aliases,
 upstreams, and enablement are saved atomically in
-`<nginx.inputs_dir>/sites.toml`. Saving a site regenerates its nginx
+`<nginx.inputs_dir>/sites.yaml`. Saving a site regenerates its nginx
 configuration and upstream maps, validates enabled configuration, and reloads a
 running nginx. Failed validation or reload restores the previous inputs and output.
 The UI exposes settings for managed sites; generated nginx text is disposable.
-Generated comments are output metadata; only entries in `sites.toml` identify
+Generated comments are output metadata; only entries in `sites.yaml` identify
 managed sites. Output paths are derived from site identity; remove obsolete
 `output` fields before loading deployment inputs.
 
@@ -173,5 +173,12 @@ template editing and root-file editing are unavailable in both UI and API.
 Upstream input fragments are `domains.conf`, `subdomains.conf`, and
 `subfolders.conf` under `nginx.inputs_dir`; unrelated entries are retained.
 Final copies under `<nginx.root_dir>/settings/` are runtime includes.
-Listener and filesystem choices must match the nginx paths configured in TOML.
+Listener and filesystem choices must match the nginx paths configured in YAML.
 Python is needed only for lab setup and bundle tests, not by Maestro at runtime.
+
+
+Maestro configuration is YAML on all platforms. TOML files are accepted only by
+[`migrate-config`](migration.md#one-time-toml-to-yaml-migration), which retains
+private exact-byte originals as `.toml.bak`. Active TOML and YAML are never read
+as competing authorities. Installed paths and values retain their meanings after
+conversion; state JSON and authored native service files keep their formats.

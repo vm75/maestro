@@ -27,6 +27,8 @@ pub struct Change {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
+    #[serde(default)]
+    pub restart_required: bool,
     pub base_revision: String,
     pub desired_revision: String,
     pub changes: Vec<Change>,
@@ -65,6 +67,7 @@ impl Store {
         super::store::validate_existing_guests(&previous, desired)?;
         let desired_revision = revision(bytes);
         let changes = changes(&previous, desired)?;
+        let restart_required = previous.server != desired.server;
         let encoded = serde_json::to_vec(&(
             "maestro-workload-plan-v1",
             expected,
@@ -74,6 +77,7 @@ impl Store {
         Ok((
             previous,
             Plan {
+                restart_required,
                 base_revision: expected.into(),
                 desired_revision,
                 changes,

@@ -841,6 +841,7 @@ dependencies = [
  "regex",
  "regex-automata",
  "reqwest",
+ "ring",
  "rustix",
  "serde",
  "serde_json",
