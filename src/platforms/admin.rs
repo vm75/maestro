@@ -13,6 +13,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, process::Command, time::timeout};
+use super::admin_packages;
 
 pub const HELPER_PATH: &str = "/usr/local/libexec/maestro-admin";
 const POLICY_PATH: &str = "/etc/maestro/admin-policy.json";
@@ -33,6 +34,10 @@ struct Request {
     action: Option<String>,
     #[serde(default)]
     confirm: Option<bool>,
+    #[serde(default)]
+    packages: Vec<String>,
+    #[serde(default)]
+    target: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,6 +49,10 @@ struct Reply {
     message: String,
     #[serde(default)]
     system_units: Vec<String>,
+    #[serde(default)]
+    package_writes: bool,
+    #[serde(default)]
+    output: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +61,8 @@ struct Policy {
     version: u32,
     workload_uid: u32,
     system_units: Vec<String>,
+    #[serde(default)]
+    package_writes: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -61,15 +72,17 @@ pub struct Probe {
     pub code: String,
     pub reason: String,
     pub system_units: Vec<String>,
+    pub package_writes: bool,
 }
 
 impl Probe {
-    fn ready(units: Vec<String>) -> Self {
+    fn ready(units: Vec<String>, package_writes: bool) -> Self {
         Self {
             status: "ready",
             code: "ready".into(),
             reason: "The authorized privileged helper is available.".into(),
             system_units: units,
+            package_writes,
         }
     }
 
@@ -79,11 +92,16 @@ impl Probe {
             code: code.into(),
             reason: reason.into(),
             system_units: vec![],
+            package_writes: false,
         }
     }
 
     pub fn permits_unit(&self, unit: &str) -> bool {
         self.status == "ready" && self.system_units.iter().any(|allowed| allowed == unit)
+    }
+
+    pub fn permits_packages(&self) -> bool {
+        self.status == "ready" && self.package_writes
     }
 }
 
@@ -166,7 +184,8 @@ async fn call(request: &Request, deadline: Duration) -> Result<Reply> {
         .context("unrecognized privileged helper response")?;
     ensure!(reply.version == PROTOCOL, "privileged helper protocol mismatch");
     ensure!(
-        reply.code.len() <= 64 && reply.message.len() <= 512 && reply.system_units.len() <= 128,
+        reply.code.len() <= 64 && reply.message.len() <= 512
+            && reply.system_units.len() <= 128 && reply.output.len() <= 8192,
         "invalid privileged helper reply"
     );
     Ok(reply)
@@ -176,12 +195,17 @@ fn validate_request(request: &Request) -> Result<()> {
     ensure!(request.version == PROTOCOL, "unsupported helper protocol");
     match request.operation.as_str() {
         "probe" => ensure!(
-            request.unit.is_none() && request.action.is_none() && request.confirm.is_none(),
+            request.unit.is_none() && request.action.is_none() && request.confirm.is_none()
+                && request.packages.is_empty() && request.target.is_none(),
             "probe accepts no arguments"
         ),
         "system_service" => {
             let unit = request.unit.as_deref().context("missing unit")?;
             let action = request.action.as_deref().context("missing action")?;
+            ensure!(
+                request.packages.is_empty() && request.target.is_none(),
+                "system service accepts no package arguments"
+            );
             ensure!(safe_system_unit(unit), "invalid or reserved system service");
             ensure!(
                 matches!(action, "start" | "stop" | "restart" | "reload" | "enable" | "disable"),
@@ -191,6 +215,31 @@ fn validate_request(request: &Request) -> Result<()> {
                 matches!(action, "start" | "enable") || request.confirm == Some(true),
                 "destructive system service action requires confirmation"
             );
+        }
+        "package_refresh" | "package_upgrade" | "package_install" | "dependency_install" => {
+            ensure!(request.unit.is_none() && request.action.is_none(), "package action has service arguments");
+            match request.operation.as_str() {
+                "package_refresh" => ensure!(
+                    request.packages.is_empty() && request.target.is_none() && request.confirm.is_none(),
+                    "metadata refresh accepts no arguments"
+                ),
+                "package_upgrade" => ensure!(
+                    request.packages.is_empty() && request.target.is_none() && request.confirm == Some(true),
+                    "package upgrade requires confirmation"
+                ),
+                "package_install" => {
+                    ensure!(request.target.is_none() && request.confirm == Some(true),
+                        "package installation requires confirmation");
+                    admin_packages::package_names(&request.packages.join(" "))?;
+                }
+                "dependency_install" => ensure!(
+                    request.packages.is_empty() && request.confirm == Some(true)
+                        && matches!(request.target.as_deref(),
+                            Some("podman" | "docker" | "samba" | "nfs" | "virtualization" | "incus")),
+                    "dependency group must be allowlisted and confirmed"
+                ),
+                _ => unreachable!(),
+            }
         }
         _ => anyhow::bail!("unknown privileged operation"),
     }
@@ -218,9 +267,11 @@ pub async fn probe() -> Probe {
         unit: None,
         action: None,
         confirm: None,
+        packages: vec![],
+        target: None,
     };
     match call(&request, Duration::from_secs(6)).await {
-        Ok(reply) if reply.ok => Probe::ready(reply.system_units),
+        Ok(reply) if reply.ok => Probe::ready(reply.system_units, reply.package_writes),
         Ok(reply) => Probe::unavailable(&reply.code, &reply.message),
         Err(error) if error.to_string().contains("protocol mismatch") => {
             Probe::unavailable("helper_protocol_mismatch", "The installed helper must be upgraded to the matching Maestro protocol.")
@@ -239,6 +290,8 @@ pub async fn system_service(unit: &str, action: &str) -> Result<String> {
         unit: Some(unit.into()),
         action: Some(action.into()),
         confirm: (!matches!(action, "start" | "enable")).then_some(true),
+        packages: vec![],
+        target: None,
     };
     validate_request(&request)?;
     let capability = probe().await;
@@ -247,6 +300,31 @@ pub async fn system_service(unit: &str, action: &str) -> Result<String> {
     let reply = call(&request, Duration::from_secs(130)).await?;
     ensure!(reply.ok, "{} ({})", reply.message, reply.code);
     Ok(reply.message)
+}
+
+/// The main server never invokes a package manager directly. Only a validated
+/// helper can perform protected writes, and its root-owned policy is reloaded
+/// before every request. Package-manager selection is based on trusted OS data.
+pub async fn package_operation(
+    operation: &str,
+    names: Vec<String>,
+    target: Option<String>,
+) -> Result<String> {
+    let request = Request {
+        version: PROTOCOL,
+        operation: operation.to_owned(),
+        unit: None,
+        action: None,
+        confirm: (operation != "package_refresh").then_some(true),
+        packages: names,
+        target,
+    };
+    validate_request(&request)?;
+    let capability = probe().await;
+    ensure!(capability.permits_packages(), "{} ({})", capability.reason, capability.code);
+    let reply = call(&request, Duration::from_secs(25 * 60)).await?;
+    ensure!(reply.ok, "{} ({})", reply.message, reply.code);
+    Ok(reply.output)
 }
 
 fn load_policy(caller_uid: u32) -> Result<Policy> {
@@ -346,25 +424,36 @@ pub async fn helper_main() -> Result<()> {
                     code: "ready".into(),
                     message: "Privileged helper authorized.".into(),
                     system_units: policy.system_units,
+                    package_writes: policy.package_writes,
+                    output: String::new(),
                 }
             } else {
                 let _lock = lock_root_operation()?;
-                let result = root_service_action(
-                    &policy,
-                    request.unit.as_deref().unwrap_or_default(),
-                    request.action.as_deref().unwrap_or_default(),
-                ).await;
+                let result = if request.operation == "system_service" {
+                    root_service_action(
+                        &policy,
+                        request.unit.as_deref().unwrap_or_default(),
+                        request.action.as_deref().unwrap_or_default(),
+                    ).await.map(|()| String::new())
+                } else if policy.package_writes {
+                    // A request may never choose the native executable, PATH,
+                    // repository, arbitrary arguments or target account.
+                    admin_packages::execute(&request.operation, &request.packages, request.target.as_deref()).await
+                } else {
+                    anyhow::bail!("privileged package writes are disabled by root-owned policy")
+                };
                 Reply {
                     version: PROTOCOL,
                     ok: result.is_ok(),
                     code: if result.is_ok() { "ok" } else { "operation_denied" }.into(),
                     message: if result.is_ok() {
-                        "System service action completed.".into()
+                        "Privileged operation completed.".into()
                     } else {
-                        // Never echo potentially private native command output or input.
-                        "System service action failed, was denied, or requires host inspection.".into()
+                        "Privileged operation denied or failed; inspect the native host state.".into()
                     },
                     system_units: vec![],
+                    package_writes: false,
+                    output: result.unwrap_or_default(),
                 }
             }
         }
@@ -374,6 +463,8 @@ pub async fn helper_main() -> Result<()> {
             code: "invalid_request".into(),
             message: "Unsupported or malformed privileged request.".into(),
             system_units: vec![],
+            package_writes: false,
+            output: String::new(),
         },
     };
     let mut stdout = std::io::stdout().lock();
@@ -395,6 +486,10 @@ mod tests {
             r#"{"version":1,"operation":"system_service","unit":"sshd.service","action":"execute"}"#,
             r#"{"version":1,"operation":"system_service","unit":"sshd.service","action":"stop"}"#,
             r#"{"version":1,"operation":"probe","unit":"sshd.service"}"#,
+            r#"{"version":1,"operation":"package_install","packages":["../etc/passwd"],"confirm":true}"#,
+            r#"{"version":1,"operation":"package_install","packages":["--overwrite"],"confirm":true}"#,
+            r#"{"version":1,"operation":"package_upgrade"}"#,
+            r#"{"version":1,"operation":"dependency_install","target":"shell","confirm":true}"#,
             r#"{"version":2,"operation":"probe"}"#,
         ] {
             let request: Request = serde_json::from_str(request).unwrap();
@@ -412,10 +507,13 @@ mod tests {
             unit: Some("sshd.service".into()),
             action: Some("restart".into()),
             confirm: Some(true),
+            packages: vec![],
+            target: None,
         };
         assert!(validate_request(&request).is_ok());
         assert!(!safe_system_unit("maestro.service"));
         assert!(!safe_system_unit("maestro-example-app-0123456789abcdef.service"));
         assert!(!Probe::unavailable("helper_missing", "missing").permits_unit("sshd.service"));
+        assert!(!Probe::unavailable("helper_missing", "missing").permits_packages());
     }
 }
