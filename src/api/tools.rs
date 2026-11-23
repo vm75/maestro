@@ -45,6 +45,8 @@ enum Tool {
     ManagedConfigModel,
     ManagedConfigHistory,
     ManagedConfigHistoryRead,
+    ManagedResourcePlan,
+    ManagedResourceSave,
     WorkloadsGet,
     WorkloadsPlan,
     WorkloadsApply,
@@ -60,7 +62,7 @@ enum Tool {
 }
 
 impl Tool {
-    const ALL: [Self; 32] = [
+    const ALL: [Self; 34] = [
         Self::Status,
         Self::Capabilities,
         Self::JobsList,
@@ -81,6 +83,8 @@ impl Tool {
         Self::ManagedConfigModel,
         Self::ManagedConfigHistory,
         Self::ManagedConfigHistoryRead,
+        Self::ManagedResourcePlan,
+        Self::ManagedResourceSave,
         Self::WorkloadsGet,
         Self::WorkloadsPlan,
         Self::WorkloadsApply,
@@ -192,6 +196,16 @@ impl Tool {
                 "managed_config_history_read",
                 "Read a historical revision",
                 "Inspect exact historical YAML bytes, including invalid recovery revisions.",
+            ),
+            Self::ManagedResourcePlan => (
+                "managed_resource_plan",
+                "Preview typed resource edit",
+                "Strictly review a typed definition edit through the shared authoritative YAML plan.",
+            ),
+            Self::ManagedResourceSave => (
+                "managed_resource_save",
+                "Apply reviewed typed resource edit",
+                "Recompute and apply a revision-checked reviewed edit through the shared journal.",
             ),
             Self::WorkloadsGet => (
                 "workloads_get",
@@ -382,6 +396,8 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                 | Tool::ManagedConfigModel
                 | Tool::ManagedConfigHistory
                 | Tool::ManagedConfigHistoryRead
+                | Tool::ManagedResourcePlan
+                | Tool::ManagedResourceSave
                 | Tool::WorkloadsGet
                 | Tool::WorkloadsPlan
                 | Tool::WorkloadsApply
@@ -404,6 +420,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     | Tool::ApplicationsAction
                     | Tool::PackagesInstall
                     | Tool::DependenciesInstall
+                    | Tool::ManagedResourceSave
             );
             let input_schema = match tool {
                 Tool::JobsGet | Tool::JobsCancel => json!({
@@ -414,6 +431,29 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     "required": ["id"],
                     "additionalProperties": false
                 }),
+                Tool::ManagedResourcePlan | Tool::ManagedResourceSave => {
+                    let save = matches!(tool, Tool::ManagedResourceSave);
+                    let mut properties = json!({
+                        "kind": {"type":"string","enum":["service","storage","share","binding","secret"]},
+                        "id": {"type":"string","maxLength":63},
+                        "operation": {"type":"string","enum":["save","remove"]},
+                        "definition": {"type":"string","maxLength":262144},
+                        "revision": {"type":"string","minLength":7,"maxLength":64}
+                    });
+                    let mut required = vec!["kind","id","operation","revision"];
+                    if save {
+                        properties["mode"] = json!({"type":"string","enum":["now","next_start"]});
+                        properties["fingerprint"] = json!({"type":"string","minLength":64,"maxLength":64});
+                        properties["confirm"] = json!({"const":true});
+                        required.extend(["mode","fingerprint","confirm"]);
+                    }
+                    json!({
+                        "type":"object",
+                        "properties":properties,
+                        "required":required,
+                        "additionalProperties":false
+                    })
+                },
                 Tool::ManagedConfigValidate => json!({
                     "type": "object",
                     "properties": {
@@ -553,6 +593,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     tool,
                     Tool::WorkloadsApply | Tool::WorkloadsResume | Tool::WorkloadsRevert
                         | Tool::ApplicationsAction | Tool::PackagesInstall | Tool::DependenciesInstall
+                        | Tool::ManagedResourceSave
                 ),
                 "inputSchema": input_schema
             })
@@ -1121,6 +1162,86 @@ pub async fn execute_tool(
         }
 
         "updates_status" => (StatusCode::OK, json!(package_updates::status(state).await)),
+
+        "managed_resource_plan" | "managed_resource_save" => {
+            let apply = name == "managed_resource_save";
+            let mut arguments = arguments;
+            let requested_mode = if apply { arguments.remove("mode") } else { None };
+            let provided_fingerprint = if apply { arguments.remove("fingerprint") } else { None };
+            let confirmation = if apply { arguments.remove("confirm") } else { None };
+            let input = match serde_json::from_value::<crate::core::declarative::edit::EditInput>(
+                Value::Object(arguments),
+            ) {
+                Ok(input) => input,
+                Err(_) => return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Expected a typed resource kind, ID, operation, definition and current revision."),
+                ),
+            };
+            if apply && confirmation != Some(Value::Bool(true)) {
+                return (StatusCode::BAD_REQUEST,
+                    json_err("confirmation_required", "Reviewed resource mutations require confirm=true."));
+            }
+            if apply && requested_mode.as_ref().and_then(Value::as_str) != Some("now") {
+                return (StatusCode::SERVICE_UNAVAILABLE,
+                    json_err("deferred_apply_unavailable",
+                        "Deferred next-start publication is not yet safely implemented; no configuration was saved."));
+            }
+            let candidate = match crate::core::declarative::edit::edit(store, &input) {
+                Ok(bytes) => bytes,
+                Err(error) => return (
+                    StatusCode::CONFLICT,
+                    json_err("edit_invalid_or_conflicted", &error.to_string()),
+                ),
+            };
+            let preview = match store.preview(&candidate, &input.revision) {
+                Ok(plan) => plan,
+                Err(error) => return (
+                    StatusCode::CONFLICT,
+                    json_err("plan_unavailable", &error.to_string()),
+                ),
+            };
+            let blocked: Vec<String> = provider.blocked_resources(&preview.changes)
+                .into_iter().map(str::to_owned).collect();
+            if !apply {
+                return (
+                    StatusCode::OK,
+                    json!({
+                        "plan":preview,
+                        "candidate":String::from_utf8_lossy(&candidate),
+                        "blockedResources":blocked
+                    }),
+                );
+            }
+            if !writes_allowed(state) {
+                return (StatusCode::FORBIDDEN,
+                    json_err("writes_disabled", "Workload mutations are disabled by policy."));
+            }
+            if !blocked.is_empty() {
+                return (StatusCode::CONFLICT,
+                    json_err("native_provider_blocked",
+                        "At least one affected resource is not ready for native publication."));
+            }
+            let fingerprint = provided_fingerprint.and_then(|value| value.as_str().map(str::to_owned));
+            let Some(fingerprint) = fingerprint.filter(|value| value == &preview.fingerprint) else {
+                return (StatusCode::CONFLICT,
+                    json_err("review_mismatch", "A fresh exact plan fingerprint must be reviewed before saving."));
+            };
+            let store_clone = store.clone();
+            let provider_clone = provider.clone();
+            let expected = input.revision;
+            return start_job_value(jobs, "managed_resource_save", move |running| async move {
+                let result = store_clone.apply_review(
+                    &candidate, &expected, &fingerprint, &*provider_clone,
+                ).await;
+                match result {
+                    Ok(snapshot) => running.finish(Outcome::Succeeded(
+                        json!({"revision":snapshot.revision, "mode":"now"})
+                    )),
+                    Err(error) => running.finish(Outcome::Failed(error.to_string())),
+                }
+            }).await;
+        }
 
         "managed_config_read" => {
             if !writes_allowed(state) {
