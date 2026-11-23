@@ -21,3 +21,15 @@ cp "target/$TARGET/release/maestro" "dist/$ARTIFACT"
   sha256sum "$ARTIFACT" > "$ARTIFACT.sha256"
 )
 echo "Built dist/$ARTIFACT"
+if [[ "$SUFFIX" == "-linux-ui" ]]; then
+  # Build the Linux-only helper alongside the release, never install it here.
+  # It is absent from router artifacts and requires explicit, separate opt-in.
+  HELPER="maestro-admin-$TARGET"
+  test -x "target/$TARGET/release/maestro-admin"
+  cp "target/$TARGET/release/maestro-admin" "dist/$HELPER"
+  (
+    cd dist
+    sha256sum "$HELPER" > "$HELPER.sha256"
+  )
+  echo "Built opt-in helper dist/$HELPER (not installed)"
+fi

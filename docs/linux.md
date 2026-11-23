@@ -2,7 +2,7 @@
 
 [← Back to README](../README.md)
 
-For testing the production execution path on a development Linux machine,
+For testing the native Linux execution path on a development Linux machine,
 use `platform = "linux"` and `test_mode = false` in a **separate**
 configuration. Alternatively, pass `--linux-mode` to select the Linux
 platform from the CLI. Do **not** pass `--test-mode`: that flag simulates
@@ -42,6 +42,11 @@ Build the Linux shell and embed its static assets in a Linux release binary:
 
 This build uses Node.js 20.19+ or 22.12+ with npm and produces a
 `maestro-x86_64-unknown-linux-gnu-linux-ui` binary and checksum in `dist/`.
+The release build also produces a separately checksummed `maestro-admin-<target>`
+helper binary; it is **not installed** by building or starting Maestro.
+The helper, package/share verbs and two-mode installer remain in-progress and
+must not be deployed on unrelated production hosts.
+
 For development, run `npm --prefix linux-web ci`,
 `npm --prefix linux-web run build`, and add `--no-default-features --features linux-ui` to
 `cargo run`. Start the binary with a Linux configuration and open its root URL.
@@ -49,11 +54,57 @@ Sign in with the configured access token. Browser sign-in accepts local HTTP
 or the HTTPS URL listed in `server.allowed_origins`. For HTTPS, the reverse
 proxy must preserve the public Host header.
 
+## Non-root Linux mode and optional privileged helper (Phase 2 WIP)
+
+**The main Linux server must run as a non-root workload account.** A production
+Linux `serve` invocation started as UID 0 is rejected; this check does not
+apply to the ASUSWRT/router executable or isolated simulation mode. The
+installer and guest validation for these rules are not yet complete.
+
+The separate, Linux-only `maestro-admin` is a root-owned one-shot program,
+invoked exclusively via fixed `sudo -n -- /usr/local/libexec/maestro-admin`
+without command-line arguments. It accepts a small versioned JSON request on
+stdin, does not listen on a socket and has no general command execution verb.
+The root-owned private policy file is fixed at
+`/etc/maestro/admin-policy.json`, with the following **illustrative** shape:
+
+```json
+{
+  "version": 1,
+  "workload_uid": 1001,
+  "system_units": ["example.service"]
+}
+```
+
+Replace `1001` with the actual numeric UID of the chosen non-root workload
+account. Both this file and its parent directories must be root-owned, and the
+policy must be mode 0600. The helper executable must be a root-owned executable
+regular file under root-owned, nonwritable parent directories. An appropriate
+restricted sudoers line for a **reviewed** account is:
+
+```text
+<workload-account> ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/maestro-admin ""
+```
+
+The placeholder must be replaced and the rule reviewed with `visudo`. Do not
+copy a blanket sudo rule, add `SETENV`, install a setuid helper or run the
+main Maestro process as root. **These contracts describe the current development
+boundary, not a production-supported installation procedure.** An explicit
+reviewed installer with default no-helper, helper opt-in/removal, policy
+validation, upgrades and full disposable-guest acceptance remains required.
+
+Without the helper, monitoring, readable system/user service inventory and
+journal, cached package status, user-owned config/storage, user systemd and
+rootless/independently authorized workload backends continue subject to normal
+account permissions. The protected systemd actions are unavailable with a
+machine-readable explanation; the Services page continues to show read-only
+inventory and can manage explicitly authorized *user* units. The
+`system_capabilities` tool (via HTTP or MCP) and `GET /api/tools` expose
+helper readiness and write denials.
+
 ## Systemd service actions
 
-The Services page reads system and user inventories and recent journal entries.
-To enable actions, list the exact units Maestro may manage in the matching
-scope under `[services]`:
+Configure exact units under `[services]`:
 
 ```toml
 [services]
@@ -61,28 +112,29 @@ systemd_system_write_units = ["example.service"]
 systemd_user_write_units = []
 ```
 
-Both lists default to empty. Actions use the Maestro process's existing
-systemd permissions and run without password prompts. Both the requested
-unit and its canonical systemd name must be allowed. Generated Maestro
-Quadlet units are reserved for the workload coordinator. Boot enablement and
-disablement are separate from start and stop. Systemd may continue a job that
-it has already accepted, so Maestro rejects cancellation of submitted service
-actions.
+Both allowlists default to empty; neither is a grant of root privilege.
+User-scope actions invoke the non-root user's systemd manager directly.
+System-scope protected actions require **both** Maestro's allowlist and the
+root-owned helper's allowlist, an authorized noninteractive sudo rule and fresh
+helper checks. The helper validates the exact unit, canonical systemd identity
+and fixed start/stop/restart/reload/enable/disable verb before invoking systemctl.
+Generated Maestro application units and Maestro's own service are reserved.
+Enabling/disabling a unit changes its boot policy without starting/stopping it.
+Service details and bounded journals are read without unnecessary elevation.
 
-## Package update status
+## Package update status and gated writes
 
-The Updates page identifies the native package family from `os-release` and
-reads cached candidates on APT, DNF, Pacman, and Zypper. Backend queries use
-existing metadata and report the reboot-required marker when available.
-The package list reflects the host's existing repository metadata.
-
-Set `[system].allow_package_writes = true` to expose tracked refresh and install
-jobs when the Maestro process already runs as root. Install requires a
-confirmation and may restart services. Maestro issues no reboot command.
-Pacman refresh uses `checkupdates` with an isolated cache under the configured
-state directory. Pacman installation performs a full native system upgrade.
-Once submitted, package jobs run to completion or timeout. An interrupted
-package transaction may require recovery with native tools.
+The Updates page identifies APT, DNF, Pacman and Zypper and reads cached
+candidates and reboot indicators with ordinary host permissions.
+`[system].allow_package_writes` is an independent administrator policy flag
+(default `false`). **Enabling this flag does not enable package writes yet:**
+the current code deliberately rejects refresh/upgrade with
+`helper_routing_pending` until the complete root-helper package verbs,
+argument policy, interruption handling and native acceptance are implemented.
+Named package installation and dependency setup are also still missing.
+The Linux server must never attempt them by running itself as root.
+Pacman's isolated `checkupdates` and native upgrade behavior remain part
+of the required implementation and test plan.
 
 ## Workload writes and recovery
 
@@ -199,8 +251,15 @@ directories.
 
 ## Model Context Protocol (MCP) and Agent Integration
 
-Maestro exposes an MCP-compliant JSON-RPC 2.0 interface at `POST /api/mcp` for
+Maestro currently exposes an initial JSON-RPC 2.0 MCP interface at `POST /api/mcp` for
 autonomous coding agents and external tools:
 - `initialize`: returns server capabilities and version.
 - `tools/list`: dynamically enumerates available management tools and their input schemas.
 - `tools/call`: executes tools with the same argument validation, session authorization, Host/Origin restrictions, and write policies.
+
+**Phase 2 parity caveat:** the current HTTP MCP adapter is not yet a complete
+Streamable HTTP transport and there is no stdio MCP binary. Protocol negotiation,
+structured MCP results and official SDK contract parity remain mandatory before
+claiming reference compatibility. Native workloads, safe share mutations,
+backup capture/recovery and the production Linux installer are also incomplete.
+See [Phase 2 parity matrix](plans/proposed/server-man-phase2-parity-matrix.md).

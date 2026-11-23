@@ -237,3 +237,5 @@ Reference: `internal/declarative/backup_tools.go`; tests: `internal/declarative/
 - **Verified:** connector-confirmed branch commits and source-level path review only. **Not verified:** Rust compilation, fmt, clippy, unit/API/browser checks, root-owned helper install, non-root native acceptance, router IPK/hardware, release, CI. Runtime tools are unavailable in this connector-only session. No positive native operation is claimed.
 
 - Follow-on commit adds `services_details` allowlisted read-only properties, explicit system/user scope, API schema, initial source tests and Svelte inspection. This remains `modeled` pending Rust build/fixture/API/browser/native review.
+
+- Linux build script now exports separately checksummed `maestro-admin-<target>` **without installing or authorizing it**. `docs/linux.md` documents the fixed helper/policy/sudoers contract as a WIP, not production acceptance.
