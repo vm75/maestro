@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Extension, State, rejection::JsonRejection},
+    body::Bytes,
+    extract::{Extension, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -226,7 +227,7 @@ pub async fn handle_mcp(
     Extension(store): Extension<Store>,
     Extension(provider): Extension<Arc<CompositeProvider>>,
     headers: HeaderMap,
-    Json(request): Json<JsonRpcRequest>,
+    body: Bytes,
 ) -> Response {
     if let Some(version) = headers.get("mcp-protocol-version").and_then(|v| v.to_str().ok()) {
         if !supports_protocol(version) {
@@ -237,6 +238,17 @@ pub async fn handle_mcp(
         return (StatusCode::NOT_ACCEPTABLE, Json(failure(None, -32600,
             "Accept must include application/json and text/event-stream"))).into_response();
     }
+    let content_type = headers.get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if content_type.split(';').next().unwrap_or_default().trim() != "application/json" {
+        return (StatusCode::UNSUPPORTED_MEDIA_TYPE, Json(failure(None, -32600,
+            "Content-Type must be application/json"))).into_response();
+    }
+    let request = match parse(&body) {
+        Ok(Some(request)) => request,
+        Ok(None) => return StatusCode::ACCEPTED.into_response(),
+        Err(problem) => return (StatusCode::BAD_REQUEST, Json(problem)).into_response(),
+    };
     let ctx = tools::ToolContext {
         state: &state,
         started_at,
