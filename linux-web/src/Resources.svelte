@@ -8,7 +8,8 @@
     valid: boolean
     at: string | null
     intervalSeconds: number
-    cpu: { usage: number | null }
+    host?: { hostname: string; os: string; kernel: string; architecture: string; cpuModel: string }
+    cpu: { usage: number | null; frequencyMHz?: number | null }
     memory: { total: number; used: number; available: number; cached: number; buffers: number; swapTotal: number; swapUsed: number }
     uptimeSeconds: number | null
     load: number[] | null
@@ -58,7 +59,14 @@
   {#if error}<p role="status">{error}</p>{/if}
   {#if snapshot?.valid}
     <dl>
+      {#if snapshot.host}
+        <dt>Host</dt><dd>{snapshot.host.hostname || '—'}</dd>
+        <dt>Operating system</dt><dd>{snapshot.host.os} · {snapshot.host.architecture}</dd>
+        <dt>Kernel</dt><dd>{snapshot.host.kernel || '—'}</dd>
+        <dt>CPU model</dt><dd>{snapshot.host.cpuModel}</dd>
+      {/if}
       <dt>CPU</dt><dd>{percent(snapshot.cpu.usage)}</dd>
+      {#if snapshot.cpu.frequencyMHz != null}<dt>CPU frequency</dt><dd>{snapshot.cpu.frequencyMHz.toFixed(0)} MHz</dd>{/if}
       <dt>Memory</dt><dd>{bytes(snapshot.memory.used)} of {bytes(snapshot.memory.total)}</dd>
       <dt>Available memory</dt><dd>{bytes(snapshot.memory.available)}</dd>
       <dt>Cache / buffers</dt><dd>{bytes(snapshot.memory.cached)} / {bytes(snapshot.memory.buffers)}</dd>

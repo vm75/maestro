@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
 
 use anyhow::{Context, Result, ensure};
 
-use super::{CpuStat, Memory, NetworkStat};
+use super::{CpuStat, Host, Memory, NetworkStat};
 
 const MAX_PROC_BYTES: u64 = 1024 * 1024;
 
@@ -16,6 +16,46 @@ pub(super) fn read(path: &Path) -> Result<String> {
         .read_to_string(&mut text)?;
     ensure!(text.len() as u64 <= MAX_PROC_BYTES, "proc counter file exceeds limit");
     Ok(text)
+}
+
+// Derive metadata from the same proc fixture root as the counters. Never
+// execute a shell or source os-release as code.
+pub(super) fn host_identity(proc_root: &Path, cpuinfo: &str) -> Host {
+    let mut host = Host::default();
+    if let Ok(value) = read(&proc_root.join("sys/kernel/hostname")) {
+        host.hostname = value.trim().into();
+    }
+    if let Ok(value) = read(&proc_root.join("sys/kernel/osrelease")) {
+        host.kernel = value.trim().into();
+    }
+    if let Some(etc) = proc_root.parent().map(|root| root.join("etc")) {
+        if let Ok(value) = read(&etc.join("os-release")) {
+            for (key, value) in value.lines().filter_map(|line| line.split_once('=')) {
+                if key == "PRETTY_NAME" {
+                    host.os = value.trim_matches(['"', '\'']).into();
+                }
+            }
+        }
+    }
+    if let Some((_, value)) = cpuinfo
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(key, _)| matches!(key.trim(), "model name" | "Hardware"))
+    {
+        host.cpu_model = value.trim().into();
+    }
+    host
+}
+
+pub(super) fn cpu_frequency(cpuinfo: &str) -> Option<f64> {
+    let (sum, count) = cpuinfo
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .filter(|(key, _)| key.trim() == "cpu MHz")
+        .filter_map(|(_, value)| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .fold((0.0, 0_u64), |(sum, count), mhz| (sum + mhz, count + 1));
+    (count > 0 && sum.is_finite()).then(|| sum / count as f64)
 }
 
 pub(super) fn parse_cpu(text: &str) -> Result<Vec<CpuStat>> {
@@ -114,6 +154,29 @@ pub(super) fn parse_load(text: &str) -> Option<[f64; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_identity_and_frequency_follow_reference_sources() {
+        let root = tempfile::tempdir().unwrap();
+        let proc = root.path().join("proc");
+        let kernel = proc.join("sys/kernel");
+        let etc = root.path().join("etc");
+        std::fs::create_dir_all(&kernel).unwrap();
+        std::fs::create_dir_all(&etc).unwrap();
+        std::fs::write(kernel.join("hostname"), "fixture-host\n").unwrap();
+        std::fs::write(kernel.join("osrelease"), "6.12-fixture\n").unwrap();
+        std::fs::write(etc.join("os-release"), "PRETTY_NAME=\"Fixture Linux\"\n").unwrap();
+        let cpuinfo = "model name: Example CPU\ncpu MHz: 1000\ncpu MHz: 2000\ncpu MHz: NaN\ncpu MHz: -1";
+        let host = host_identity(&proc, cpuinfo);
+        assert_eq!(host.hostname, "fixture-host");
+        assert_eq!(host.kernel, "6.12-fixture");
+        assert_eq!(host.os, "Fixture Linux");
+        assert_eq!(host.cpu_model, "Example CPU");
+        assert_eq!(cpu_frequency(cpuinfo), Some(1500.0));
+        assert_eq!(cpu_frequency("cpu MHz: 0\ncpu MHz: inf"), None);
+        assert_eq!(host_identity(&proc, "Hardware: ARM fixture").cpu_model, "ARM fixture");
+        assert_eq!(host_identity(&proc, "").cpu_model, "Unknown CPU");
+    }
 
     #[test]
     fn cpu_counters_ignore_guest_and_reject_invalid_input() {

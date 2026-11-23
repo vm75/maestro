@@ -21,6 +21,8 @@ use super::system_usage::{CpuStat, NetworkStat};
 
 struct Reading {
     cpu: Vec<CpuStat>,
+    host: Host,
+    frequency_mhz: Option<f64>,
     memory: Memory,
     network: BTreeMap<String, NetworkStat>,
     uptime_seconds: Option<f64>,
@@ -34,6 +36,14 @@ impl Reading {
     fn collect(config: &AppConfig) -> anyhow::Result<Self> {
         let paths = &config.paths;
         let cpu = source::parse_cpu(&source::read(&paths.proc_stat)?)?;
+        let cpuinfo = paths
+            .proc_stat
+            .parent()
+            .and_then(|root| source::read(&root.join("cpuinfo")).ok());
+        let host = paths.proc_stat.parent().map_or_else(Host::default, |root| {
+            source::host_identity(root, cpuinfo.as_deref().unwrap_or_default())
+        });
+        let frequency_mhz = cpuinfo.as_deref().and_then(source::cpu_frequency);
         let memory = source::parse_memory(&source::read(&paths.proc_meminfo)?)?;
         let mut warnings = Vec::new();
         let network = source::read(&paths.proc_net_dev)
@@ -62,6 +72,8 @@ impl Reading {
         }
         Ok(Self {
             cpu,
+            host,
+            frequency_mhz,
             memory,
             network,
             uptime_seconds,
@@ -97,6 +109,7 @@ pub struct Snapshot {
     valid: bool,
     at: Option<DateTime<Utc>>,
     interval_seconds: u64,
+    host: Host,
     cpu: Cpu,
     memory: Memory,
     uptime_seconds: Option<f64>,
@@ -114,10 +127,43 @@ pub struct Snapshot {
     last_error: Option<&'static str>,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Host {
+    hostname: String,
+    os: String,
+    kernel: String,
+    architecture: String,
+    cpu_model: String,
+}
+
+impl Default for Host {
+    fn default() -> Self {
+        let architecture = match std::env::consts::ARCH {
+            "x86_64" => "amd64",
+            "x86" => "386",
+            "aarch64" => "arm64",
+            "powerpc64" if cfg!(target_endian = "little") => "ppc64le",
+            "powerpc64" => "ppc64",
+            other => other,
+        };
+        Self {
+            hostname: String::new(),
+            os: "Linux".into(),
+            kernel: String::new(),
+            architecture: architecture.into(),
+            cpu_model: "Unknown CPU".into(),
+        }
+    }
+}
+
 #[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Cpu {
     usage: Option<f64>,
     cores: Vec<Core>,
+    #[serde(rename = "frequencyMHz")]
+    frequency_mhz: Option<f64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -160,6 +206,7 @@ impl Default for Samples {
                 valid: false,
                 at: None,
                 interval_seconds: INTERVAL.as_secs(),
+                host: Host::default(),
                 cpu: Cpu::default(),
                 memory: Memory::default(),
                 uptime_seconds: None,
@@ -268,7 +315,8 @@ impl Samples {
                     .and_then(|old| cpu_delta(old, cpu).map(|(usage, _)| usage))
             })
         };
-        let cpu = Cpu {
+        let mut cpu = Cpu {
+            frequency_mhz: usage.frequency_mhz,
             usage: usage
                 .cpu
                 .iter()
@@ -284,6 +332,12 @@ impl Samples {
                 })
                 .collect(),
         };
+        cpu.cores.sort_by_key(|core| {
+            core.name
+                .strip_prefix("cpu")
+                .and_then(|index| index.parse::<u32>().ok())
+                .unwrap_or_default()
+        });
         let aggregate_ticks = previous.and_then(|(_, old)| {
             let old = old.cpu.iter().find(|cpu| cpu.name == "cpu")?;
             let current = usage.cpu.iter().find(|cpu| cpu.name == "cpu")?;
@@ -336,6 +390,7 @@ impl Samples {
             valid: true,
             at: Some(at),
             interval_seconds: self.current.interval_seconds,
+            host: usage.host.clone(),
             cpu,
             memory,
             uptime_seconds: usage.uptime_seconds,
@@ -403,6 +458,8 @@ mod tests {
 
     fn reading(ticks: u64, network: Option<u64>) -> Reading {
         Reading {
+            host: Host::default(),
+            frequency_mhz: None,
             cpu: vec![CpuStat {
                 name: "cpu".into(),
                 user: ticks,
@@ -436,6 +493,26 @@ mod tests {
         assert!(!clone.snapshot().valid);
         assert!(monitor.cache.get().is_some());
         assert!(std::ptr::eq(monitor.samples(), clone.samples()));
+    }
+
+    #[test]
+    fn snapshot_reports_reference_host_cpu_fields() {
+        let mut sample = reading(10, None);
+        sample.host.cpu_model = "Fixture CPU".into();
+        sample.frequency_mhz = Some(2400.0);
+        for name in ["cpu10", "cpu2"] {
+            sample.cpu.push(CpuStat {
+                name: name.into(),
+                ..CpuStat::default()
+            });
+        }
+        let mut samples = Samples::default();
+        samples.accept(sample, Instant::now(), Utc::now());
+        let json = serde_json::to_value(&samples.current).unwrap();
+        assert_eq!(json["host"]["cpuModel"], "Fixture CPU");
+        assert_eq!(json["cpu"]["frequencyMHz"], 2400.0);
+        assert_eq!(json["cpu"]["cores"][0]["name"], "cpu2");
+        assert_eq!(json["cpu"]["cores"][1]["name"], "cpu10");
     }
 
     #[test]

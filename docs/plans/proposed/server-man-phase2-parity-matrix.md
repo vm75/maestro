@@ -825,3 +825,13 @@ rather than failed probes against the 32-filesystem limit. Existing bounded
 reads and device-name safeguards remain in place. Added source regression
 fixtures. Rust formatting, compilation, fixture execution and native validation
 are pending; no acceptance state is advanced.
+
+
+### Source-guided host identity and CPU frequency increment
+
+Added the frozen monitor host metadata and optional average positive CPU MHz
+fields to the Linux snapshot, with numeric CPU core ordering and resource-page
+presentation. Metadata reads use bounded proc-root-derived paths without shell
+execution; missing frequency is null rather than zero. Source regression tests
+cover kernel/hostname/OS/model fallbacks, malformed frequencies, core ordering
+and JSON field names. Build, browser and native acceptance remain pending.
