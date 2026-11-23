@@ -338,6 +338,15 @@ present in that worktree. Native acceptance is tracked separately below.
 | Build, registry and routing | The `linux` feature gates the tool router and native modules. `linux-ui` also embeds Svelte. CI has separate profile checks. | Validate the release artifacts, compile-time dependency graph and ASUS hardware resource deltas. |
 | Agent access | HTTP JSON-RPC MCP shares the Linux tool registry | Port full existing HTTP/stdio MCP contracts and Agent access UI; capture/inventory/recovery parity is required, while *full restorable backup/restore* is a separate future project. |
 
+
+### Phase 2 reconciliation increment — 2026-11-23 (unverified implementation, M2 open)
+
+See [server-man-phase2-parity-matrix.md](server-man-phase2-parity-matrix.md) for the pinned-reference tool ledger, missing operations, privilege split and evidence gaps. An initial source audit enumerates 60 public registration names plus 3 helper-only share-definition verbs; the earlier documented 55-tool SDK count must be reconciled against a live pinned Go registry and official MCP client. This is not accepted parity.
+
+The existing branch has been **preserved**. Linux-only `maestro-admin` and a non-root production runtime guard were introduced, and systemd system-scope writes now require root-owned helper policy *and* Maestro's unit allowlist; user-scope operations remain ordinary account operations. Discovery, status and Services UI expose unavailable reasons. Package writes now fail closed rather than relying on the main daemon's root UID, but helper package/share verbs, two-mode installer and native helper testing are not yet complete. **Do not install or authorize the helper on production systems from this preliminary code.**
+
+Source commits: `584ccc22ad89a7b5145c876ed67467d509c06d73`, `70b9a8cffc58366e30e4f762d1c3c4f7f8d92ef4`, `acf9a6ff774bdd47184fa7ea8a3d141a8770866e`. Tests/CI, Rust compilation, disposable guest native validation, browser acceptance and hardware resource checks **have not been run for these commits**. Existing earlier test records cannot verify the new changes. All unfinished checklist items remain unchecked.
+
 ### Step 4 prerequisite — Platform builds and router resource baseline
 
 Complete this prerequisite before adding more Linux-only dependencies or
