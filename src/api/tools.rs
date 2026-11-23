@@ -723,6 +723,13 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
         })
         .collect();
 
+    // Keep the reference's individual lifecycle contracts on the existing provider path.
+    tools.extend([
+        json!({"name":"managed_service_logs","module":"managed_logs","title":"Read managed application logs","description":"Explicitly read bounded recent logs for one configured managed application. Runtime logs may contain private application data. This never starts a workload or reads another application.","readOnly":true,"destructive":false,"inputSchema":{"additionalProperties":false,"properties":{"service":{"type":"string","description":"Managed application ID","minLength":1,"maxLength":63},"tail":{"type":"integer","description":"Most recent entries per native log reader; default 200","minimum":1,"maximum":2000}},"required":["service"],"type":"object"}}),
+        json!({"name":"managed_service_restart","module":"managed_lifecycle","title":"Managed service restart","description":"Manage the authoritative service as a tracked job. Start/stop/restart affect execution; enable/disable affect boot policy only.","readOnly":false,"destructive":true,"inputSchema":{"additionalProperties":false,"properties":{"confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."},"service":{"type":"string","description":"Managed service ID","minLength":1,"maxLength":63}},"required":["confirm","service"],"type":"object"}}),
+        json!({"name":"managed_service_start","module":"managed_lifecycle","title":"Managed service start","description":"Manage the authoritative service as a tracked job. Start/stop/restart affect execution; enable/disable affect boot policy only.","readOnly":false,"destructive":false,"inputSchema":{"additionalProperties":false,"properties":{"service":{"type":"string","description":"Managed service ID","minLength":1,"maxLength":63}},"required":["service"],"type":"object"}}),
+        json!({"name":"managed_service_stop","module":"managed_lifecycle","title":"Managed service stop","description":"Manage the authoritative service as a tracked job. Start/stop/restart affect execution; enable/disable affect boot policy only.","readOnly":false,"destructive":true,"inputSchema":{"additionalProperties":false,"properties":{"confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."},"service":{"type":"string","description":"Managed service ID","minLength":1,"maxLength":63}},"required":["confirm","service"],"type":"object"}}),
+    ]);
     tools.extend(systemd::ACTIONS.map(|action| {
         let destructive = !matches!(action, "start" | "enable");
         json!({
@@ -898,6 +905,9 @@ pub async fn execute_tool(
             | "workloads_resume"
             | "workloads_revert"
             | "applications_action"
+            | "managed_service_start"
+            | "managed_service_stop"
+            | "managed_service_restart"
     ) {
         if let Err(error) = crate::core::linux_config::mutation_ready(&state.config, store) {
             return (
@@ -2380,7 +2390,8 @@ pub async fn execute_tool(
             (StatusCode::OK, json!({ "applications": apps }))
         }
 
-        "applications_action" => {
+        "applications_action" | "managed_service_start" | "managed_service_stop"
+        | "managed_service_restart" => {
             if !writes_allowed(state) {
                 return (
                     StatusCode::FORBIDDEN,
@@ -2390,35 +2401,44 @@ pub async fn execute_tool(
                     ),
                 );
             }
-            let Some(id) = arguments.get("id").and_then(Value::as_str) else {
+            let (tool, id, action) = if name == "applications_action" {
+                let id = arguments.get("id").and_then(Value::as_str);
+                let action = arguments.get("action").and_then(Value::as_str);
+                if arguments.len() != 2 || !matches!(action, Some("start" | "stop" | "restart")) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        json_err("invalid_arguments", "Expected id and start, stop or restart action."),
+                    );
+                }
+                ("applications_action", id, action.unwrap())
+            } else {
+                let (tool, action) = match name {
+                    "managed_service_start" => ("managed_service_start", "start"),
+                    "managed_service_stop" => ("managed_service_stop", "stop"),
+                    _ => ("managed_service_restart", "restart"),
+                };
+                let destructive = action != "start";
+                if arguments.len() != if destructive { 2 } else { 1 }
+                    || (destructive && arguments.get("confirm") != Some(&Value::Bool(true)))
+                {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        json_err("invalid_arguments", "Provide a service ID and confirm=true for stop or restart."),
+                    );
+                }
+                (tool, arguments.get("service").and_then(Value::as_str), action)
+            };
+            let Some(id) = id.filter(|id| crate::core::declarative::id_valid(id)) else {
                 return (
                     StatusCode::BAD_REQUEST,
-                    json_err("invalid_arguments", "Expected 'id' string."),
+                    json_err("invalid_arguments", "Invalid managed service ID."),
                 );
             };
-            let Some(action) = arguments.get("action").and_then(Value::as_str) else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    json_err(
-                        "invalid_arguments",
-                        "Expected 'action' string (start, stop, restart).",
-                    ),
-                );
-            };
-            if !matches!(action, "start" | "stop" | "restart") {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    json_err(
-                        "invalid_arguments",
-                        "Action must be start, stop, or restart.",
-                    ),
-                );
-            }
             let store = store.clone();
             let id = id.to_string();
             let action = action.to_string();
             let provider_clone = provider.clone();
-            start_job_value(jobs, "applications_action", move |running| async move {
+            start_job_value(jobs, tool, move |running| async move {
                 let config = (|| -> anyhow::Result<_> {
                     anyhow::ensure!(
                         store.pending_apply()?.is_none(),
@@ -2451,8 +2471,17 @@ pub async fn execute_tool(
             .await
         }
 
-        "applications_logs" => {
-            let Some(id) = arguments.get("id").and_then(Value::as_str) else {
+        "applications_logs" | "managed_service_logs" => {
+            let reference = name == "managed_service_logs";
+            let key = if reference { "service" } else { "id" };
+            if arguments.keys().any(|argument| argument != key && argument != "tail") {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Unexpected managed logs argument."),
+                );
+            }
+            let Some(id) = arguments.get(key).and_then(Value::as_str)
+                .filter(|id| crate::core::declarative::id_valid(id)) else {
                 return (
                     StatusCode::BAD_REQUEST,
                     json_err("invalid_arguments", "Expected 'id' string."),
@@ -2479,8 +2508,9 @@ pub async fn execute_tool(
                 .flatten()
                 .and_then(|s| s.config().ok())
                 .unwrap_or_default();
-            match provider.logs(&config, id, tail).await {
-                Ok(logs) => (StatusCode::OK, json!({ "id": id, "logs": logs })),
+            match provider.managed_logs(&config, id, tail).await {
+                Ok(logs) if reference => (StatusCode::OK, json!(logs)),
+                Ok(logs) => (StatusCode::OK, json!({ "id": id, "logs": logs.display_text() })),
                 Err(e) => (
                     StatusCode::BAD_REQUEST,
                     json_err("logs_error", &e.to_string()),

@@ -139,10 +139,11 @@
 
   async function runAction(id: string, action: string) {
     if (!writable || !applications.some(app => app.id === id && app.lifecycle) || !recoveryChecked || pending || actionPending || applying) return
+    if (action !== 'start' && !window.confirm(`${action === 'stop' ? 'Stop' : 'Restart'} ${id}?`)) return
     actionPending = `${id}:${action}`
     appError = ''
     try {
-      let job = await startJob('applications_action', { id, action })
+      let job = await startJob(`managed_service_${action}`, action === 'start' ? { service: id } : { service: id, confirm: true })
       while (job.state === 'running') {
         await new Promise(r => setTimeout(r, 600))
         job = await invokeTool<Job>('jobs_get', { id: job.id })
@@ -165,8 +166,8 @@
     logsError = ''
     logsContent = null
     try {
-      const result = await invokeTool<{ id: string; logs: string }>('applications_logs', { id, tail: 200 })
-      logsContent = result.logs
+      const result = await invokeTool<{ text: string; truncated: boolean; source: string }>('managed_service_logs', { service: id, tail: 200 })
+      logsContent = (result.truncated ? '[Earlier log output truncated]\n' : '') + result.text
     } catch (e) {
       logsError = e instanceof Error ? e.message : 'Could not fetch logs'
     } finally {

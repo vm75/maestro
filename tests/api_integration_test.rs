@@ -2658,13 +2658,18 @@ shares:
     assert_eq!(shares[0]["id"], "docs");
     assert_eq!(shares[0]["protocol"], "samba");
 
-    // 6. Action on application
+    // 6. Reference lifecycle tools enforce confirmation and exact argument shape.
+    for args in [serde_json::json!({"service":"web"}), serde_json::json!({"service":"web","confirm":false}), serde_json::json!({"service":"../web","confirm":true})] {
+        let (status, _) = call("managed_service_restart", args).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    let (status, logs) = call("managed_service_logs", serde_json::json!({"service":"web","tail":10})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(logs["text"].is_string());
+    assert_eq!(logs["source"], "simulation");
     let (status, val) = call(
-        "applications_action",
-        serde_json::json!({
-            "id": "web",
-            "action": "restart"
-        }),
+        "managed_service_restart",
+        serde_json::json!({"service":"web","confirm":true}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -2767,6 +2772,11 @@ async fn linux_mcp_protocol_flow() {
         .find(|tool| tool["name"] == "managed_directory_browse")
         .unwrap();
     assert_eq!(browse["inputSchema"], expected["inputSchema"]);
+    for name in ["managed_service_start", "managed_service_stop", "managed_service_restart", "managed_service_logs"] {
+        let actual = tools.iter().find(|tool| tool["name"] == name).unwrap();
+        let expected = reference["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == name).unwrap();
+        assert_eq!(actual["inputSchema"], expected["inputSchema"]);
+    }
 
     let directory = tempfile::tempdir().unwrap();
     std::fs::create_dir(directory.path().join("visible")).unwrap();

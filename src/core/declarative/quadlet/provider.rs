@@ -218,6 +218,16 @@ impl QuadletProvider {
         journalctl: &Path,
         tail: usize,
     ) -> Result<String> {
+        Ok(self.managed_logs(config, id, journalctl, tail).await?.display_text())
+    }
+
+    pub async fn managed_logs(
+        &self,
+        config: &Config,
+        id: &str,
+        journalctl: &Path,
+        tail: usize,
+    ) -> Result<crate::core::declarative::composite::ManagedLogs> {
         ensure!(
             (1..=2000).contains(&tail),
             "journal line limit must be between 1 and 2000"
@@ -239,11 +249,11 @@ impl QuadletProvider {
             .runner
             .capture_tail(journalctl, &args, Duration::from_secs(10), 128 * 1024)
             .await?;
-        let mut text = String::from_utf8_lossy(&bytes).into_owned();
-        if truncated {
-            text.insert_str(0, "[Earlier journal output truncated]\n");
-        }
-        Ok(text)
+        Ok(crate::core::declarative::composite::ManagedLogs {
+            text: String::from_utf8_lossy(&bytes).into_owned(),
+            truncated,
+            source: "systemd-journal",
+        })
     }
 
     async fn check_mode(

@@ -48,6 +48,24 @@ pub struct ShareSummary {
     pub clients: Vec<String>,
 }
 
+/// Structured log response matching the pinned reference; never included in inventory.
+#[derive(Debug, Serialize)]
+pub struct ManagedLogs {
+    pub text: String,
+    pub truncated: bool,
+    pub source: &'static str,
+}
+
+impl ManagedLogs {
+    pub fn display_text(self) -> String {
+        if self.truncated {
+            format!("[Earlier journal output truncated]\n{}", self.text)
+        } else {
+            self.text
+        }
+    }
+}
+
 pub struct CompositeProvider {
     simulated: bool,
     journalctl: std::path::PathBuf,
@@ -248,6 +266,21 @@ impl CompositeProvider {
             }
             other => Err(anyhow!("unsupported backend: {other}")),
         }
+    }
+
+    pub async fn managed_logs(&self, config: &Config, id: &str, tail: usize) -> Result<ManagedLogs> {
+        ensure!((1..=2000).contains(&tail), "invalid log line limit");
+        let service = config.services.get(id).ok_or_else(|| anyhow!("service not found: {id}"))?;
+        if !self.simulated && service.backend == "quadlet" {
+            let provider = self.quadlet.as_ref().ok_or_else(|| anyhow!("native Quadlet is unavailable"))?;
+            return provider.managed_logs(config, id, &self.journalctl, tail).await;
+        }
+        ensure!(self.simulated, "Native logs require verified provider ownership.");
+        let text = self.logs(config, id, tail).await?;
+        let truncated = text.len() > 128 * 1024;
+        let mut start = text.len().saturating_sub(128 * 1024);
+        while !text.is_char_boundary(start) { start += 1; }
+        Ok(ManagedLogs { text: text[start..].to_owned(), truncated, source: "simulation" })
     }
 
     pub async fn logs(&self, config: &Config, id: &str, tail: usize) -> Result<String> {

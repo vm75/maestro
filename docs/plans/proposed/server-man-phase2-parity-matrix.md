@@ -808,3 +808,8 @@ Translated the pinned reference's declared input and consumer enumeration, expli
 ### Source-guided native share inventory increment
 
 Ported Server Man's read-only effective Samba configuration, connection-count, NFS configured/registered export parsers and protocol filter into the Linux backend. Native reads use bounded ordinary-account commands and file reads, never the helper. Authoritative share definitions are now served by `managed_shares`; the Linux Shares UI separates declared and observed native state. Unverified native ownership, missing utilities and unavailable runtime data are explicit; the native share write gate remains closed. Added parser and API fixtures. Managed fragment byte-integrity verification, ownership classification, setup, publication/rollback and helper transactions remain incomplete. Rust and browser/native validation pending.
+
+
+### Source-guided managed lifecycle API increment
+
+Exposed the reference's individual start, stop, restart and scoped log tool contracts through the existing tracked-job/provider path, retaining compatibility with the prior application API. Stop and restart require affirmative confirmation; managed IDs and argument shape are validated. Quadlet logs return the actual bounded reader's truncation flag and source, and the UI uses the reference contracts. Added HTTP/MCP contract fixtures. Native ownership gates remain unchanged. Enable/disable are not yet ported: the reference requires boot-only changes without altering runtime identity, which needs separate fingerprints and native verification. Build and native acceptance remain pending.

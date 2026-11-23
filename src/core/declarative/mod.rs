@@ -71,7 +71,7 @@ fn string_keys(value: &Value) -> bool {
     }
 }
 
-fn id_valid(id: &str) -> bool {
+pub(crate) fn id_valid(id: &str) -> bool {
     id.len() <= 63
         && id.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
         && id
