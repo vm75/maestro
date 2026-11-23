@@ -23,6 +23,7 @@
       load: () => import('./Shares.svelte'),
     },
     { id: 'updates', title: 'Updates', module: 'updates', load: () => import('./Updates.svelte') },
+    { id: 'configuration', title: 'Configuration', module: 'workloads', load: () => import('./Configuration.svelte') },
     { id: 'activity', title: 'Activity', load: () => import('./Activity.svelte') },
     { id: 'agents', title: 'Agent access', load: () => import('./AgentAccess.svelte') },
   ]
