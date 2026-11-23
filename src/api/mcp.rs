@@ -93,6 +93,10 @@ pub async fn handle_mcp(
                         "name": t.get("name").cloned().unwrap_or(Value::Null),
                         "description": t.get("description").cloned().unwrap_or(Value::Null),
                         "inputSchema": t.get("inputSchema").cloned().unwrap_or_else(|| json!({"type": "object"})),
+                        "annotations": {
+                            "readOnlyHint": t.get("readOnly").cloned().unwrap_or(Value::Bool(false)),
+                            "destructiveHint": t.get("destructive").cloned().unwrap_or(Value::Bool(true))
+                        },
                     })
                 })
                 .collect();

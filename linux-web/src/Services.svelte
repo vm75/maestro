@@ -72,7 +72,11 @@
     actionError = ''
     job = null
     try {
-      let current = await startJob(`services_${action}`, { scope, unit: actionUnit })
+      let current = await startJob(`services_${action}`, {
+        scope,
+        unit: actionUnit,
+        ...(!['start', 'enable'].includes(action) ? { confirm: true } : {}),
+      })
       if (controller.signal.aborted) return
       job = current
       while (current.state === 'running') {

@@ -443,27 +443,32 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                 "title": title,
                 "description": description,
                 "readOnly": read_only,
-                "destructive": false,
+                "destructive": matches!(
+                    tool,
+                    Tool::WorkloadsApply | Tool::WorkloadsResume | Tool::WorkloadsRevert | Tool::ApplicationsAction
+                ),
                 "inputSchema": input_schema
             })
         })
         .collect();
 
     tools.extend(systemd::ACTIONS.map(|action| {
+        let destructive = !matches!(action, "start" | "enable");
         json!({
             "name": format!("services_{action}"),
             "module": "systemd",
             "title": format!("Service {action}"),
             "description": "Run an opted-in systemd action as a tracked job.",
             "readOnly": false,
-            "destructive": false,
+            "destructive": destructive,
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "scope": {"type": "string", "enum": ["system", "user"]},
-                    "unit": {"type": "string", "maxLength": 255}
+                    "unit": {"type": "string", "maxLength": 255},
+                    "confirm": {"const": true}
                 },
-                "required": ["unit"],
+                "required": if destructive { vec!["unit", "confirm"] } else { vec!["unit"] },
                 "additionalProperties": false
             }
         })
@@ -627,6 +632,7 @@ pub async fn execute_tool(
             #[serde(default)]
             scope: systemd::Scope,
             unit: String,
+            confirm: Option<bool>,
         }
         let Ok(input) = serde_json::from_value::<ActionArgs>(Value::Object(arguments)) else {
             return (
@@ -638,6 +644,12 @@ pub async fn execute_tool(
             return (
                 StatusCode::BAD_REQUEST,
                 json_err("invalid_arguments", "Expected an exact .service unit."),
+            );
+        }
+        if !matches!(action, "start" | "enable") && input.confirm != Some(true) {
+            return (
+                StatusCode::BAD_REQUEST,
+                json_err("confirmation_required", "This destructive service action requires confirm=true."),
             );
         }
         if !systemd::permits(state, input.scope, &input.unit) {

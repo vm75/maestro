@@ -239,3 +239,5 @@ Reference: `internal/declarative/backup_tools.go`; tests: `internal/declarative/
 - Follow-on commit adds `services_details` allowlisted read-only properties, explicit system/user scope, API schema, initial source tests and Svelte inspection. This remains `modeled` pending Rust build/fixture/API/browser/native review.
 
 - Linux build script now exports separately checksummed `maestro-admin-<target>` **without installing or authorizing it**. `docs/linux.md` documents the fixed helper/policy/sudoers contract as a WIP, not production acceptance.
+
+- Shared HTTP/MCP service write actions now require `confirm=true` for `stop`, `restart`, `reload`, `disable`; discovery describes these as destructive and MCP tool annotations expose read-only/destructive hints. User-scope actions follow the same confirmation policy. This is a source change only: test/SDK acceptance remains pending.
