@@ -11,7 +11,7 @@
 - Every operation needs reference tests, equivalent arguments/schema/errors/permission policy, Rust unit/API contract, UI path, REST/MCP, a no-helper run and helper-enabled run. For native mutations require disposable Linux guest checks, failure/restart/recovery and observed effects. Source review or a green mock test does not establish native acceptance.
 - This is an initial source-level ledger, **not** a complete baseline contract extraction. Many parameter sets are explicitly marked `inspect schema` and need full reference field-by-field fixtures. The Phase 2 gate stays open.
 - **Tool-count discrepancy to resolve:** the current plan reports **55** official-SDK tools; the module source registration paths below expose **60 distinct public registry operation names** when all modules are assembled (excluding three helper-only `shares_definitions_*` verbs). Re-run the pinned Go registry/official SDK and compare conditional modules and negotiated discovery before treating either count as authoritative. Every source entry is retained below until reconciled.
-- Maestro currently has **30** named Linux tool registrations (22 enum entries plus six systemd and two updates), some named differently and with narrower behavior. No mapping from `workloads_*` to `managed_*` is accepted merely by analogous names.
+- Maestro currently has **31** named Linux tool registrations (23 enum entries plus six systemd and two updates), some named differently and with narrower behavior. No mapping from `workloads_*` to `managed_*` is accepted merely by analogous names.
 
 ## Pinned reference public registry — 60 source-declared operations
 
@@ -46,7 +46,7 @@ Reference: `internal/modules/services/module.go`; tests: `internal/modules/servi
 | Reference operation | Input/schema requirements | Behavior and privilege boundary | Current status |
 | --- | --- | --- | --- |
 | `services_list` | scope=system/user | Installed plus loaded units; keep bus/read errors partial and boot enablement separate. | **modeled**; no acceptance evidence |
-| `services_details` | unit, scope | Read bounded, non-secret properties without leaking environment or unit contents. | **not started**; no acceptance evidence |
+| `services_details` | unit, scope | Read bounded, non-secret properties without leaking environment or unit contents. | **modeled**; Rust parser/tool and Svelte inspector, no native acceptance evidence |
 | `services_logs` | unit, scope, tail<=2000 | Read bounded system/user unit journal, subject to ordinary permissions. | **modeled**; no acceptance evidence |
 | `services_start` | unit, scope | Validated exact system service requires helper and both allowlists; user action direct; runtime only. | **gated**; no acceptance evidence |
 | `services_stop` | unit, scope | Validated exact system service requires helper and both allowlists; user action direct; runtime only. | **gated**; no acceptance evidence |
@@ -235,3 +235,5 @@ Reference: `internal/declarative/backup_tools.go`; tests: `internal/declarative/
 - Repository reviewed at plan baseline `e4a78158f40e2eee83a2b4ded75f941536d75ef5`. Existing WIP was preserved.
 - Commits: `584ccc22ad89a7b5145c876ed67467d509c06d73` (Linux-only helper and non-root guard), `70b9a8cffc58366e30e4f762d1c3c4f7f8d92ef4` (systemd delegation/package fail-closed), `acf9a6ff774bdd47184fa7ea8a3d141a8770866e` (HTTP/MCP capability response and UI reasons).
 - **Verified:** connector-confirmed branch commits and source-level path review only. **Not verified:** Rust compilation, fmt, clippy, unit/API/browser checks, root-owned helper install, non-root native acceptance, router IPK/hardware, release, CI. Runtime tools are unavailable in this connector-only session. No positive native operation is claimed.
+
+- Follow-on commit adds `services_details` allowlisted read-only properties, explicit system/user scope, API schema, initial source tests and Svelte inspection. This remains `modeled` pending Rust build/fixture/API/browser/native review.

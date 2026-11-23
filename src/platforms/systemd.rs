@@ -180,7 +180,7 @@ const DETAIL_PROPERTIES: [&str; 16] = [
 pub struct Details {
     #[serde(flatten)]
     service: Service,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "mainPID", skip_serializing_if = "Option::is_none")]
     main_pid: Option<u64>,
     #[serde(skip_serializing_if = "String::is_empty")]
     result: String,
@@ -513,17 +513,17 @@ mod tests {
 
     #[test]
     fn systemd_detail_parser_whitelists_properties_and_rejects_malformed_data() {
-        let bytes = b"Id=demo.service\\nDescription=Demo\\nLoadState=loaded\\nActiveState=active\\nSubState=running\\nUnitFileState=enabled\\nMainPID=123\\nCanStart=yes\\nCanStop=no\\nCanReload=yes\\nEnvironment=PRIVATE\\nExecStart=PRIVATE\\n";
+        let bytes = b"Id=demo.service\nDescription=Demo\nLoadState=loaded\nActiveState=active\nSubState=running\nUnitFileState=enabled\nMainPID=123\nCanStart=yes\nCanStop=no\nCanReload=yes\nEnvironment=PRIVATE\nExecStart=PRIVATE\n";
         let details = parse_details(bytes).unwrap();
         let data = serde_json::to_string(&details).unwrap();
-        assert!(data.contains("\\"mainPID\\":123"));
-        assert!(data.contains("\\"canStart\\":true"));
+        assert!(data.contains("\"mainPID\":123"));
+        assert!(data.contains("\"canStart\":true"));
         assert!(!data.contains("PRIVATE"));
         assert!(!data.contains("Environment"));
         assert!(!data.contains("ExecStart"));
-        assert!(parse_details(b"Id=demo.service\\nLoadState=not-found\\n").is_err());
-        assert!(parse_details(b"Id=../bad.service\\nLoadState=loaded\\nActiveState=active\\n").is_err());
-        assert!(parse_details(b"Id=demo.socket\\nLoadState=loaded\\nActiveState=active\\n").is_err());
+        assert!(parse_details(b"Id=demo.service\nLoadState=not-found\n").is_err());
+        assert!(parse_details(b"Id=../bad.service\nLoadState=loaded\nActiveState=active\n").is_err());
+        assert!(parse_details(b"Id=demo.socket\nLoadState=loaded\nActiveState=active\n").is_err());
         assert!(parse_details(b"garbage").is_err());
     }
 

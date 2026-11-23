@@ -27,6 +27,27 @@
   let loading = $state(true)
   let error = $state('')
   let pending: AbortController | undefined
+  let detailRequest: AbortController | undefined
+  let detailUnit = $state('')
+  let detail = $state<{
+    name: string
+    description: string
+    load: string
+    active: string
+    sub: string
+    enabled: string
+    mainPID?: number
+    result?: string
+    execMainCode?: string
+    execMainStatus?: string
+    activeSince?: string
+    inactiveSince?: string
+    fragmentPath?: string
+    canStart: boolean
+    canStop: boolean
+    canReload: boolean
+  } | null>(null)
+  let detailError = $state('')
   let journalRequest: AbortController | undefined
   let journalUnit = $state('')
   let journal = $state<{ text: string; truncated: boolean } | null>(null)
@@ -68,6 +89,30 @@
       }
     } finally {
       if (!controller.signal.aborted) actionPending = false
+    }
+  }
+
+  function closeDetails() {
+    detailRequest?.abort()
+    detailUnit = ''
+    detail = null
+    detailError = ''
+  }
+
+  async function openDetails(unit: string) {
+    closeDetails()
+    detailUnit = unit
+    const controller = new AbortController()
+    detailRequest = controller
+    try {
+      const result = await invokeTool<NonNullable<typeof detail>>(
+        'services_details', { scope, unit }, controller.signal,
+      )
+      if (!controller.signal.aborted) detail = result
+    } catch (failure) {
+      if (!controller.signal.aborted) {
+        detailError = failure instanceof Error ? failure.message : 'Could not read service details.'
+      }
     }
   }
 
@@ -118,6 +163,7 @@
     void refresh()
     return () => {
       pending?.abort()
+      detailRequest?.abort()
       journalRequest?.abort()
       jobRequest?.abort()
     }
@@ -128,6 +174,7 @@
   <div class="filters">
     <label for="manager-scope">Manager</label>
     <select id="manager-scope" value={scope} disabled={actionPending} onchange={(event) => {
+      closeDetails()
       closeJournal()
       actionUnit = ''
       scope = event.currentTarget.value === 'user' ? 'user' : 'system'
@@ -153,12 +200,13 @@
       {#if inventory.services.length}
         <div class="table-scroll">
           <table>
-            <thead><tr><th scope="col">Unit</th><th scope="col">Load</th><th scope="col">State</th><th scope="col">Enabled</th>{#if inventory.journalAvailable}<th scope="col">Journal</th>{/if}</tr></thead>
+            <thead><tr><th scope="col">Unit</th><th scope="col">Load</th><th scope="col">State</th><th scope="col">Enabled</th><th scope="col">Details</th>{#if inventory.journalAvailable}<th scope="col">Journal</th>{/if}</tr></thead>
             <tbody>
               {#each inventory.services as unit (unit.name)}
                 <tr>
                   <th scope="row">{unit.name}{#if unit.description}<small>{unit.description}</small>{/if}</th>
                   <td>{unit.load}</td><td>{unit.active} / {unit.sub}</td><td>{unit.enabled}</td>
+                  <td><button type="button" aria-label={'Inspect ' + unit.name} onclick={() => openDetails(unit.name)}>Inspect</button></td>
                   {#if inventory.journalAvailable}
                     <td><button type="button" aria-label={'Read journal for ' + unit.name} onclick={() => openJournal(unit.name)}>View</button></td>
                   {/if}
@@ -198,6 +246,34 @@
       <p role="status">{job.state}</p>
       {#if job.error}<p role="alert">{job.error}</p>{/if}
       {#if job.output}<pre>{job.output}</pre>{/if}
+    {/if}
+  </section>
+{/if}
+
+{#if detailUnit}
+  <section class="panel" aria-labelledby="service-detail-title">
+    <div class="filters">
+      <h2 id="service-detail-title">Service details: {detailUnit}</h2>
+      <button type="button" onclick={closeDetails}>Close</button>
+    </div>
+    {#if detailError}
+      <p role="alert">{detailError}</p>
+    {:else if detail}
+      <p>{detail.description || detail.name}</p>
+      <dl>
+        <dt>Canonical unit</dt><dd>{detail.name}</dd>
+        <dt>Load state</dt><dd>{detail.load}</dd>
+        <dt>Runtime</dt><dd>{detail.active} / {detail.sub}</dd>
+        <dt>Enabled at boot</dt><dd>{detail.enabled || 'Unknown'}</dd>
+        {#if detail.mainPID !== undefined}<dt>Main PID</dt><dd>{detail.mainPID}</dd>{/if}
+        {#if detail.result}<dt>Result</dt><dd>{detail.result}{detail.execMainStatus ? ' · exit ' + detail.execMainStatus : ''}</dd>{/if}
+        {#if detail.activeSince}<dt>Active since</dt><dd>{detail.activeSince}</dd>{/if}
+        {#if detail.inactiveSince}<dt>Inactive since</dt><dd>{detail.inactiveSince}</dd>{/if}
+        {#if detail.fragmentPath}<dt>Unit file</dt><dd>{detail.fragmentPath}</dd>{/if}
+        <dt>Available runtime actions</dt><dd>{detail.canStart ? 'start ' : ''}{detail.canStop ? 'stop ' : ''}{detail.canReload ? 'reload' : ''}</dd>
+      </dl>
+    {:else}
+      <p role="status">Loading service details…</p>
     {/if}
   </section>
 {/if}
