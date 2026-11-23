@@ -168,6 +168,96 @@ pub async fn inventory(state: &AppState, scope: Scope) -> Result<Inventory> {
     Ok(result)
 }
 
+
+const DETAIL_PROPERTIES: [&str; 16] = [
+    "Id", "Description", "LoadState", "ActiveState", "SubState", "UnitFileState",
+    "MainPID", "Result", "ExecMainCode", "ExecMainStatus", "ActiveEnterTimestamp",
+    "InactiveEnterTimestamp", "FragmentPath", "CanStart", "CanStop", "CanReload",
+];
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Details {
+    #[serde(flatten)]
+    service: Service,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    main_pid: Option<u64>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    result: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    exec_main_code: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    exec_main_status: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    active_since: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    inactive_since: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    fragment_path: String,
+    can_start: bool,
+    can_stop: bool,
+    can_reload: bool,
+}
+
+fn parse_details(bytes: &[u8]) -> Result<Details> {
+    let text = std::str::from_utf8(bytes)?;
+    let mut values = BTreeMap::new();
+    for line in text.lines() {
+        if let Some((key, value)) = line.split_once('=') {
+            if DETAIL_PROPERTIES.contains(&key) {
+                values.insert(key, value);
+            }
+        }
+    }
+    ensure!(
+        values.get("LoadState") != Some(&"not-found"),
+        "service unit not found"
+    );
+    let id = values.get("Id").copied().unwrap_or_default();
+    ensure!(
+        valid_unit(id)
+            && !values.get("LoadState").copied().unwrap_or_default().is_empty()
+            && !values.get("ActiveState").copied().unwrap_or_default().is_empty(),
+        "unsupported systemd detail response"
+    );
+    let field = |key| values.get(key).copied().unwrap_or_default().to_owned();
+    let mut service = Service::unknown(id);
+    service.description = field("Description");
+    service.load = field("LoadState");
+    service.active = field("ActiveState");
+    service.sub = field("SubState");
+    service.enabled = field("UnitFileState");
+    Ok(Details {
+        service,
+        main_pid: field("MainPID").parse().ok(),
+        result: field("Result"),
+        exec_main_code: field("ExecMainCode"),
+        exec_main_status: field("ExecMainStatus"),
+        active_since: field("ActiveEnterTimestamp"),
+        inactive_since: field("InactiveEnterTimestamp"),
+        fragment_path: field("FragmentPath"),
+        can_start: field("CanStart") == "yes",
+        can_stop: field("CanStop") == "yes",
+        can_reload: field("CanReload") == "yes",
+    })
+}
+
+pub async fn details(state: &AppState, scope: Scope, unit: &str) -> Result<Details> {
+    ensure!(valid_unit(unit), "invalid service unit");
+    ensure!(available(state), "systemctl is unavailable");
+    let property = format!("--property={}", DETAIL_PROPERTIES.join(","));
+    let output = state
+        .runner
+        .capture_bounded(
+            &state.config.commands.systemctl,
+            &[scope.argument(), "--no-pager", "--no-ask-password", "show", &property, "--", unit],
+            TIMEOUT,
+            64 * 1024,
+        )
+        .await?;
+    parse_details(&output)
+}
+
 #[derive(Serialize)]
 pub struct Journal {
     text: String,
@@ -419,6 +509,22 @@ mod tests {
             .is_err()
         );
         assert!(!result.contains_key("new.service"));
+    }
+
+    #[test]
+    fn systemd_detail_parser_whitelists_properties_and_rejects_malformed_data() {
+        let bytes = b"Id=demo.service\\nDescription=Demo\\nLoadState=loaded\\nActiveState=active\\nSubState=running\\nUnitFileState=enabled\\nMainPID=123\\nCanStart=yes\\nCanStop=no\\nCanReload=yes\\nEnvironment=PRIVATE\\nExecStart=PRIVATE\\n";
+        let details = parse_details(bytes).unwrap();
+        let data = serde_json::to_string(&details).unwrap();
+        assert!(data.contains("\\"mainPID\\":123"));
+        assert!(data.contains("\\"canStart\\":true"));
+        assert!(!data.contains("PRIVATE"));
+        assert!(!data.contains("Environment"));
+        assert!(!data.contains("ExecStart"));
+        assert!(parse_details(b"Id=demo.service\\nLoadState=not-found\\n").is_err());
+        assert!(parse_details(b"Id=../bad.service\\nLoadState=loaded\\nActiveState=active\\n").is_err());
+        assert!(parse_details(b"Id=demo.socket\\nLoadState=loaded\\nActiveState=active\\n").is_err());
+        assert!(parse_details(b"garbage").is_err());
     }
 
     #[test]

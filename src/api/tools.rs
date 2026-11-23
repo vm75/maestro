@@ -31,6 +31,7 @@ enum Tool {
     JobsGet,
     JobsCancel,
     ServicesList,
+    ServicesDetails,
     ServicesLogs,
     MonitorSnapshot,
     MonitorProcesses,
@@ -50,13 +51,14 @@ enum Tool {
 }
 
 impl Tool {
-    const ALL: [Self; 22] = [
+    const ALL: [Self; 23] = [
         Self::Status,
         Self::Capabilities,
         Self::JobsList,
         Self::JobsGet,
         Self::JobsCancel,
         Self::ServicesList,
+        Self::ServicesDetails,
         Self::ServicesLogs,
         Self::MonitorSnapshot,
         Self::MonitorProcesses,
@@ -102,6 +104,11 @@ impl Tool {
                 "services_list",
                 "Service inventory",
                 "List installed and loaded systemd units.",
+            ),
+            Self::ServicesDetails => (
+                "services_details",
+                "Service details",
+                "Read selected systemd properties without environment or command lines.",
             ),
             Self::ServicesLogs => (
                 "services_logs",
@@ -302,7 +309,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
         .map(|tool| {
             let (name, title, description) = tool.metadata();
             let module = match tool {
-                Tool::ServicesList | Tool::ServicesLogs => "systemd",
+                Tool::ServicesList | Tool::ServicesDetails | Tool::ServicesLogs => "systemd",
                 Tool::MonitorSnapshot | Tool::MonitorProcesses => "monitor",
                 Tool::UpdatesStatus => "updates",
                 Tool::WorkloadsGet
@@ -333,6 +340,15 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                         "id": {"type": "string", "format": "uuid"}
                     },
                     "required": ["id"],
+                    "additionalProperties": false
+                }),
+                Tool::ServicesDetails => json!({
+                    "type": "object",
+                    "properties": {
+                        "scope": {"type": "string", "enum": ["system", "user"]},
+                        "unit": {"type": "string", "maxLength": 255}
+                    },
+                    "required": ["unit"],
                     "additionalProperties": false
                 }),
                 Tool::ServicesLogs => json!({
@@ -472,8 +488,9 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
 
 async fn permissions(state: &AppState) -> Value {
     let helper = admin::probe().await;
-    let system_ready = state.config.services.systemd_system_write_units
-        .iter().any(|unit| helper.permits_unit(unit));
+    let system_ready = systemd::available(state) && state.config.platform == crate::config::Platform::Linux
+        && state.config.services.systemd_system_write_units
+            .iter().any(|unit| systemd::permits(state, systemd::Scope::System, unit) && helper.permits_unit(unit));
     json!({
         "helper": helper,
         "systemServices": {
@@ -718,14 +735,18 @@ pub async fn execute_tool(
             )
         }
 
-        "system_capabilities" => (
-            StatusCode::OK,
-            json!({
-                "modules": modules(state),
-                "allowWrites": systemd::writes_enabled(state) || package_updates::writes_enabled(state) || writes_allowed(state),
-                "permissions": permissions(state).await
-            }),
-        ),
+        "system_capabilities" => {
+            let permission_states = permissions(state).await;
+            let privileged_writes = permission_states["systemServices"]["status"].as_str() == Some("ready");
+            (
+                StatusCode::OK,
+                json!({
+                    "modules": modules(state),
+                    "allowWrites": privileged_writes || systemd::writes_enabled(state) || package_updates::writes_enabled(state) || writes_allowed(state),
+                    "permissions": permission_states
+                }),
+            )
+        },
 
         "jobs_list" => (StatusCode::OK, json!(jobs.list())),
 
@@ -793,6 +814,39 @@ pub async fn execute_tool(
                 Err(_) => (
                     StatusCode::SERVICE_UNAVAILABLE,
                     json_err("unavailable", "Systemd inventory exceeds its limits."),
+                ),
+            }
+        }
+
+        "services_details" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct DetailsArgs {
+                #[serde(default)]
+                scope: systemd::Scope,
+                unit: String,
+            }
+            let Ok(input) = serde_json::from_value::<DetailsArgs>(Value::Object(arguments)) else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Expected a manager scope and exact service unit."),
+                );
+            };
+            if !systemd::valid_unit(&input.unit) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Expected an exact .service unit."),
+                );
+            }
+            match systemd::details(state, input.scope, &input.unit).await {
+                Ok(details) => (StatusCode::OK, json!(details)),
+                Err(error) if error.to_string() == "service unit not found" => (
+                    StatusCode::NOT_FOUND,
+                    json_err("not_found", "Service unit not found."),
+                ),
+                Err(_) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err("unavailable", "Service details are unavailable for this systemd bus."),
                 ),
             }
         }
@@ -1326,8 +1380,10 @@ async fn status(
         .position(|&byte| byte == 0)
         .unwrap_or(hostname.len());
     let helper = admin::probe().await;
-    let privileged_writes = state.config.services.systemd_system_write_units
-        .iter().any(|unit| helper.permits_unit(unit));
+    let privileged_writes = systemd::available(&state)
+        && state.config.platform == crate::config::Platform::Linux
+        && state.config.services.systemd_system_write_units
+            .iter().any(|unit| systemd::permits(&state, systemd::Scope::System, unit) && helper.permits_unit(unit));
     Json(json!({
         "hostname": String::from_utf8_lossy(&hostname[..end]),
         "startedAt": started_at,
