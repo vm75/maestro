@@ -2650,8 +2650,8 @@ shares:
     assert_eq!(apps[0]["name"], "Demo Web");
     assert_eq!(apps[0]["state"], "running");
 
-    // 5. Check shares_list
-    let (status, val) = call("shares_list", serde_json::json!({})).await;
+    // 5. Check authoritative managed shares (native inventory is a separate tool).
+    let (status, val) = call("managed_shares", serde_json::json!({})).await;
     assert_eq!(status, StatusCode::OK);
     let shares = val["shares"].as_array().unwrap();
     assert_eq!(shares.len(), 1);
@@ -2673,8 +2673,15 @@ shares:
     // 7. Check shares_status
     let (status, val) = call("shares_status", serde_json::json!({})).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(val["samba"]["available"].as_bool().unwrap());
-    assert!(val["nfs"]["available"].as_bool().unwrap());
+    assert_eq!(val["samba"]["available"], false);
+    assert_eq!(val["nfs"]["available"], false);
+    let (status, val) = call("shares_list", serde_json::json!({"protocol":"samba"})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(val["backends"].as_array().unwrap().len(), 1);
+    assert_eq!(val["backends"][0]["protocol"], "samba");
+    assert_eq!(val["shares"].as_array().unwrap().len(), 0);
+    let (status, _) = call("shares_list", serde_json::json!({"protocol":"invalid"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[cfg(feature = "linux")]

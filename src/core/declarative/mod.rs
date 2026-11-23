@@ -12,6 +12,7 @@ pub mod incus;
 mod journal;
 pub use journal::{ApplyJournal, ApplyPhase};
 pub mod libvirt;
+pub mod native_shares;
 mod model;
 mod plan;
 pub mod quadlet;

@@ -14,16 +14,9 @@
     clients: string[]
   }
 
-  interface ServiceStatus {
-    configured: boolean
-    available: boolean
-    path?: string
-  }
-
-  interface SharesStatusResponse {
-    samba: ServiceStatus
-    nfs: ServiceStatus
-  }
+  interface NativeBackend { protocol: string; available: boolean; canManage: boolean; setupRequired: boolean; reason: string; notice: string; managedFile: string }
+  interface NativeShare { name: string; path: string; protocol: string; runtime: string; configured: boolean; ownership: string; connections?: number }
+  interface SharesStatusResponse { backends: NativeBackend[]; shares: NativeShare[]; warnings: string[] }
 
   let shares = $state<Share[]>([])
   let sharesStatus = $state<SharesStatusResponse | null>(null)
@@ -41,8 +34,8 @@
     error = ''
     try {
       const [sharesRes, statusRes] = await Promise.all([
-        invokeTool<{ shares: Share[] }>('shares_list', {}),
-        invokeTool<SharesStatusResponse>('shares_status', {}),
+        invokeTool<{ shares: Share[] }>('managed_shares', {}),
+        invokeTool<SharesStatusResponse>('shares_list', {}),
       ])
       shares = sharesRes.shares
       sharesStatus = statusRes
@@ -87,32 +80,34 @@
     <h2 id="status-heading">Services Status</h2>
     {#if sharesStatus}
       <div class="services-status-grid">
-        <article class="service-card">
-          <div class="service-header">
-            <h3>Samba (SMB)</h3>
-            <span class="status-badge" class:configured={sharesStatus.samba.configured}>
-              {sharesStatus.samba.configured ? 'Configured' : 'Not configured'}
-            </span>
-          </div>
-          <p class="service-meta">
-            Config: <code>{sharesStatus.samba.path || '/etc/samba/smb.conf'}</code>
-          </p>
-        </article>
-
-        <article class="service-card">
-          <div class="service-header">
-            <h3>NFS (Network File System)</h3>
-            <span class="status-badge" class:configured={sharesStatus.nfs.configured}>
-              {sharesStatus.nfs.configured ? 'Configured' : 'Not configured'}
-            </span>
-          </div>
-          <p class="service-meta">
-            Exports: <code>{sharesStatus.nfs.path || '/etc/exports'}</code>
-          </p>
-        </article>
+        {#each sharesStatus.backends as backend (backend.protocol)}
+          <article class="service-card">
+            <div class="service-header">
+              <h3>{backend.protocol.toUpperCase()}</h3>
+              <span class="status-badge" class:configured={backend.available}>{backend.available ? 'Utility available' : 'Unavailable'}</span>
+            </div>
+            <p class="service-meta">Fragment: <code>{backend.managedFile}</code></p>
+            {#if backend.setupRequired}<p>Host setup is required.</p>{/if}
+            <p>{backend.reason}</p><p class="service-meta">{backend.notice}</p>
+          </article>
+        {/each}
       </div>
     {:else if loading}
       <p role="status">Checking services status…</p>
+    {/if}
+    {#if sharesStatus}
+      {#each sharesStatus.warnings as warning}<p role="status">{warning}</p>{/each}
+      <h3>Observed native shares</h3>
+      <p>Native publication ownership has not been verified. Configured and runtime state are observations only.</p>
+      {#each sharesStatus.shares as native}
+        <article class="service-card">
+          <strong>{native.protocol.toUpperCase()} · {native.name}</strong>
+          <p><code>{native.path || 'Path unavailable'}</code></p>
+          <p>{native.configured ? 'Configured' : 'Not observed in configuration'} · {native.runtime.replaceAll('_', ' ')}{native.connections === undefined ? '' : ' · ' + native.connections + ' connections'}</p>
+        </article>
+      {:else}
+        <p>No native shares were observed with the current permissions.</p>
+      {/each}
     {/if}
   </section>
 

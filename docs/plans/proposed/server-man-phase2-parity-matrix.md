@@ -803,3 +803,8 @@ Ported the pinned Server Man monitor parser and sampler semantics into Linux-onl
 ### Source-guided backup inventory increment
 
 Translated the pinned reference's declared input and consumer enumeration, explicit native VM input placeholders, per-container image and enabled-share quiescence requirements, overlapping input coverage, capture-relative paths and state collision diagnostics. The existing stricter no-symlink metadata policy is retained. Private inventory is now restricted by the same workload policy as private configuration reads. UI displays source and bundle paths, consumers, covered inputs and allocated size. Native dependency discovery, capture, verification, publication and recovery remain unavailable; compile, fixture and native checks are pending.
+
+
+### Source-guided native share inventory increment
+
+Ported Server Man's read-only effective Samba configuration, connection-count, NFS configured/registered export parsers and protocol filter into the Linux backend. Native reads use bounded ordinary-account commands and file reads, never the helper. Authoritative share definitions are now served by `managed_shares`; the Linux Shares UI separates declared and observed native state. Unverified native ownership, missing utilities and unavailable runtime data are explicit; the native share write gate remains closed. Added parser and API fixtures. Managed fragment byte-integrity verification, ownership classification, setup, publication/rollback and helper transactions remain incomplete. Rust and browser/native validation pending.

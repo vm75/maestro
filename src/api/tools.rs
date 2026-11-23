@@ -65,12 +65,13 @@ enum Tool {
     ApplicationsAction,
     ApplicationsLogs,
     SharesList,
+    ManagedShares,
     SharesSambaPassword,
     SharesStatus,
 }
 
 impl Tool {
-    const ALL: [Self; 42] = [
+    const ALL: [Self; 43] = [
         Self::Status,
         Self::Capabilities,
         Self::JobsList,
@@ -111,6 +112,7 @@ impl Tool {
         Self::ApplicationsAction,
         Self::ApplicationsLogs,
         Self::SharesList,
+        Self::ManagedShares,
         Self::SharesSambaPassword,
         Self::SharesStatus,
     ];
@@ -311,7 +313,12 @@ impl Tool {
             Self::SharesList => (
                 "shares_list",
                 "Network shares inventory",
-                "List configured Samba and NFS shares.",
+                "Read native Samba and NFS share metadata, connection and export state.",
+            ),
+            Self::ManagedShares => (
+                "managed_shares",
+                "Configured file shares",
+                "Read authoritative share definitions without changing native daemons.",
             ),
             Self::SharesSambaPassword => (
                 "shares_samba_password",
@@ -471,8 +478,8 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                 | Tool::ApplicationsList
                 | Tool::ApplicationsAction
                 | Tool::ApplicationsLogs => "workloads",
-                Tool::SharesList | Tool::SharesSambaPassword | Tool::SharesStatus
-                | Tool::ManagedDirectoryBrowse => "shares",
+                Tool::SharesList | Tool::ManagedShares | Tool::SharesSambaPassword
+                | Tool::SharesStatus | Tool::ManagedDirectoryBrowse => "shares",
                 _ => "system",
             };
             let read_only = !matches!(
@@ -492,6 +499,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     | Tool::BackupInventory
             );
             let input_schema = match tool {
+                Tool::SharesList => json!({"additionalProperties":false,"properties":{"protocol":{"type":"string","description":"Optional protocol filter","enum":["samba","nfs"]}},"required":[],"type":"object"}),
                 Tool::ManagedApplyStatus => json!({"type":"object","properties":{},"required":[],"additionalProperties":false}),
                 Tool::ManagedApplyRetry => json!({"type":"object","properties":{
                     "confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."}
@@ -1140,7 +1148,7 @@ pub async fn execute_tool(
             | "managed_config_history"
             | "workloads_history"
             | "applications_list"
-            | "shares_list"
+            | "managed_shares"
             | "shares_status"
     ) && !arguments.is_empty()
     {
@@ -2480,32 +2488,55 @@ pub async fn execute_tool(
             }
         }
 
-        "shares_list" => {
-            let config = store
-                .read()
-                .ok()
-                .flatten()
-                .and_then(|s| s.config().ok())
-                .unwrap_or_default();
-            let shares = provider.list_shares(&config);
-            (StatusCode::OK, json!({ "shares": shares }))
+        "managed_shares" => {
+            match store.read() {
+                Ok(Some(snapshot)) => match snapshot.config() {
+                    Ok(config) => {
+                        let mut shares = serde_json::to_value(provider.list_shares(&config))
+                            .expect("share summaries serialize");
+                        for item in shares.as_array_mut().expect("share array") {
+                            if let Some(id) = item["id"].as_str().map(str::to_owned) {
+                                item["definition"] = json!(config.shares[&id]);
+                                item["configuration"] = json!("unknown");
+                                item["issues"] = json!([]);
+                            }
+                        }
+                        (StatusCode::OK, json!({"configured": true, "revision": snapshot.revision, "shares": shares}))
+                    }
+                    Err(_) => (StatusCode::SERVICE_UNAVAILABLE, json_err("unavailable", "Authoritative shares configuration is invalid.")),
+                },
+                Ok(None) => (StatusCode::OK, json!({"configured": false, "shares": []})),
+                Err(_) => (StatusCode::SERVICE_UNAVAILABLE, json_err("unavailable", "Authoritative shares configuration is unavailable.")),
+            }
         }
 
-        "shares_status" => (
-            StatusCode::OK,
-            json!({
-                "samba": {
-                    "configured": state.config.paths.samba_conf.exists(),
-                    "available": true,
-                    "path": state.config.paths.samba_conf.display().to_string(),
-                },
-                "nfs": {
-                    "configured": state.config.paths.exports_file.exists(),
-                    "available": true,
-                    "path": state.config.paths.exports_file.display().to_string(),
-                }
-            }),
-        ),
+        "shares_list" => {
+            #[derive(serde::Deserialize, Default)]
+            #[serde(default, deny_unknown_fields)]
+            struct Input { protocol: Option<String> }
+            let Ok(input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
+                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Expected an optional share protocol."));
+            };
+            if input.protocol.as_deref().is_some_and(|protocol| !matches!(protocol, "samba" | "nfs")) {
+                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Unsupported share protocol."));
+            }
+            let result = crate::core::declarative::native_shares::inventory(state, input.protocol.as_deref()).await;
+            (StatusCode::OK, json!(result))
+        }
+
+        "shares_status" => {
+            let result = crate::core::declarative::native_shares::inventory(state, None).await;
+            let mut response = Map::new();
+            for backend in result.backends {
+                response.insert(backend.protocol.into(), json!({
+                    "configured": !backend.setup_required && !state.config.test_mode,
+                    "available": backend.available,
+                    "path": backend.managed_file,
+                    "reason": backend.reason,
+                }));
+            }
+            (StatusCode::OK, Value::Object(response))
+        }
 
         _ => (
             StatusCode::NOT_FOUND,
