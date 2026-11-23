@@ -29,7 +29,7 @@ use crate::{
     config::{AppConfig, Platform},
 };
 
-pub const RELEASES_API: &str = "https://api.github.com/repos/vm75/router-hub/releases?per_page=100";
+pub const RELEASES_API: &str = "https://api.github.com/repos/vm75/maestro/releases?per_page=100";
 const MAX_RELEASE_PAGES: usize = 10;
 const OPKG_TIMEOUT: Duration = Duration::from_secs(300);
 const RELOAD_TIMEOUT: Duration = Duration::from_secs(20);
@@ -42,8 +42,8 @@ const MODULE_FILES: [&str; 4] = [
     "ngx_stream_module.so",
     "ngx_http_headers_more_filter_module.so",
 ];
-pub const TAG_API_BASE: &str = "https://api.github.com/repos/vm75/router-hub/releases/tags";
-pub const RELEASE_BASE: &str = "https://github.com/vm75/router-hub/releases/download";
+pub const TAG_API_BASE: &str = "https://api.github.com/repos/vm75/maestro/releases/tags";
+pub const RELEASE_BASE: &str = "https://github.com/vm75/maestro/releases/download";
 pub const ARCH: &str = "aarch64-3.10";
 pub const OPKG: &str = "/opt/bin/opkg";
 pub const MAX_IPK_BYTES: u64 = 64 * 1024 * 1024;
@@ -576,7 +576,7 @@ impl UpgradeLock {
             .create(true)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
-            .open("/tmp/.router-hub-nginx-upgrade.lock")
+            .open("/tmp/.maestro-nginx-upgrade.lock")
             .context("unable to open NGINX upgrade lock")?;
         ensure!(
             unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
@@ -960,7 +960,7 @@ pub async fn run(
     };
     let opkg_available = check_opkg_architecture()?;
     let client = reqwest::Client::builder()
-        .user_agent(concat!("router-hub/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("maestro/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(120))
         .build()?;
 
@@ -1145,7 +1145,7 @@ pub async fn run(
             .join(" ")
     );
 
-    // Download-only still makes a backup, like router-hub upgrade.
+    // Download-only still makes a backup, like maestro upgrade.
     if !options.no_backup {
         backup::run(config, config_path, None)
             .await

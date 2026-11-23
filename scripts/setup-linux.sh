@@ -49,7 +49,7 @@ fi
 if [[ ! -e "$lab/nginx/nginx.conf" && ! -L "$lab/nginx/nginx.conf" ]]; then
     python3 "$repo_root/scripts/render-nginx-config.py" \
         "$repo_root/config/nginx" "$lab/nginx" \
-        --inputs-dir "$lab/router-hub/nginx" \
+        --inputs-dir "$lab/maestro/nginx" \
         --var-dir "$lab/var" --pid-path "$lab/run/nginx.pid" \
         --error-log-path "$lab/var/log/nginx/error.log" \
         --acme-directory "$lab/certs/acme-challenge" \
@@ -65,14 +65,14 @@ server {
         alias $lab/certs/acme-challenge/;
         default_type text/plain;
     }
-    location / { return 200 'router-hub linux nginx'; }
+    location / { return 200 'maestro linux nginx'; }
 }
 EOF
 fi
 
-if [[ ! -e "$lab/router-hub.toml" && ! -L "$lab/router-hub.toml" ]]; then
+if [[ ! -e "$lab/maestro.toml" && ! -L "$lab/maestro.toml" ]]; then
     token=$(openssl rand -hex 24)
-cat > "$lab/router-hub.toml" <<EOF
+cat > "$lab/maestro.toml" <<EOF
 platform = "linux"
 test_mode = false
 
@@ -86,7 +86,7 @@ daemonize = false
 [paths]
 data_dir = "$lab/state"
 runtime_dir = "$lab/run"
-log_file = "$lab/logs/router-hub.log"
+log_file = "$lab/logs/maestro.log"
 hosts_add = "$lab/hosts.add"
 dnsmasq_conf_add = "$lab/dnsmasq.conf.add"
 wireguard_conf = "$lab/wireguard/wglab.conf"
@@ -105,14 +105,14 @@ ping = "/bin/ping"
 
 [asus_ui]
 enabled = false
-rendered_page = "$lab/router-hub.asp"
+rendered_page = "$lab/maestro.asp"
 
 [services]
 init_dir = "$repo_root/data/linux/init.d"
 log_dirs = ["$lab/logs"]
 
 [nginx]
-inputs_dir = "$lab/router-hub/nginx"
+inputs_dir = "$lab/maestro/nginx"
 root_dir = "$lab/nginx"
 config_path = "$lab/nginx/nginx.conf"
 prefix_path = "$lab/nginx"
@@ -143,15 +143,15 @@ EOF
 fi
 
 mkdir -p "$repo_root/data/linux/init.d"
-for name in S80nginx S99router-hub; do
+for name in S80nginx S99maestro; do
     if [[ ! -e "$repo_root/data/linux/init.d/$name" && ! -e "$repo_root/data/linux/init.d/.disabled.$name" ]]; then
         install -m 700 "$repo_root/scripts/linux-init.py" "$repo_root/data/linux/init.d/$name"
     fi
 done
 
 printf 'Linux lab ready: %s\n' "$lab"
-printf 'Auth token is stored in %s/router-hub.toml\n' "$lab"
-printf 'Start from the repository root:\n  cargo run -- --config data/linux/router-hub.toml --linux-mode serve\n'
+printf 'Auth token is stored in %s/maestro.toml\n' "$lab"
+printf 'Start from the repository root:\n  cargo run -- --config data/linux/maestro.toml --linux-mode serve\n'
 echo 'New configs use http://127.0.0.1:3030 and nginx port 8080. Existing files are preserved.'
 echo 'Optional feature tools: ip, ping, wg, wg-quick, dehydrated, ipset, iptables, ip6tables.'
 echo 'Configure their paths before testing those features; firewall enforcement requires an isolated VM or network namespace.'

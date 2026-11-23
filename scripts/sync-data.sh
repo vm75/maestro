@@ -34,7 +34,7 @@ Configured local directories:
   opt/etc/init.d
   opt/etc/mosquitto
   opt/etc/nginx
-  opt/etc/router-hub
+  opt/etc/maestro
   opt/etc/logrotate.d
   jffs/addons
   jffs/configs
@@ -93,7 +93,7 @@ LOCAL_PATHS=(
     "opt/etc/init.d"
     "opt/etc/mosquitto"
     "opt/etc/nginx"
-    "opt/etc/router-hub"
+    "opt/etc/maestro"
     "opt/etc/logrotate.d"
     "jffs/addons"
     "jffs/configs"
@@ -109,7 +109,7 @@ REMOTE_PATHS=(
     "/opt/etc/init.d"
     "/opt/etc/mosquitto"
     "/opt/etc/nginx"
-    "/opt/etc/router-hub"
+    "/opt/etc/maestro"
     "/opt/etc/logrotate.d"
     "/jffs/addons"
     "/jffs/configs"
@@ -121,6 +121,7 @@ REMOTE_PATHS=(
 )
 
 ITEM_TYPES=(
+    "dir"
     "dir"
     "dir"
     "dir"
@@ -272,7 +273,7 @@ case "$COMMAND" in
             opt/etc/AdGuardHome/AdGuardHome.yaml \
             opt/etc/nginx \
             opt/etc/init.d/ \
-            opt/etc/router-hub \
+            opt/etc/maestro \
             opt/etc/logrotate.d \
             jffs/scripts/
         ;;

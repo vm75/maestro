@@ -25,27 +25,27 @@ exit "${CHROOT_STATUS:-0}"
 EOF
 chmod +x "$TMP/bin/"*
 export PATH="$TMP/bin:$PATH" CHROOT_ARGS="$TMP/chroot-args"
-# Alpine may derive /router-hub and fsck options from the live ISO's share.
+# Alpine may derive /maestro and fsck options from the live ISO's share.
 printf '%s\n' '/dev/vda3 / ext4 defaults 0 1' \
-    'router-hub /router-hub 9p defaults 0 2' \
-    'router-hub /mnt/router-hub 9p noauto 0 0' \
+    'maestro /mnt/maestro 9p defaults 0 0' \
+    'maestro /mnt/maestro 9p noauto 0 0' \
     'other-share /mnt/other 9p ro 0 0' > "$TMP/fstab"
 sh "$REPO_DIR/lab/aarch64/configure-share.sh" "$TMP/fstab" "$TMP/modules"
 cp "$TMP/fstab" "$TMP/expected-fstab"
 sh "$REPO_DIR/lab/aarch64/configure-share.sh" "$TMP/fstab" "$TMP/modules"
 cmp "$TMP/expected-fstab" "$TMP/fstab"
-test "$(grep -c '^router-hub ' "$TMP/fstab")" -eq 1
-grep -Fx 'router-hub /mnt/router-hub 9p trans=virtio,version=9p2000.L,ro 0 0' "$TMP/fstab" >/dev/null
+test "$(grep -c '^maestro ' "$TMP/fstab")" -eq 1
+grep -Fx 'maestro /mnt/maestro 9p trans=virtio,version=9p2000.L,ro 0 0' "$TMP/fstab" >/dev/null
 grep -Fx 'other-share /mnt/other 9p ro 0 0' "$TMP/fstab" >/dev/null
 grep -Fx '/dev/vda3 / ext4 defaults 0 1' "$TMP/fstab" >/dev/null
-grep -Fx 9pnet_virtio "$TMP/modules/router-hub.conf" >/dev/null
+grep -Fx 9pnet_virtio "$TMP/modules/maestro.conf" >/dev/null
 
 helper="$REPO_DIR/lab/aarch64/installer/provision-installed.sh"
 sh "$helper" /dev/test-disk "$TMP/target" "$TMP/repository"
 grep -Fx LAB_OFFLINE=1 "$CHROOT_ARGS" >/dev/null
-grep -Fx ROUTER_HUB_DEFER_START=1 "$CHROOT_ARGS" >/dev/null
-grep -Fx /mnt/router-hub/lab/aarch64/provision.sh "$CHROOT_ARGS" >/dev/null
-printf 'umount %s\n' "$TMP/target/mnt/router-hub" "$TMP/target/dev" \
+grep -Fx MAESTRO_DEFER_START=1 "$CHROOT_ARGS" >/dev/null
+grep -Fx /mnt/maestro/lab/aarch64/provision.sh "$CHROOT_ARGS" >/dev/null
+printf 'umount %s\n' "$TMP/target/mnt/maestro" "$TMP/target/dev" \
     "$TMP/target/sys" "$TMP/target/proc" "$TMP/target/tmp" "$TMP/target/run" "$TMP/target" > "$TMP/expected-cleanup"
 grep '^umount ' "$PROVISION_CALLS" > "$TMP/cleanup"
 cmp "$TMP/expected-cleanup" "$TMP/cleanup"
@@ -73,39 +73,39 @@ grep '^umount ' "$PROVISION_CALLS" > "$TMP/cleanup"
 cmp "$TMP/expected-partial-cleanup" "$TMP/cleanup"
 
 # Exercise the actual package setup flow against a disposable filesystem.
-mkdir -p "$TMP/root/opt/bin" "$TMP/root/opt/etc/init.d" "$TMP/root/opt/etc/router-hub" "$TMP/root/jffs/scripts" "$TMP/examples"
+mkdir -p "$TMP/root/opt/bin" "$TMP/root/opt/etc/init.d" "$TMP/root/opt/etc/maestro" "$TMP/root/jffs/scripts" "$TMP/examples"
 cat > "$TMP/bin/id" <<'EOF'
 #!/bin/sh
 echo 0
 EOF
-cat > "$TMP/root/opt/bin/router-hub" <<'EOF'
+cat > "$TMP/root/opt/bin/maestro" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$SETUP_COMMANDS"
 EOF
-cat > "$TMP/root/opt/etc/init.d/S99router-hub" <<'EOF'
+cat > "$TMP/root/opt/etc/init.d/S99maestro" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$1" >> "$SERVICE_COMMANDS"
 EOF
-chmod +x "$TMP/bin/id" "$TMP/root/opt/bin/router-hub" "$TMP/root/opt/etc/init.d/S99router-hub"
-printf 'existing configuration\n' > "$TMP/root/opt/etc/router-hub/router-hub.toml"
+chmod +x "$TMP/bin/id" "$TMP/root/opt/bin/maestro" "$TMP/root/opt/etc/init.d/S99maestro"
+printf 'existing configuration\n' > "$TMP/root/opt/etc/maestro/maestro.toml"
 printf '{}\n' > "$TMP/examples/firewall-policy.example.json"
 sed -e "s|/opt/|$TMP/root/opt/|g" -e "s|/jffs/|$TMP/root/jffs/|g" \
     "$REPO_DIR/scripts/setup-merlin.sh" > "$TMP/setup-merlin.sh"
 export SETUP_COMMANDS="$TMP/setup-commands" SERVICE_COMMANDS="$TMP/service-commands"
-ROUTER_HUB_DEFER_START=1 sh "$TMP/setup-merlin.sh" "$TMP/examples" >/dev/null
+MAESTRO_DEFER_START=1 sh "$TMP/setup-merlin.sh" "$TMP/examples" >/dev/null
 test ! -f "$SERVICE_COMMANDS"
 grep -F 'migrate-nginx-inputs' "$SETUP_COMMANDS" >/dev/null
 grep -F 'init-nginx' "$SETUP_COMMANDS" >/dev/null
 grep -F 'check-config' "$SETUP_COMMANDS" >/dev/null
 test -f "$TMP/root/jffs/scripts/post-mount"
 test -f "$TMP/root/jffs/scripts/firewall-start"
-ROUTER_HUB_DEFER_START=0 sh "$TMP/setup-merlin.sh" "$TMP/examples" >/dev/null
+MAESTRO_DEFER_START=0 sh "$TMP/setup-merlin.sh" "$TMP/examples" >/dev/null
 grep -F 'update-dehydrated' "$SETUP_COMMANDS" >/dev/null
 printf 'stop\nrestart\n' > "$TMP/expected-service-commands"
 cmp "$TMP/expected-service-commands" "$SERVICE_COMMANDS"
 
 # Preserve shell customizations and show current credentials once per interactive shell.
-mkdir -p "$TMP/shell-root/root" "$TMP/shell-root/opt/etc/router-hub"
+mkdir -p "$TMP/shell-root/root" "$TMP/shell-root/opt/etc/maestro"
 printf '# existing shell settings\n' > "$TMP/shell-root/root/.bashrc"
 sh "$REPO_DIR/lab/aarch64/configure-shell.sh" "$TMP/shell-root"
 cp "$TMP/shell-root/root/.bashrc" "$TMP/expected-bashrc"
@@ -113,9 +113,9 @@ sh "$REPO_DIR/lab/aarch64/configure-shell.sh" "$TMP/shell-root"
 cmp "$TMP/expected-bashrc" "$TMP/shell-root/root/.bashrc"
 grep -Fx '# existing shell settings' "$TMP/shell-root/root/.bashrc" >/dev/null
 printf 'user=lab\npassword=test-password\n' > "$TMP/shell-root/etc/router-lab/httpd-credentials.txt"
-printf 'auth_token=test-token\n' > "$TMP/shell-root/opt/etc/router-hub/auth-token.txt"
+printf 'auth_token=test-token\n' > "$TMP/shell-root/opt/etc/maestro/auth-token.txt"
 sed -e "s|/etc/router-lab/|$TMP/shell-root/etc/router-lab/|g" \
-    -e "s|/opt/etc/router-hub/|$TMP/shell-root/opt/etc/router-hub/|g" \
+    -e "s|/opt/etc/maestro/|$TMP/shell-root/opt/etc/maestro/|g" \
     "$REPO_DIR/lab/aarch64/files/login-banner.sh" > "$TMP/test-banner"
 sed "s|/etc/router-lab/login-banner.sh|$TMP/test-banner|" \
     "$TMP/shell-root/root/.bashrc" > "$TMP/test-bashrc"
@@ -127,7 +127,7 @@ grep -F 'auth_token=test-token' "$TMP/banner-output" >/dev/null
 grep -F 'http://127.0.0.1:8080/user20.asp' "$TMP/banner-output" >/dev/null
 bash -c '. "$1"' bash "$TMP/test-banner" > "$TMP/noninteractive-output"
 test ! -s "$TMP/noninteractive-output"
-printf 'auth_token=updated-token\n' > "$TMP/shell-root/opt/etc/router-hub/auth-token.txt"
+printf 'auth_token=updated-token\n' > "$TMP/shell-root/opt/etc/maestro/auth-token.txt"
 sh -i -c '. "$1"' sh "$TMP/test-banner" > "$TMP/ash-output" 2> "$TMP/ash-stderr"
 grep -F 'auth_token=updated-token' "$TMP/ash-output" >/dev/null
 
@@ -144,7 +144,7 @@ cat > "$TMP/bin/setup-alpine" <<'EOF'
 #!/bin/sh
 test "${SYSROOT:-/mnt}" = /mnt/router-lab || exit 41
 test "${ERASE_DISKS:-}" = /dev/vda || exit 42
-case /mnt/router-hub in
+case /mnt/maestro in
     "${SYSROOT:-/mnt}"/*) exit 43 ;;
 esac
 printf 'install\n' >> "$INSTALLER_CALLS"
@@ -159,7 +159,7 @@ EOF
 printf '#!/bin/sh\nexit 0\n' > "$TMP/bin/modprobe"
 chmod +x "$TMP/bin/awk" "$TMP/bin/setup-alpine" "$TMP/bin/poweroff" "$TMP/bin/modprobe"
 sed -e "s|/dev/ttyAMA0|$TMP/console|g" -e "s|/etc/inittab|$TMP/inittab|g" \
-    -e "s|/mnt/router-hub|$TMP/install-repo|g" \
+    -e "s|/mnt/maestro|$TMP/install-repo|g" \
     "$REPO_DIR/lab/aarch64/installer/install.sh" > "$TMP/install.sh"
 export INSTALLER_CALLS="$TMP/installer-calls"
 sh "$TMP/install.sh"

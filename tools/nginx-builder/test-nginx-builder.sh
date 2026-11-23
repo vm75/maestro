@@ -45,7 +45,7 @@ test_release_notes_heredoc() {
   # Execute a mock evaluation of the heredoc in a subshell where aarch64-k3.10 is NOT a command
   local eval_output
   eval_output=$(
-    NGINX_VERSION=1.30.7 GITHUB_RUN_ID=12345 GITHUB_REPOSITORY=vm75/router-hub bash -c '
+    NGINX_VERSION=1.30.7 GITHUB_RUN_ID=12345 GITHUB_REPOSITORY=vm75/maestro bash -c '
       notes=$(mktemp)
       cat > "$notes" <<EOF
       Manually cross-built **NGINX ${NGINX_VERSION}** for Asuswrt-Merlin / Entware \`aarch64-k3.10\`.

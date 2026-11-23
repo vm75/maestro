@@ -4,7 +4,7 @@ set -eu
 
 ROOT_DEVICE=${1:-/dev/vda3}
 TARGET=${2:-/mnt/router-lab}
-REPOSITORY=${3:-/mnt/router-hub}
+REPOSITORY=${3:-/mnt/maestro}
 MOUNTS=""
 
 cleanup() {
@@ -33,16 +33,16 @@ $MOUNTS"
 mkdir -p "$TARGET"
 mount_into "$TARGET" "$ROOT_DEVICE"
 [ -f "$TARGET/etc/alpine-release" ] || { echo 'Error: Target is not an installed Alpine system.' >&2; exit 1; }
-mkdir -p "$TARGET/proc" "$TARGET/sys" "$TARGET/dev" "$TARGET/run" "$TARGET/tmp" "$TARGET/mnt/router-hub"
+mkdir -p "$TARGET/proc" "$TARGET/sys" "$TARGET/dev" "$TARGET/run" "$TARGET/tmp" "$TARGET/mnt/maestro"
 mount_into "$TARGET/run" -t tmpfs tmpfs
 mount_into "$TARGET/tmp" -t tmpfs tmpfs
 mount_into "$TARGET/proc" -t proc proc
 mount_into "$TARGET/sys" --bind /sys
 mount_into "$TARGET/dev" --bind /dev
-mount_into "$TARGET/mnt/router-hub" --bind "$REPOSITORY"
+mount_into "$TARGET/mnt/maestro" --bind "$REPOSITORY"
 
 # The live ISO has working DHCP/DNS; the installed guest has not booted yet.
 rm -f "$TARGET/etc/resolv.conf"
 cp /etc/resolv.conf "$TARGET/etc/resolv.conf"
-chroot "$TARGET" /usr/bin/env LAB_OFFLINE=1 ROUTER_HUB_DEFER_START=1 \
-    /bin/sh /mnt/router-hub/lab/aarch64/provision.sh
+chroot "$TARGET" /usr/bin/env LAB_OFFLINE=1 MAESTRO_DEFER_START=1 \
+    /bin/sh /mnt/maestro/lab/aarch64/provision.sh

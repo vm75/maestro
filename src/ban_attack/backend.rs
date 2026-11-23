@@ -72,9 +72,9 @@ pub struct ReconcileReport {
     pub repaired: bool,
 }
 
-const INPUT_CHAIN: &str = "ROUTER_HUB_INPUT";
-const FORWARD_CHAIN: &str = "ROUTER_HUB_FORWARD";
-const RULE_COMMENT: &str = "router-hub:ban-attack";
+const INPUT_CHAIN: &str = "MAESTRO_INPUT";
+const FORWARD_CHAIN: &str = "MAESTRO_FORWARD";
+const RULE_COMMENT: &str = "maestro:ban-attack";
 const MAX_RESTORE_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -657,14 +657,14 @@ impl BanBackend for CommandIpSet {
         self.ensure()?;
         let v4 = self.restore_family(
             &self.config.v4_set,
-            "router_hub_stage4",
+            "maestro_stage4",
             "inet",
             active,
             exceptions,
         )?;
         let v6 = self.restore_family(
             &self.config.v6_set,
-            "router_hub_stage6",
+            "maestro_stage6",
             "inet6",
             active,
             exceptions,

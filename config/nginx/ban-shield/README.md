@@ -1,6 +1,6 @@
-# Router Hub Ban Config integration
+# Maestro Ban Config integration
 
-This folder holds the nginx side of Router Hub's Ban Shield/Ban Config feature.
+This folder holds the nginx side of Maestro's Ban Shield/Ban Config feature.
 It is an intentional product integration and remains in version control. It
 contains reusable enforcement and logging policy, not deployed site data.
 

@@ -219,7 +219,7 @@ impl Destination {
             rfs::openat(&parent, name, DIR_FLAGS, Mode::empty())?;
             return Ok(());
         }
-        let temporary = format!(".router-hub-restore-{}", Uuid::new_v4());
+        let temporary = format!(".maestro-restore-{}", Uuid::new_v4());
         let result = (|| -> Result<()> {
             match &item.contents {
                 Contents::File(source) => {
@@ -257,7 +257,7 @@ pub fn run(archive: &Path, root: &Path, test_mode: bool) -> Result<()> {
         .canonicalize()
         .context("restore root must be an existing directory")?;
     let destination = Destination(rfs::open(&root, DIR_FLAGS, Mode::empty())?);
-    let staging = std::env::temp_dir().join(format!(".router-hub-restore-{}", Uuid::new_v4()));
+    let staging = std::env::temp_dir().join(format!(".maestro-restore-{}", Uuid::new_v4()));
     DirBuilder::new().mode(0o700).create(&staging)?;
     let staging = Staging(staging);
     let items =
@@ -472,7 +472,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let config_dir = temp.path().join("config");
         fs::create_dir(&config_dir).unwrap();
-        let config_path = config_dir.join("router-hub.toml");
+        let config_path = config_dir.join("maestro.toml");
         fs::write(&config_path, "original config").unwrap();
         let mut config = crate::config::AppConfig::default();
         config.apply_test_mode(&config_path).unwrap();

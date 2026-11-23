@@ -2,13 +2,13 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build Router Hub",
+            "label": "Build Maestro",
             "type": "process",
             "command": "cargo",
             "args": [
                 "build",
                 "--bin",
-                "router-hub"
+                "maestro"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"

@@ -237,7 +237,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let mut config = AppConfig::default();
         config.nginx.root_dir = temp.path().to_path_buf();
-        config.nginx.inputs_dir = temp.path().join("router-hub/nginx");
+        config.nginx.inputs_dir = temp.path().join("maestro/nginx");
         std::fs::create_dir_all(&config.nginx.inputs_dir).unwrap();
 
         // Write a sites.toml where subdomain does NOT have `name` field
@@ -289,7 +289,7 @@ enabled = true
             let temp = tempfile::tempdir().unwrap();
             let mut config = AppConfig::default();
             config.nginx.root_dir = temp.path().into();
-            config.nginx.inputs_dir = temp.path().join("router-hub/nginx");
+            config.nginx.inputs_dir = temp.path().join("maestro/nginx");
             std::fs::create_dir_all(&config.nginx.inputs_dir).unwrap();
             let domain = Site {
                 kind: NginxObjectKind::Domain,
@@ -359,7 +359,7 @@ enabled = true
         let temp = tempfile::tempdir().unwrap();
         let mut config = AppConfig::default();
         config.nginx.root_dir = temp.path().into();
-        config.nginx.inputs_dir = temp.path().join("router-hub/nginx");
+        config.nginx.inputs_dir = temp.path().join("maestro/nginx");
         std::fs::create_dir_all(&config.nginx.inputs_dir).unwrap();
         let original = r#"
 [sites."subdomain/example.test/api"]

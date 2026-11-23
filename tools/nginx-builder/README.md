@@ -1,11 +1,11 @@
 # Nginx AArch64 Cross-Builder
 
-A standalone host-side tool for building **Nginx and matching dynamic modules** for the ASUS RT-AX88U (Asuswrt-Merlin) using Entware's `aarch64-k3.10` toolchain. It is kept alongside router-hub for version control, but **does not depend on router-hub, modify its configuration, or install anything on the router**.
+A standalone host-side tool for building **Nginx and matching dynamic modules** for the ASUS RT-AX88U (Asuswrt-Merlin) using Entware's `aarch64-k3.10` toolchain. It is kept alongside Maestro for version control, but **does not depend on Maestro, modify its configuration, or install anything on the router**.
 
 ## Repository layout
 
 ```text
-router-hub/
+maestro/
 └── tools/
     └── nginx-builder/
         ├── build-nginx-entware-aarch64-reverse-proxy.sh
@@ -22,7 +22,7 @@ Run `tools/nginx-builder/build-nginx-entware-aarch64-reverse-proxy.sh` from any 
 
 ## Build
 
-From the router-hub repository root:
+From the Maestro repository root:
 
 ```bash
 chmod +x tools/nginx-builder/build-nginx-entware-aarch64-reverse-proxy.sh
@@ -60,14 +60,14 @@ schedule, or PR trigger.
 Each successful run uploads a separate downloadable Actions artifact with the
 same output described below. By default it also publishes a GitHub Release
 under a unique `nginx-v*` tag, marked **not Latest** so it cannot replace the
-latest Router Hub release. Uncheck `publish_release` for an artifact-only
+latest Maestro release. Uncheck `publish_release` for an artifact-only
 trial.
 
 ### Pre-built Toolchain Container (GHCR)
 
 Building the Entware toolchain from source takes ~1–1.5 hours. To speed this up, a pre-built container image (`ghcr.io/<repository>/entware-aarch64-builder:latest`) can be built once using the **Build Toolchain Image** workflow ([.github/workflows/build-toolchain-image.yml](../../.github/workflows/build-toolchain-image.yml)).
 
-When present on GHCR, the NGINX builder automatically pulls the container in ~30 seconds and compiles NGINX and its modules in **~2–3 minutes**. If the image is not found, the workflow gracefully falls back to compiling the toolchain on the host using all available runner cores.
+The repository rename changes the GHCR image path to `ghcr.io/vm75/maestro/entware-aarch64-builder:latest`. Rebuild/publish the image using the manual **Build Toolchain Image** workflow after the rename; an image published only under `vm75/router-hub` will not be found at the new name. When present on GHCR, the NGINX builder automatically pulls the container in ~30 seconds and compiles NGINX and its modules in **~2–3 minutes**. If the image is not found, the workflow gracefully falls back to compiling the toolchain on the host using all available runner cores.
 
 ## Output and deployment
 

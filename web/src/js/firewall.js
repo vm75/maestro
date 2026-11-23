@@ -4,7 +4,7 @@
         const p = state.firewall.policy, s = state.firewall.settings, t = state.firewall.tuning, h = state.firewall.health;
         document.getElementById('fw-enabled').value = String(p.enabled);
         setFirewallTuningForm(t);
-        document.getElementById('fw-tuning-source').textContent = p.tuning ? 'Policy override active' : 'Using router-hub.toml defaults';
+        document.getElementById('fw-tuning-source').textContent = p.tuning ? 'Policy override active' : 'Using maestro.toml defaults';
         document.getElementById('fw-ban-summary').textContent = `Active bans: ${state.firewall.snapshot.banned_subnets.length} subnet · ${state.firewall.snapshot.banned_ips.length} IP`;
         const health = document.getElementById('fw-health');
         const tuningNeedsHardening = t.score_retention_days <= t.subnet_ban_days || t.subnet_promotion_window_days <= t.subnet_ban_days || t.reputation_retention_days <= t.max_ban_days;

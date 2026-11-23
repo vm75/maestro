@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Host launcher for the AArch64 Router Hub Alpine lab.
+# Host launcher for the AArch64 Maestro Alpine lab.
 set -euo pipefail
 
 SCRIPT_DIR=$(CDPATH= cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -169,7 +169,7 @@ QEMU_CMD=(
     -nographic
     -bios "$AARCH64_UEFI"
     -drive "file=$DISK,format=qcow2,if=virtio"
-    -virtfs "local,path=$REPO_DIR,mount_tag=router-hub,security_model=none,readonly=on"
+    -virtfs "local,path=$REPO_DIR,mount_tag=maestro,security_model=none,readonly=on"
     -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:${PORT_HTTP}-:8080,hostfwd=tcp:127.0.0.1:${PORT_HTTPS}-:8443,hostfwd=tcp:127.0.0.1:${PORT_API}-:3030"
 )
 
@@ -192,12 +192,12 @@ if [[ -n "$ISO" ]]; then
 fi
 
 cat <<EOF
-Starting AArch64 Router Hub Lab
+Starting AArch64 Maestro Lab
   Disk:     $DISK
   UEFI:     $AARCH64_UEFI
   Forwards: 127.0.0.1:${PORT_HTTP} -> guest:8080 (ASUS HTTP)
             127.0.0.1:${PORT_HTTPS} -> guest:8443 (ASUS HTTPS)
-            127.0.0.1:${PORT_API}  -> guest:3030 (Router Hub API)
+            127.0.0.1:${PORT_API}  -> guest:3030 (Maestro API)
 EOF
 
 if [[ -n "$ISO" ]]; then
@@ -210,7 +210,7 @@ if [[ -n "$ISO" ]]; then
 else
     echo "  Mode:     Normal guest boot"
 fi
-echo "  Share:    $REPO_DIR (read-only, mount at /mnt/router-hub)"
+echo "  Share:    $REPO_DIR (read-only, mount at /mnt/maestro)"
 
 echo ""
 echo "Press Ctrl+A then X to exit QEMU."

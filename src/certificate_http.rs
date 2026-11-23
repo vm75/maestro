@@ -1,6 +1,6 @@
 //! HTTP-01 windows. Persistent intent is separate from transient session state.
 //! The optional IPv4 WAN adapter uses a kernel ipset timeout: its accept gate
-//! expires even if Router Hub dies. nginx/local listener cleanup still needs
+//! expires even if Maestro dies. nginx/local listener cleanup still needs
 //! startup recovery after an abrupt process death.
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
@@ -437,7 +437,7 @@ async fn verify_listener(state: &AppState, global: &GlobalSettings) -> Result<()
     use std::os::unix::fs::OpenOptionsExt;
     let session =
         active(&state.config)?.context("HTTP validation window expired before readiness check")?;
-    let token = format!("router-hub-probe-{}", uuid::Uuid::new_v4().simple());
+    let token = format!("maestro-probe-{}", uuid::Uuid::new_v4().simple());
     let probe = state
         .config
         .certificates
@@ -1525,11 +1525,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let mut config = AppConfig::default();
         config
-            .apply_test_mode(
-                &temp
-                    .path()
-                    .join("test-fixtures/etc/router-hub/router-hub.toml"),
-            )
+            .apply_test_mode(&temp.path().join("test-fixtures/etc/maestro/maestro.toml"))
             .unwrap();
         config.ensure_directories().unwrap();
         let commands = temp.path().join("commands");

@@ -52,12 +52,9 @@ impl Stores {
             save_json(&certificates_path, &certificates).await?;
         }
         let firewall_policy_path = data_dir.join("firewall-policy.json");
+        let policy_config_path = firewall_policy_config_path(&data_dir);
         let firewall_policy = if config.platform == Platform::Asuswrt {
-            load_json_with_fallback(
-                &firewall_policy_path,
-                Path::new("/opt/etc/router-hub/firewall-policy.json"),
-            )
-            .await?
+            load_json_with_fallback(&firewall_policy_path, policy_config_path).await?
         } else {
             // Linux integration must not read the host's Entware/router policy.
             load_json(&firewall_policy_path).await?
@@ -95,7 +92,7 @@ impl Stores {
     pub async fn save_firewall_policy(&self) -> Result<()> {
         let policy_data = &*self.firewall_policy.read().await;
         save_json(&self.data_dir.join("firewall-policy.json"), policy_data).await?;
-        let config_dir_policy = Path::new("/opt/etc/router-hub/firewall-policy.json");
+        let config_dir_policy = firewall_policy_config_path(&self.data_dir);
         if self.platform == Platform::Asuswrt
             && config_dir_policy.exists()
             && config_dir_policy != self.data_dir.join("firewall-policy.json").as_path()
@@ -112,6 +109,11 @@ impl Stores {
         )
         .await
     }
+}
+
+/// Router configuration policy is stored in the Maestro configuration root.
+fn firewall_policy_config_path(_data_dir: &Path) -> &'static Path {
+    Path::new("/opt/etc/maestro/firewall-policy.json")
 }
 
 #[derive(Default)]
@@ -508,6 +510,15 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn policy_config_follows_existing_state_root() {
+        use std::path::Path;
+        assert_eq!(
+            super::firewall_policy_config_path(Path::new("/opt/var/lib/maestro")),
+            Path::new("/opt/etc/maestro/firewall-policy.json")
+        );
+    }
+
     use super::*;
     use tempfile::tempdir;
 
@@ -637,7 +648,7 @@ mod tests {
         config.paths.data_dir = temp.path().join("data");
         config.certificates.certs_dir = temp.path().join("dehydrated/certs");
         config.nginx.root_dir = temp.path().join("nginx");
-        config.nginx.inputs_dir = temp.path().join("router-hub/nginx");
+        config.nginx.inputs_dir = temp.path().join("maestro/nginx");
         config.commands.openssl = openssl;
 
         let stores = Stores::load(&config).await.unwrap();
@@ -706,7 +717,7 @@ mod tests {
         config.paths.data_dir = temp.path().join("data");
         config.certificates.certs_dir = temp.path().join("certs");
         config.nginx.root_dir = temp.path().join("nginx");
-        config.nginx.inputs_dir = temp.path().join("router-hub/nginx");
+        config.nginx.inputs_dir = temp.path().join("maestro/nginx");
 
         let stores = Stores::load(&config).await.unwrap();
         assert!(!stores.firewall_policy.read().await.enabled);

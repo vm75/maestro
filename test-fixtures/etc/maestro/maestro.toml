@@ -3,13 +3,13 @@ test_mode = true
 [server]
 bind = "127.0.0.1"
 port = 3030
-auth_token = "router-hub-test-token"
+auth_token = "maestro-test-token"
 allowed_origins = ["*"]
 
 [paths]
 data_dir = "."
 runtime_dir = "../../var/run"
-log_file = "../../var/log/router-hub.log"
+log_file = "../../var/log/maestro.log"
 hosts_add = "../../router/hosts.add"
 dnsmasq_conf_add = "../../router/dnsmasq.add"
 
@@ -18,7 +18,7 @@ dehydrated = "../../certs/dehydrated"
 
 [asus_ui]
 enabled = false
-rendered_page = "../../router/router-hub.asp"
+rendered_page = "../../router/maestro.asp"
 
 [services]
 init_dir = "../init.d"

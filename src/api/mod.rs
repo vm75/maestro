@@ -16,8 +16,8 @@ use axum::{
 };
 use serde::Serialize;
 
-const FAVICON_PNG: &[u8] = include_bytes!("../../router-hub.png");
-const LOGO_SVG: &[u8] = include_bytes!("../../router-hub.svg");
+const FAVICON_PNG: &[u8] = include_bytes!("../../maestro.png");
+const LOGO_SVG: &[u8] = include_bytes!("../../maestro.svg");
 
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -63,8 +63,8 @@ pub fn app(state: AppState) -> anyhow::Result<Router> {
         .route("/favicon.ico", get(logo_svg))
         .route("/favicon.svg", get(logo_svg))
         .route("/favicon.png", get(favicon_png))
-        .route("/router-hub.png", get(favicon_png))
-        .route("/router-hub.svg", get(logo_svg))
+        .route("/maestro.png", get(favicon_png))
+        .route("/maestro.svg", get(logo_svg))
         .route("/healthz", get(health))
         .route("/api/version", get(version))
         .nest("/api", api)

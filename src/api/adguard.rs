@@ -584,7 +584,7 @@ pub async fn update_rewrites(
         }
         if managed.contains(&domain.to_ascii_lowercase()) {
             return Err(ApiError::bad_request(format!(
-                "DNS rewrite for nginx site {domain} is managed by Router Hub"
+                "DNS rewrite for nginx site {domain} is managed by Maestro"
             )));
         }
         let entry = RewriteEntry { domain, answer };

@@ -10,7 +10,8 @@ use serde_json::{Map, Value};
 use crate::{models::NginxObjectKind, nginx};
 
 pub type Settings = Map<String, Value>;
-pub const SETTINGS_PREFIX: &str = "# router-hub-settings: ";
+/// Maestro owns settings metadata embedded in generated nginx objects.
+pub const SETTINGS_PREFIX: &str = "# maestro-settings: ";
 
 /// Named budgets are shared per client IP across every assignment of that name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -717,7 +718,7 @@ pub(crate) fn require_migrated_input(config: &crate::config::AppConfig, name: &s
         ensure_managed_path(config, &legacy)?;
         if legacy.try_exists()? {
             bail!(
-                "legacy nginx inputs found; stop Router Hub and run migrate-nginx-inputs before starting this version"
+                "legacy nginx inputs found; stop Maestro and run migrate-nginx-inputs before starting this version"
             );
         }
     }
@@ -1154,7 +1155,7 @@ impl Drop for FileTransaction {
 }
 
 /// Move current-format legacy inputs without altering active nginx configuration.
-/// Run while Router Hub is stopped. Conflicting destinations are never overwritten.
+/// Run while Maestro is stopped. Conflicting destinations are never overwritten.
 pub fn migrate_inputs(config: &crate::config::AppConfig) -> Result<usize> {
     use std::fs;
     let mut names = BUNDLE
@@ -1308,7 +1309,7 @@ pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
                     "-days",
                     "3650",
                     "-subj",
-                    "/CN=router-hub-default.invalid",
+                    "/CN=maestro-default.invalid",
                     "-keyout",
                     temporary_key
                         .to_str()
@@ -1346,10 +1347,7 @@ pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
             .file_name()
             .ok_or_else(|| anyhow::anyhow!("nginx config path has no filename"))?
             .to_os_string();
-        name.push(format!(
-            ".before-router-hub-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        name.push(format!(".before-maestro-{}", uuid::Uuid::new_v4().simple()));
         let backup = config.nginx.config_path.with_file_name(name);
         ensure_managed_path(config, &backup)?;
         let mut file = fs::OpenOptions::new()
@@ -1389,7 +1387,7 @@ mod tests {
     fn bootstrap_config(root: &std::path::Path) -> crate::config::AppConfig {
         let mut config = crate::config::AppConfig::default();
         config
-            .apply_test_mode(&root.join("test-fixtures/etc/router-hub/router-hub.toml"))
+            .apply_test_mode(&root.join("test-fixtures/etc/maestro/maestro.toml"))
             .unwrap();
         config.test_mode = false;
         // Existing certificate material avoids needing an external command in
@@ -1450,7 +1448,7 @@ mod tests {
     fn migration_config(root: &std::path::Path) -> crate::config::AppConfig {
         let mut config = crate::config::AppConfig::default();
         config.nginx.root_dir = root.join("nginx");
-        config.nginx.inputs_dir = root.join("router-hub/nginx");
+        config.nginx.inputs_dir = root.join("maestro/nginx");
         std::fs::create_dir_all(config.nginx.root_dir.join("settings")).unwrap();
         config
     }
@@ -1722,7 +1720,7 @@ routes = [{path = "/static/", limit_policy = "assets"}]
         let temp = tempfile::tempdir().unwrap();
         let mut config = crate::config::AppConfig::default();
         config.nginx.root_dir = temp.path().into();
-        config.nginx.inputs_dir = temp.path().join("router-hub/nginx");
+        config.nginx.inputs_dir = temp.path().join("maestro/nginx");
         let mut global = limits();
         global.site_defaults = json!({"limit_policy":"api"}).as_object().unwrap().clone();
         let files = shared_files(&config, &global).unwrap();
@@ -1825,7 +1823,7 @@ routes = [{path = "/static/", limit_policy = "assets"}]
         let temp = tempfile::tempdir().unwrap();
         let mut config = crate::config::AppConfig::default();
         config.nginx.root_dir = temp.path().into();
-        config.nginx.inputs_dir = temp.path().join("router-hub/nginx");
+        config.nginx.inputs_dir = temp.path().join("maestro/nginx");
         std::fs::create_dir(temp.path().join("settings")).unwrap();
         std::fs::write(temp.path().join("settings/allowed_ips.txt"), "192.0.2.0/24").unwrap();
         std::fs::write(
@@ -1908,7 +1906,7 @@ routes = [{path = "/static/", limit_policy = "assets"}]
         let prefix = temp.path().join("opt");
         let mut config = crate::config::AppConfig::default();
         config.nginx.root_dir = prefix.join("etc/nginx");
-        config.nginx.inputs_dir = prefix.join("etc/router-hub/nginx");
+        config.nginx.inputs_dir = prefix.join("etc/maestro/nginx");
         let temp_dir = prefix.join("var/tmp/nginx");
         let mut global = GlobalSettings::default();
         global.shared.insert(
@@ -1953,7 +1951,7 @@ routes = [{path = "/static/", limit_policy = "assets"}]
         let temp = tempfile::tempdir().unwrap();
         let mut config = crate::config::AppConfig::default();
         config.nginx.root_dir = temp.path().join("nginx");
-        config.nginx.inputs_dir = temp.path().join("router-hub/nginx");
+        config.nginx.inputs_dir = temp.path().join("maestro/nginx");
         fs::create_dir_all(&config.nginx.root_dir).unwrap();
         let original = config.nginx.root_dir.join("original.conf");
         let added = config.nginx.root_dir.join("added.conf");
@@ -1992,7 +1990,7 @@ routes = [{path = "/static/", limit_policy = "assets"}]
             ..Default::default()
         };
         config.nginx.root_dir = root.into();
-        config.nginx.inputs_dir = temp.path().join("router-hub/nginx");
+        config.nginx.inputs_dir = temp.path().join("maestro/nginx");
         config.nginx.config_path = root.join("nginx.conf");
         config.nginx.domain_upstream_map_path = root.join("conf.d/02_domain_upstream_map.conf");
         config.nginx.subdomain_upstream_map_path =

@@ -11,17 +11,17 @@ fi
 exec </dev/ttyAMA0 >/dev/ttyAMA0 2>&1
 echo 'Router lab: mounting the repository and starting setup-alpine.'
 modprobe 9pnet_virtio
-mkdir -p /mnt/router-hub
-mount -t 9p -o trans=virtio,version=9p2000.L,ro router-hub /mnt/router-hub
+mkdir -p /mnt/maestro
+mount -t 9p -o trans=virtio,version=9p2000.L,ro maestro /mnt/maestro
 
 # Do not copy the automatic install hook into the installed system's inittab.
 sed -i '\|^::wait:/bin/sh /etc/router-lab/install.sh$|d' /etc/inittab
 # init.sh only attaches this overlay after creating a new disposable disk.
 # Keep Alpine's recursive /mnt cleanup away from the repository mount.
-SYSROOT=/mnt/router-lab ERASE_DISKS=/dev/vda setup-alpine -f /mnt/router-hub/lab/aarch64/setup-alpine.answers
+SYSROOT=/mnt/router-lab ERASE_DISKS=/dev/vda setup-alpine -f /mnt/maestro/lab/aarch64/setup-alpine.answers
 
 echo 'Router lab: provisioning the installed disk.'
-sh /mnt/router-hub/lab/aarch64/installer/provision-installed.sh
+sh /mnt/maestro/lab/aarch64/installer/provision-installed.sh
 
 echo 'Router lab: installation and provisioning finished. Powering off now. make run-lab on the host.'
 poweroff
