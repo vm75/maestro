@@ -62,10 +62,10 @@ Reference: `internal/modules/updates/module.go`; tests: `internal/modules/update
 | Reference operation | Input/schema requirements | Behavior and privilege boundary | Current status |
 | --- | --- | --- | --- |
 | `updates_status` | none | Cached package/reboot status for APT, DNF, Pacman, Zypper without root. | **modeled**; no acceptance evidence |
-| `updates_refresh` | none | Refresh metadata only; Pacman isolated checkupdates db; helper required. | **gated**; no acceptance evidence |
-| `updates_install` | confirm=true / reference global destructive confirmation | Normal native upgrade without changing repo policy; helper required; report interruption. | **gated**; no acceptance evidence |
-| `packages_install` | packages (1–32 names, whitespace-delimited) | Native named repository install with package validation; Arch no partial upgrade. | **not started**; no acceptance evidence |
-| `dependencies_install` | target=podman/docker/samba/nfs/virtualization/incus | Install selected validated native provider dependencies; no unreviewed repo or group changes. | **not started**; no acceptance evidence |
+| `updates_refresh` | none | Refresh metadata only; Pacman isolated checkupdates db; helper required. | **implemented** in source; no native acceptance evidence |
+| `updates_install` | confirm=true / reference global destructive confirmation | Normal native upgrade without changing repo policy; helper required; report interruption. | **implemented** in source; no native acceptance evidence |
+| `packages_install` | packages (1–32 names, whitespace-delimited) | Native named repository install with package validation; Arch no partial upgrade. | **implemented** in source; no native acceptance evidence |
+| `dependencies_install` | target=podman/docker/samba/nfs/virtualization/incus | Install selected validated native provider dependencies; no unreviewed repo or group changes. | **implemented** in source; no native acceptance evidence |
 
 ### Native shares / setup
 
@@ -213,7 +213,7 @@ Reference: `internal/declarative/backup_tools.go`; tests: `internal/declarative/
 | System systemd read/log | Direct read where host permits | Direct read | Auth and log bounds | Source only; partial reads pending |
 | System systemd write | **Denied** with reason when helper unavailable | `sudo -n -- /usr/local/libexec/maestro-admin`; trusted policy allowlist and canonical ID | Workload-config allowlist **and** helper root policy; no managed units/maestro.service | Client/helper code committed; no native validation |
 | Package metadata and cached status | Direct read where permitted | Direct read | Manager detection, parsed bounds, correct stale markers | Fixture tests only |
-| Package refresh/upgrade/install/dependency setup | **Denied**; cached reads continue | **Currently denied pending helper verbs** | Policy, package list/type, native repo rules, audit, cancellation | Not yet implemented in helper |
+| Package refresh/upgrade/install/dependency setup | **Denied**; cached reads continue | Conditionally authorized by explicit workload opt-in and private root `package_writes` policy | Policy, exact native programs/verbs, validated package names, lock, bounded output | Implemented in source, not native validated |
 | Rootless Podman, user-owned files, eligible Docker/Incus/libvirt sockets | Direct ordinary account | Same without unnecessary sudo | Native ownership, profile, readiness, journal, safe no-replace | Provider source exists; native pending |
 | Protected Samba/NFS publication/setup/password | **Denied**; reads/drafts still allowed | **Currently denied pending helper verbs** | Caller binding, private candidate validation, rollback, explicit confirmation | Not implemented in helper |
 | Helper installed/removed/revoked/unsafe/protocol mismatch | Graceful unavailable reason, never root fallback | Re-probe before each protected write, helper revalidates | Root-owned nonwritable parents, fixed paths/sudoers, UID, bounded JSON | Source/unit-negative only; native revocation pending |
@@ -245,3 +245,11 @@ Reference: `internal/declarative/backup_tools.go`; tests: `internal/declarative/
 - The root helper now independently rejects destructive system-service JSON without `confirm=true`, in addition to the shared REST/MCP check. Authorization remains the bounded caller UID and root policy; a separate privileged sudo-granted workload account should itself be treated as highly trusted.
 
 - Helper client output is now read-bounded at 16 KiB plus one byte before decoding; it never calls an unbounded `wait_with_output`. Client stat-checks the private root policy before sudo, and the helper rechecks internally. The router-only build rejects accidental runtime Linux mode rather than exposing incomplete Linux functionality. No binary/guest verification yet.
+
+### Follow-on source implementation (validation still pending)
+
+- `f68ebb6b2cd4`: Linux helper-only fixed native package operations and pinned reference package-name/dependency mappings, including all four package managers and root-owned isolation; no dynamic command, version, repository selector or script launcher.
+- `2e9d498c6180`: versioned helper request adds `package_refresh`, `package_upgrade`, `package_install`, `dependency_install` with independent root policy `package_writes`, confirmation and bounded results.
+- `4f59f1c2ec53`, `04526d3c36fe`, `79387c4541d4`: non-root coordinator and HTTP/MCP jobs route protected package operations through helper, preserve cached reads, add named/dependency API schemas and Updates UI controls.
+- `f83f16732139`, `652d0bff698d`: owner-only persistent session store, 256-bit browser cookies, expiry checks, token-rotation invalidation and durable revocation; first-run administrator/password support remains missing.
+- **All of the above are implementation/source-level only.** Compilation, lint, browser, official MCP SDK and native two-mode package transactions are pending; tests in source are not evidence of execution.

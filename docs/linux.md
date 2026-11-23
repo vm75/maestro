@@ -72,7 +72,8 @@ The root-owned private policy file is fixed at
 {
   "version": 1,
   "workload_uid": 1001,
-  "system_units": ["example.service"]
+  "system_units": ["example.service"],
+  "package_writes": false
 }
 ```
 
@@ -85,6 +86,16 @@ restricted sudoers line for a **reviewed** account is:
 ```text
 <workload-account> ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/maestro-admin ""
 ```
+
+The default `package_writes: false` denies package mutations in the
+root-owned policy. Enabling package operations also requires
+`[system].allow_package_writes = true` in the non-root Maestro config,
+an authorized helper matching protocol 1 and a supported native manager.
+Native package and dependency operations use fixed root-owned executables,
+validate 1–32 repository names, disallow URLs/flags/versions/repository
+overrides and do not execute a shell. Package refresh and installation may
+change the host substantially: review native package-manager state first.
+Do not approve this policy on production hosts until native acceptance.
 
 The placeholder must be replaced and the rule reviewed with `visudo`. Do not
 copy a blanket sudo rule, add `SETENV`, install a setuid helper or run the
@@ -122,19 +133,39 @@ Generated Maestro application units and Maestro's own service are reserved.
 Enabling/disabling a unit changes its boot policy without starting/stopping it.
 Service details and bounded journals are read without unnecessary elevation.
 
-## Package update status and gated writes
+## Package status, upgrades and dependency installation
 
-The Updates page identifies APT, DNF, Pacman and Zypper and reads cached
-candidates and reboot indicators with ordinary host permissions.
-`[system].allow_package_writes` is an independent administrator policy flag
-(default `false`). **Enabling this flag does not enable package writes yet:**
-the current code deliberately rejects refresh/upgrade with
-`helper_routing_pending` until the complete root-helper package verbs,
-argument policy, interruption handling and native acceptance are implemented.
-Named package installation and dependency setup are also still missing.
-The Linux server must never attempt them by running itself as root.
-Pacman's isolated `checkupdates` and native upgrade behavior remain part
-of the required implementation and test plan.
+Cached APT, DNF, Pacman and Zypper updates remain available under ordinary
+permissions without a helper. The Linux-only helper now contains fixed verbs
+for metadata refresh, regular native upgrades, named repository package
+installation, and predefined Podman/Docker/Incus/libvirt/Samba/NFS dependencies.
+The HTTP and MCP tool schemas enforce explicit `confirm=true` for destructive
+operations; the helper independently validates them, and execution is denied
+unless both non-root configuration and private root-owned policy permit writes.
+
+`[system].allow_package_writes = true` **does not itself elevate Maestro**.
+The optional `maestro-admin` must also be installed and narrowly authorized.
+The Updates page reports why protected actions are disabled, while cached
+status remains visible. Named and dependency installation are serialized
+management jobs, subject to native package locks, repository signatures and
+transaction interruption. On Arch, named package installation includes a full
+native upgrade to avoid partial upgrades.
+
+**Implementation is not native-accepted:** the helper protocol, Linux release
+artifact and two-mode deployment remain unverified on disposable guests. No
+package transaction has been validated on a host in this increment. Treat
+these newly implemented verbs as development-only until acceptance.
+
+## Durable browser session state
+
+Linux sessions now use 256-bit random bearer cookie values and persist only
+their SHA-256 digests and bounded expiry times in
+`[paths].data_dir/linux-auth/browser-sessions.json`, under an owner-only
+directory. A token rotation invalidates previously persisted sessions.
+Logout persists revocation; malformed, symlinked or unsafe session state
+fails closed. Password-based first-run administrator setup is not yet
+implemented: the browser still uses the configured token for initial sign-in,
+and the mandatory credential/authentication parity gate remains open.
 
 ## Workload writes and recovery
 
