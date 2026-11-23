@@ -307,3 +307,51 @@ the narrow sudoers command allowlist**; the main process receives no ambient
 root capabilities. Avoid blanket sudo, `SETENV`, or additional allowlisted
 programs. This boundary requires a disposable-guest security review in both
 helper-free and helper-enabled deployments before production use.
+
+## Continued Phase 2 implementation status (unverified)
+
+The Linux release build now stages three separate executables with checksums:
+`maestro` (non-root HTTP/UI server), `maestro-admin` (optional installed
+restricted root helper), and `maestro-mcp-stdio` (non-root agent transport).
+The new `scripts/install-linux.sh` offers a reviewed dry run, non-root
+systemd service installation, explicit helper opt-in/removal and conservative
+existing-binary rollback. It preserves workload configuration and does not
+install packages or change groups automatically. **These new installation
+paths have not passed disposable-guest acceptance; do not deploy them on
+production hosts yet.**
+
+The privileged helper policy now has independent default-deny flags:
+
+```json
+{
+  "version": 1,
+  "workload_uid": 1001,
+  "system_units": [],
+  "package_writes": false,
+  "samba_password": false
+}
+```
+
+Protected package writes additionally require
+`[system].allow_package_writes = true`; Samba password changes require
+`[system].allow_share_writes = true`. These TOML flags authorize neither
+capability alone. A matching root-owned helper policy, strict sudoers rule,
+native backend readiness and explicit operation confirmation remain required.
+The Samba password tool never accepts a selected account; the root helper
+resolves the non-root sudo caller and passes the password only via stdin.
+Samba/NFS candidate publication and server setup are still unavailable.
+
+Configuration's new backup panel is **metadata-only and non-restorable**.
+Native capture, manifests, verification, publication, interrupted recovery
+and actual restores must not be inferred from the inventory. The Configuration
+page has typed storage/share editor forms over the existing YAML store; it
+cannot safely complete every reference definition/next-start workflow yet.
+The existing Linux `server` settings still require single-authority migration,
+and first-run administrator username/password authentication is missing.
+
+The new shared MCP dispatcher and stdio executable require official SDK
+contract tests, including protocol negotiation, schema parity and error
+handling. The separate Agent Access and Activity UI flows have not been
+browser-accepted. Consult the
+[Phase 2 parity matrix](plans/proposed/server-man-phase2-parity-matrix.md)
+before claiming completed Server Man functionality.

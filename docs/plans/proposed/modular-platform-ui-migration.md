@@ -351,6 +351,14 @@ Source commits: `584ccc22ad89a7b5145c876ed67467d509c06d73`, `70b9a8cffc58366e30e
 
 **Next execution:** restore a Rust-enabled disposable Linux workspace; compile `--no-default-features --features linux` and `linux-ui` and router default with `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` separately; use lint/compiler findings to correct this unverified work. Then run non-root/no-helper tests, helper install with restricted sudo in an isolated guest, and revocation/ownership/timeout/confirmation tests. Only then proceed to implement/enable package, dependency, native share, backup and installer helper verbs. Do not enable protected mutations just to pass fixture checks. Tests/CI, Rust compilation, disposable guest native validation, browser acceptance and hardware resource checks **have not been run for these commits**. Existing earlier test records cannot verify the new changes. All unfinished checklist items remain unchecked.
 
+### Phase 2 continued implementation stream — 2026-11-23 (verification pending)
+
+The branch continued beyond the initial privilege increment. See the [living parity matrix](server-man-phase2-parity-matrix.md) for concrete source paths, operation-by-operation states and outstanding native gates. Added in source: fixed helper package refresh/upgrade/named/dependency installation with independent root-owned opt-in; source-level Samba password administration bound to the trusted sudo caller; private durable browser sessions; a reviewed non-root Linux installer with optional helper selection; shared MCP dispatcher and Linux stdio binary; missing Configuration/Agent Access/Activity screens; strict typed resource preview/apply and read-only non-restorable backup-input inventory. Protected Samba/NFS publication, full backup capture/recovery, administrator setup and 100% provider parity are **not complete**. Deferred typed publication still refuses safely.
+
+The non-root systemd service template was corrected so the explicitly authorized `sudo -n` helper is not accidentally blocked by `NoNewPrivileges`/empty capability bounding settings. It still runs the main daemon as the chosen workload owner and requires the restricted root-owned sudoers/policy boundary. This is a design correction **pending native security acceptance**, not a privilege-boundary signoff. Lazy Linux UI assets are explicitly embedded only in the `linux-ui` build.
+
+**No build or native acceptance was executed for the continued source commits in this connector-only session.** Phase 2 checkboxes remain unchecked. Resume with an actual Rust/npm/disposable Linux test environment, fix compilation and source-level contract errors, then complete the still-missing operations in reference dependency order. Do not merge/release or change CI triggers.
+
 ### Step 4 prerequisite — Platform builds and router resource baseline
 
 Complete this prerequisite before adding more Linux-only dependencies or

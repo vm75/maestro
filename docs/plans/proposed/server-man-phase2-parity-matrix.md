@@ -74,7 +74,7 @@ Reference: `internal/modules/shares/module.go; internal/modules/shares/setup.go;
 | Reference operation | Input/schema requirements | Behavior and privilege boundary | Current status |
 | --- | --- | --- | --- |
 | `shares_list` | protocol optional | Read managed and existing Samba/NFS definitions, connection/export state without private files. | **modeled**; no acceptance evidence |
-| `shares_samba_password` | password; caller identity fixed by helper | Set password for trusted workload account only; no secret logging or account targeting. | **not started**; no acceptance evidence |
+| `shares_samba_password` | password; caller identity fixed by helper | Set password for trusted workload account only; no secret logging or account targeting. | **implemented**; no acceptance evidence |
 | `shares_setup` | protocol and confirm; inspect full Go schema | Review/install/setup share service with bounded native change and rollback. | **not started**; no acceptance evidence |
 
 ### Managed configuration
@@ -85,7 +85,7 @@ Reference: `internal/declarative/module.go`; tests: `internal/declarative/module
 | --- | --- | --- | --- |
 | `managed_config_read` | none | Read single private authoritative YAML and revision, not private-file contents. | **modeled**; no acceptance evidence |
 | `managed_config_validate` | content (YAML) | Reject duplicate keys, custom tags, identity/reference/cycle errors; no mutation. | **modeled**; no acceptance evidence |
-| `managed_config_health` | none | Report invalid settings/inputs without blocking inspection. | **not started**; no acceptance evidence |
+| `managed_config_health` | none | Report invalid settings/inputs without blocking inspection. | **modeled**; no acceptance evidence |
 | `managed_config_plan` | content and revision; inspect Go schema | Deterministic revision/fingerprint preview with readiness and ownership constraints. | **modeled**; no acceptance evidence |
 | `managed_config_save` | content, revision, reviewed plan; inspect Go schema | Revision-checked, journaled write plus controlled native apply and recovery. | **gated**; no acceptance evidence |
 | `managed_apply_status` | none | Read durable per-resource pending/failure state. | **modeled**; no acceptance evidence |
@@ -137,9 +137,9 @@ Reference: `internal/declarative/edit.go`; tests: `internal/declarative/edit_tes
 
 | Reference operation | Input/schema requirements | Behavior and privilege boundary | Current status |
 | --- | --- | --- | --- |
-| `managed_config_model` | none | Return typed edit models without exposing private file contents. | **not started**; no acceptance evidence |
-| `managed_resource_plan` | kind, id, operation, definition, revision | Review typed add/update/delete without mutation, report downstream impact. | **not started**; no acceptance evidence |
-| `managed_resource_save` | kind, id, operation, definition, revision, fingerprint | Apply reviewed typed edit as safe authoritative transaction. | **not started**; no acceptance evidence |
+| `managed_config_model` | none | Return typed edit models without exposing private file contents. | **modeled**; no acceptance evidence |
+| `managed_resource_plan` | kind, id, operation, definition, revision | Review typed add/update/delete without mutation, report downstream impact. | **modeled**; no acceptance evidence |
+| `managed_resource_save` | kind, id, operation, definition, revision, fingerprint | Apply reviewed typed edit as safe authoritative transaction. | **gated**; no acceptance evidence |
 
 ### Revision history
 
@@ -148,7 +148,7 @@ Reference: `internal/declarative/history_tools.go`; tests: `internal/declarative
 | Reference operation | Input/schema requirements | Behavior and privilege boundary | Current status |
 | --- | --- | --- | --- |
 | `managed_config_history` | none | Bounded private revision list, no secret file contents. | **modeled**; no acceptance evidence |
-| `managed_config_history_read` | revision / exact target; inspect schema | Read verified byte-exact historical YAML including malformed recovery snapshot. | **not started**; no acceptance evidence |
+| `managed_config_history_read` | revision / exact target; inspect schema | Read verified byte-exact historical YAML including malformed recovery snapshot. | **modeled**; no acceptance evidence |
 | `managed_config_revert_plan` | revision, expected; inspect schema | Review revert of definitions only, not workload data. | **modeled**; no acceptance evidence |
 | `managed_config_revert` | revision, expected, reviewed fingerprint | Create new revision, owned-resource reconciliation, preserve data. | **gated**; no acceptance evidence |
 
@@ -176,7 +176,7 @@ Reference: `internal/declarative/backup_tools.go`; tests: `internal/declarative/
 
 | Reference operation | Input/schema requirements | Behavior and privilege boundary | Current status |
 | --- | --- | --- | --- |
-| `managed_backup_inventory` | none | Inventory authoritative config, private refs and native dependencies; metadata only; non-restorable. | **not started**; no acceptance evidence |
+| `managed_backup_inventory` | none | Inventory authoritative config, private refs and native dependencies; metadata only; non-restorable. | **modeled**; no acceptance evidence |
 | `managed_backup_prepare` | revision, destination, quiesce, deadlineSeconds | Reviewed capture, stopped workload and native exports, checksummed private manifest; non-restorable. | **not started**; no acceptance evidence |
 | `managed_backup_recovery_status` | none | Read durable stopped/resumed and staged/uncertain capture journal. | **not started**; no acceptance evidence |
 | `managed_backup_recover` | revision, reviewToken | Recover only previously running workloads, no restore/replay of capture. | **not started**; no acceptance evidence |
@@ -253,3 +253,35 @@ Reference: `internal/declarative/backup_tools.go`; tests: `internal/declarative/
 - `4f59f1c2ec53`, `04526d3c36fe`, `79387c4541d4`: non-root coordinator and HTTP/MCP jobs route protected package operations through helper, preserve cached reads, add named/dependency API schemas and Updates UI controls.
 - `f83f16732139`, `652d0bff698d`: owner-only persistent session store, 256-bit browser cookies, expiry checks, token-rotation invalidation and durable revocation; first-run administrator/password support remains missing.
 - **All of the above are implementation/source-level only.** Compilation, lint, browser, official MCP SDK and native two-mode package transactions are pending; tests in source are not evidence of execution.
+
+## Additional Phase 2 source increments — 2026-11-23 (not validated)
+
+Implementation continued on `feature/linux-phase2`, without resetting earlier work. The initial audit was expanded with the following source-level work. **No item here is marked accepted or native-verified.**
+
+| Area | New source paths | State | Explicit outstanding work |
+| --- | --- | --- | --- |
+| Optional privileged package operations | `src/platforms/admin_packages.rs`, `src/platforms/admin.rs`, `src/platforms/package_updates.rs` | Implemented in source; unverified | Review native manager exit codes/locks and dependency mappings, run denied/positive tests in both modes, verify interrupted package transactions |
+| Named package and dependency UI/API/MCP | `src/api/tools.rs`, `linux-web/src/Updates.svelte` | Implemented in source; unverified | Protocol/contract and browser tests; no unsafe fallback |
+| Durable browser sessions | `src/api/linux_session_store.rs`, `src/api/sessions.rs` | Implemented in source; unverified | Native persistence/revocation, cookie/Host/Origin test, administrator password setup and single-authority integration |
+| Linux non-root installer and helper opt-in | `scripts/install-linux.sh`, `scripts/build-release.sh` | Partially implemented; unverified | Clean/install/reinstall/upgrade/revocation in disposable Ubuntu/Debian, checksum authenticity, reviewed backend prerequisites, service/sudoers rollback and least-privilege audit |
+| MCP HTTP + stdio | `src/api/mcp.rs`, `src/bin/maestro-mcp-stdio.rs` | Partially implemented; unverified | Official SDK on both transports, protocol headers, error/structured results, cancellation and authentication; no Streamable HTTP native acceptance |
+| Configuration operations | `src/core/declarative/edit.rs`, `src/api/tools.rs` | Partially implemented; unverified | Typed native editor coverage, next-start mode, Server Man's server/access stanza, per-resource health and complete historical workflows |
+| Configuration, Activity, Agent access | `linux-web/src/{Configuration,Activity,AgentAccess}.svelte`, `src/api/linux_ui.rs` | UI/registry source present; unverified | Browser build/interaction/a11y, typed editors for all kinds, recovery banners and native testing |
+| Backup input inventory | `src/core/declarative/backup_inventory.rs`, `src/api/tools.rs` | Modeled metadata-only; unverified | Native VM dependencies, private manifest, actual checksummed capture, verification/publication, interruption/recovery. **Inventory is NOT a backup.** |
+| Samba password | `src/platforms/admin_shares.rs`, `src/platforms/admin.rs`, `linux-web/src/Shares.svelte` | Implemented in source behind independent default-deny policies; unverified | Native Samba tests, caller UID binding, no secret leak, permission revocation, helper opt-in and rollback |
+| Protected Samba/NFS publication and setup | Reference `internal/modules/shares/definitions.go` | **Not implemented** | Root-owned candidate validation, protected managed fragments, atomic publication/rollback, NFS, native service setup |
+| Router runtime/dependency isolation | `asuswrt` feature gates unchanged, new Linux-only binary targets | Not validated | Rust feature graph, cross-build/IPK, on-router resource and API parity |
+| Full Server Man backup/capture/recovery | Reference `internal/declarative/backup_*.go` | **Not implemented** beyond metadata inventory | All native capture, verification, publish/release/recover tests and UI/API/MCP |
+
+**Important corrections during static review:** the initial Linux service unit's `NoNewPrivileges=yes` and empty capability bounding set conflicted with optional `sudo -n` escalation; the reviewed installer now preserves a non-root main account while allowing *only* its explicitly scoped sudoers helper. The embedded Linux asset map now includes all new lazy pages. Helper probe struct fields and cancellation rules for protected package/typed writes were corrected. Native code behavior is not implied by these corrections.
+
+**Known remaining blockers and divergence:**
+- The `server` settings in pinned Server Man's authoritative YAML still need migration; Maestro's Linux access/server config must not remain in competing TOML/YAML authorities.
+- First-run administrator password hashing, credential login/setup, durable administrator sessions and revocation must be integrated with the single-authority configuration.
+- Rootless Compose, Docker, libvirt, Incus, managed disk cloning, share publication and VM data acceptance remain unproven. Some providers intentionally gate native mutation.
+- `managed_resource_save` currently requires a reviewed fingerprint and supports only immediate apply; `next_start` fails closed rather than pretending parity. The typed UI currently covers only storage/share forms.
+- The read-only backup inventory omits actual data capture/verification/publish and explicitly marks native dependencies unknown.
+- The API includes fewer than the 60 source-declared Server Man public tools. Verify all reference schemas and response shapes with official SDK fixtures and complete the missing tools.
+- No Rust toolchain, npm build, integration or native test environment was available for these source commits. **Do not deploy the new helper/installer or accept Phase 2 based on these changes.**
+
+**Validation recovery instructions:** use a disposable checkout on this exact branch; run formatting, Clippy, `cargo test --no-default-features --features linux --all-targets`, `cargo test --no-default-features --features asuswrt --all-targets`, Linux UI `npm ci && npm run build`, separate release binaries (including helper/stdin MCP), API/browser/official MCP fixtures, restricted sudo helper-free/installed guest tests, then resource measurements on ASUS hardware. Fix the resulting compiler/browser/native findings before enabling production operations.
