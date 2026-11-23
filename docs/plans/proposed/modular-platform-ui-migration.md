@@ -1,6 +1,6 @@
 # Modular platform and UI migration: Router Hub to Maestro
 
-**Status:** Phase 1 and Phase 1.5 accepted. Phase 2 implementation is active on `feature/linux-phase2`. Compile-time platform profiles, Linux Svelte shell & operations bridge, systemd services, resource monitoring, package updates, and declarative engine foundation are implemented and passing validation.
+**Status:** Phase 1 and Phase 1.5 accepted. Phase 2 implementation is active on `feature/linux-phase2`. Compile-time platform profiles, Linux Svelte shell & operations bridge, systemd services, resource monitoring, package updates, and declarative engine foundation have initial implementation and validation; full Server Man feature parity and native Linux acceptance are **not** complete. Phase 2 requires 100% of the **existing, implemented** Server Man feature set, including partial/in-progress shipped capabilities. See the Phase 2 parity contract and hard gate below.
 **Phase 1.5 branch:** `refactor/rebrand-maestro`  
 **Baseline:** `vm75/router-hub` `main` at `5e2013f031c965cf0381f868c541d60bb5eac602` (v0.10.4)  
 **Source projects:** [router-hub](https://github.com/vm75/router-hub), [server-man](https://github.com/vm75/server-man)  
@@ -19,19 +19,19 @@ Create one modular Rust management application with common modules, platform-spe
 4. **STOP M1:** complete automated, package, and real ASUS-router feature-parity acceptance. Do not begin the next workstream or merge an incomplete Phase 1.
 5. **Phase 1.5:** rebrand the validated project, including packaging/upgrade compatibility and GitHub repository collision resolution. Do not port Server Man features during the rebrand.
 6. **STOP M1.5:** verify rebranded releases and existing-install migration. Only then begin Phase 2.
-7. **Phase 2:** establish the router baseline and compile-time profile gate, then integrate the Svelte Linux shell and operation infrastructure, Linux services/monitoring/updates, Server Man's declarative Applications engine and native providers, then storage/shares and optional MCP/backup follow-ups.
+7. **Phase 2:** establish the router baseline and compile-time profile gate; inventory **every existing Server Man capability**; port Linux Svelte/UI/auth, operations, unprivileged workload-account execution with a separate constrained Linux-only privileged helper, services/monitoring/updates/dependency installation, complete declarative Applications/VM/storage/shares/configuration management, production Linux installation, MCP HTTP+stdio and existing backup inventory/capture/recovery behavior; then prove 100% behavioral parity and native acceptance. Full restorable backup/restore, not yet supplied by Server Man, is a separate future milestone.
 
 **CI hold:** No automatic GitHub Actions CI on the planning/implementation branch before all three Phase 1 steps are implemented. The existing `ci.yml` triggers are already limited to pushes on `main` and `ci/**`, plus explicit `workflow_dispatch`; there is no ordinary PR trigger. Keep this branch named `refactor/modular-architecture`, **do not push it to `ci/**`, do not merge it into `main`, do not push `v*` tags, and do not manually dispatch CI until Phase 1 implementation is complete and ready for validation. No workflow edits are needed merely to achieve this hold. Keep existing `main` CI and separate manually triggered NGINX/toolchain workflows intact.
 
 ## Scope, boundaries, and non-goals
 
 - **One backend:** Rust modular monolith, one service process per host. No dynamic Rust/JS plugins, microservices, or permanent Go sidecar.
-- **Platforms:** `asuswrt` and `linux` initially; model future routers as adapters rather than branching feature logic throughout the code.
+- **Platforms:** `asuswrt` and `linux` initially; model future routers as adapters rather than branching feature logic throughout the code. **Runtime identity/privilege is platform-specific:** Maestro runs as root on the router and as a non-root workload-owner account on Linux. Linux-only privileged operations are delegated to a restricted helper, never by elevating the whole server.
 - **Core vs platform:** feature behavior and API contracts are shared where possible; platform operations depend on explicit adapters.
 - **UI:** one persistent Dashboard; navigation tabs are logical groups that contain one or more feature sections. Each feature may contribute zero or more dashboard widgets. UI availability is driven by backend capabilities and permissions, never trusted as backend authorization.
 - **ASUS:** preserve current build-free, offline-capable, embedded HTML/JS + ASP integration; do not require npm/Svelte, an external CDN, or runtime asset downloads on a router.
 - **Linux:** keep current Router Hub real-Linux integration operational during Phase 1. Svelte 5/Vite is introduced in Phase 2 and compiled to static assets at build/release time.
-- **Configuration:** preserve current Router Hub TOML and JSON, NGINX sites, state paths and migrations in Phase 1. Preserve Server Man's workload YAML semantics during the subsequent Rust port; avoid two authoritative server-settings documents.
+- **Configuration:** preserve current Router Hub TOML and JSON, NGINX sites, state paths and migrations in Phase 1. For Linux Phase 2, preserve Server Man's **single authoritative private YAML** semantics for Linux server settings and managed applications/storage/shares, including revision-checked edits and restart-required server settings. Router configuration remains unaffected. Any translation into existing Maestro internals must retain an equivalent one-authority Linux user workflow; do not silently split Server Man settings across competing TOML/YAML documents.
 - **Name:** do not rename packages, executables, API paths, menu labels, or config directories until after the M1 parity gate.
 - **No functionality ported from Go during Phase 1:** no Docker/Podman/Incus/libvirt, Samba/NFS, Linux package-management features, new browser-session auth, or MCP.
 - **No unplanned backend changes:** no new firewall implementation, NGINX renderer replacement, authentication redesign, storage-format conversion, or upgrade-flow redesign during structural work.
@@ -63,7 +63,7 @@ A **tab is not a backend module**. An Applications tab will aggregate all suppor
 | Applications: containers and VMs | None | Unsupported | Not in Phase 1 | Server Man declarative coordinator/providers |
 | Storage, Samba/NFS shares | None | Unsupported | Not in Phase 1 | Server Man |
 | Linux OS package updates | None | Unsupported | Not in Phase 1 | Server Man |
-| MCP / agent access | None | Unsupported | Not in Phase 1 | Optional Server Man port |
+| MCP / agent access | None | Unsupported | Not in Phase 1 | Required Server Man HTTP + stdio feature parity |
 
 Every module should distinguish **unsupported** (not a target), **disabled** (configured off), **unavailable/degraded** (supported but dependency or permission missing), and **ready**. Do not hide missing dependencies inside generic disabled status. The backend rejects operations for unsupported/disabled modules even if a caller bypasses the UI.
 
@@ -236,7 +236,65 @@ Do not start porting the Go Server Man capabilities until acceptance.
 
 ## Phase 2 — port Server Man features into Maestro
 
-Keep the Go implementation available as the behavior/specification reference. Implement vertical slices, each with Rust domain tests, API contract tests, frontend integration and native Linux acceptance. Do not translate Go line by line or erase its native recovery guarantees.
+Keep the Go implementation available as the behavior/specification reference. Implement vertical slices, each with Rust domain tests, API contract tests, frontend integration and native Linux acceptance. Do not translate Go line by line or erase its native recovery guarantees. **Deliver all existing reference features, not a subset.**
+
+## Phase 2 Linux 100% Server Man parity contract
+
+**Non-negotiable product decision (2026-11-23):** Maestro's Linux process runs **unprivileged** as the selected workload account. Maestro's router process continues to run as **root**; router behavior is unchanged. Linux management of privileged host resources uses a small, separate, root-owned **Maestro privileged helper**, not a root-running web/API process. Phase 2 must deliver **100% of the features actually implemented in Server Man** at the frozen reference baseline, not just similarly named pages/modules or a reduced MVP. This section supersedes earlier optional-port wording anywhere in this plan.
+
+**Reference snapshot:** `vm75/server-man` `main` commit `c1a9f32f5898146ae7ac339043b910b8e2a2c438` (2026-11-19). Keep that repository unchanged as the specification/fixture reference. A newer Server Man commit is not silently added to scope: explicitly review any desired re-baseline. Trace all features, tools, UI paths, backend behavior and tests from this **specific commit** before declaring the inventory complete. “100%” means feature and safety-semantic parity, not a literal Go→Rust translation, identical source structure, or installing Go alongside Rust. Retain existing Maestro features in addition to these Linux features.
+
+### Scope clarification: shipped behavior vs future aspirations
+
+- **Required:** Everything that works in the reference revision, including incomplete-but-implemented workflows, guardrails, error handling, tested edge cases, authentication and installation, UI, HTTP/MCP, release and operational tooling. Partially completed Server Man subsystems must retain their **actual capabilities and limitations**; do not silently omit them just because their broader project remains in progress.
+- **Required backup-related scope:** Existing backup input inventory, native dependency/export inspection, capture/preparation where implemented, checksummed private manifests/verification, backup journal and interrupted capture/publication/recovery operations and blockers, including corresponding UI/MCP behavior. Preserve the “captured is not restorable” distinction. Do not claim full backup/restore support.
+- **Not yet a Server Man feature:** Full verified end-to-end restorable backup/restore, unsupported provider types, native Arch certification and other proposals not implemented at the baseline. Track them as separate future work rather than making them a pretext to skip existing capture functionality. Existing Server Man test/acceptance gaps remain explicit and must be validated in Maestro's supported environments.
+- **No silent substitution:** If Maestro chooses a different internal implementation, configuration storage location, API path, or UI grouping, document a one-to-one behavior/operation mapping, migration/compatibility implications, and equivalent validation. No feature is considered waived without an explicit user-approved scope change. No unapproved “optional,” “stretch,” “future” or “out of scope” label for existing reference behavior.
+
+### Mandatory parity inventory before additional provider implementation
+
+Create and maintain `docs/plans/proposed/server-man-phase2-parity-matrix.md` (or an equivalent version-controlled, linked matrix) **as the first Phase 2 plan-hardening deliverable**. Seed it by auditing the reference commit's executable/installer/helper entry points, `internal/app` registry, all `internal/modules` and `internal/declarative` operations, `internal/auth`, `internal/mcp`, all `web/src/pages`/shared UI components, tests, README, architecture and design/operations documents. Do not rely only on README headings or approximate tool counts. Include every reference tool (Server Man's current SDK suite reports 55), arguments/schema, HTTP/MCP transport semantics, UI user journey and observable host effect.
+
+For **each distinct capability and important error/recovery case**, record:
+1. Stable reference ID, exact Server Man source/test paths and relevant reference test names.
+2. Expected behavior (inputs, outputs, permissions, state, boot vs current-run semantics, safety failures and recovery); whether baseline behavior is partial or fully operational.
+3. Maestro Rust module, tool/API, Linux Svelte view and test/evidence links (or `missing`); notes for intentionally different internals.
+4. Status: `not started` / `modeled` / `gated` / `implemented` / `fixture verified` / `native verified` / `accepted`. “Present in code” and simulated/mock success never equal `accepted`.
+5. Tests: Go contract comparison, Rust unit/API/schema parity, browser flow, non-root/privilege test, native disposable-host test when a host mutation is involved, cold boot/restart and recovery/fault test as relevant.
+6. Explicit blockers, ownership/risk, and any user-approved exception with rationale and source commit.
+
+The **minimum** inventory categories are below. These are *starting categories*, not an exhaustive list; source/test inspection must add omitted operations and behaviors.
+
+| Reference subsystem | Must be inventoried and ported |
+| --- | --- |
+| Linux dashboard/monitor | CPU, memory, networking, storage, disk I/O, thermal metrics, bounded sampler/history, process inventory/filter/sort, partial/stale/error presentation, responsive pages, light/dark theme and persisted UI expectations |
+| Auth/security/core | First-run administrator setup, credentials/password hashing, token fallback/access, durable sessions/logout, Host/Origin protections, limits, registry schema validation, read/write/destructive policy, serialized jobs, output bounds, audit and cancellation behavior |
+| Services | System and user unit inventory/details/logs, start/stop/restart/reload/enable/disable, generated-unit ownership routing, partial reads, boot semantics and least-privilege escalation |
+| Updates/dependencies | APT/DNF/Pacman/Zypper detection, cached listing, refresh/full upgrade, reboot indication, named package installation, selectable provider dependency installation, native repository/version policy, explicit share-server setup and error/interrupt recovery |
+| Declarative core | One authoritative Linux YAML/server settings, strict parsing and repair, private references, stable IDs, revisions/history/revert, validated plans, journaling and recovery, generated-artifact ownership/conflict inspection, metadata-only reconciliation and blocked mutation states |
+| Applications | Podman Quadlet, Podman Compose, Docker Compose, libvirt/KVM and local Incus VMs; typed definitions/editors, source/registered/runtime states, start/stop/restart vs boot policy, group partial state, logs, active/deferred change behavior, dependency ordering and failures |
+| Native prerequisite/readiness | Configuration-wide and per-resource actionable checks, missing binaries, permissions, cgroup/user manager/bus, engines/sockets, ports, mounted/readonly/missing data, network bindings, VM pools/networks/disks, stale/unknown, automatic global alert and explicit refresh |
+| Storage/VM data | Managed new directory and raw/qcow2 disk creation, expected-mount checks, safe no-replace publication, pinned local-image cloning, source checks, VM identities and native ownership, capacity and privilege boundaries |
+| Samba/NFS | Native read-only inventory, declarative owned fragments, typed share editors, publish/unpublish, candidate validation/rollback, preserving unmanaged data, Samba-password administration, package/service setup and helper delegation |
+| UI/operator workflow | All reference screens: Overview, Applications, Services, Updates, Configuration, File shares, Agent access, Activity/jobs, shared editors/confirmations, recovery, installation/readiness affordances and mobile/browser tests |
+| Installation/release | Source/release installer, dry-run/confirmation, backend selections, system-service installation under workload account, sudo-helper setup, preserved private config/token, package dependencies, reinstallation, upgrade and rollback/verification boundary |
+| MCP/API | Shared registry parity, HTTP JSON tools, MCP Streamable HTTP **and stdio**, official client negotiation/schema tests, tool error/structured results, connection instructions, Agent access UI, jobs and auth/write policy |
+| Partial backup/capture | Existing inventory/preflight, partial native/filesystem collection, private manifests, offline verification, captured-vs-restorable status, dependency/stopped-state checks, interrupted backup/workload/publication journals, reviewed resume/release/publish and startup safety blockers |
+
+### Linux privilege and runtime separation: mandatory design
+
+- **Main Linux server:** Run the web/API/MCP and declarative coordinator as an ordinary, configured **non-root workload account**. Preserve the same user's rootless Podman, user systemd manager and user-owned files; never perform blanket `chown`, run Podman as root, or silently switch an application to rootful execution. If the process starts as UID 0 in Linux production mode, refuse by default (provide only an explicit, documented, test-only exception if strictly needed); the root router build is unaffected.
+- **Separate Linux helper:** Add a small root-owned `maestro-admin` executable, compiled and packaged only for the Linux deployment, invoked per-request via a narrowly scoped `sudo -n` rule; **no setuid**, root web daemon, listening socket, general shell executor, arbitrary path/command arguments, dynamic plugin loader or persistent elevation. Its own binary and parent directories must be root-owned and non-writable by the workload account.
+- **Trusted request contract:** Versioned, size-bounded, typed structured requests over stdin; closed allowlist of fixed verbs, validated resource identities and canonical paths, fixed executable discovery/argv and timeouts; no unchecked environment variables or arbitrary shell. Validate again **inside** the helper after elevation, not only in the Rust caller. Keep the command and schema surface as small as possible; do not route read-only or user-owned actions through root.
+- **Allowed privileged domains:** Selected system-scope systemd operations, native package refresh/upgrade/named/dependency installation, and protected Samba/NFS candidate validation/publication/reload/server setup and Samba-password operations as required by the reference. Rootless containers, user services, user-owned workload YAML/history and ordinary monitoring remain unprivileged. Libvirt/Incus/Docker use correct delegated daemon/socket/group permissions where possible; no blanket elevation of their CLIs.
+- **Defense/recovery:** Helper-local lock and bounded output, safe file ownership/path handling, atomic no-replace writes and rollback, fixed sudoers executable path, audit without secrets, no privilege leakage via stderr/logs/MCP, robust timeout/interrupt semantics and explicit “helper unavailable/permission denied” capability diagnostics. Preserve the application's separate global job lock and approval/confirmation gates. Distinguish helper success from observed native-state verification.
+- **Installation:** Review-before-apply/dry run configures explicit account, groups, packages, root-owned helper, minimal sudoers policy, private state/config and the Linux systemd service **running as the workload owner**, including user-bus/lingering prerequisites. Do not silently modify host account membership or enable unrelated daemons. Validate from a normal non-root authenticated browser and standard MCP client. Demonstrate that removing the sudo permission blocks privileged actions while read-only/rootless features continue functioning.
+- **Router isolation:** The `asuswrt` Cargo profile has **no Linux helper, sudo logic, native Linux package installer, systemd service installer, Svelte assets or helper dependency in its runtime/build/deployment graph**. It continues to run as root using existing router command/platform adapters. Preserve its validated size/memory/startup/behavior.
+
+### Cross-reference and acceptance rule
+
+For each parity row, **Go reference test and implementation → Rust backend/API → Linux UI/MCP → native safety/privilege test → recorded evidence** must form a continuous chain. Every incomplete row is a Phase 2 blocker, unless marked as a *not-implemented-at-reference* future feature or covered by a specific user-approved scope exception. Do not treat an unavailable backend, simulated mode, mock, green CI, generated UI card, provider renderer or a documentation-only checklist as native acceptance. Reconcile documented feature lists, actual registry/tool surfaces, README and completed checkboxes before declaring any milestone done.
+
 
 ### Current Phase 2 branch review
 
@@ -246,12 +304,12 @@ present in that worktree. Native acceptance is tracked separately below.
 
 | Area | Implementation present | Adjustment after plan review |
 | --- | --- | --- |
-| Linux shell and operations | Embedded Svelte shell, tool registry, token browser sessions with Host/Origin checks, tracked jobs and audit | Finish administrator credentials and verify the browser and tool contracts. |
+| Linux shell and operations | Embedded Svelte shell, tool registry, token browser sessions with Host/Origin checks, tracked jobs and audit | Finish administrator credentials, durable sessions and complete reference tool/UI/permission contracts. |
 | Systemd, monitoring and updates | System/user inventory, journal, allowlisted actions, sampled metrics and package status/refresh/install across four managers | Verify mutations, boot persistence and package writes in disposable native guests. |
 | Declarative workloads | Typed YAML, exact history, review, apply, journal, resume and reviewed revert | Validate provider recovery end to end and finish migration of the legacy server stanza. |
 | Providers and UI | Quadlet, Podman and Docker Compose, libvirt, Incus, Samba/NFS, storage provisioning, and Applications and File Sharing pages are present | Reviewed managed-directory provisioning is enabled. Native Compose, libvirt, Incus, disk provisioning and share mutations remain gated pending ownership-safe implementation. Verify ownership, rollback, runtime and boot behavior for each native provider. |
 | Build, registry and routing | The `linux` feature gates the tool router and native modules. `linux-ui` also embeds Svelte. CI has separate profile checks. | Validate the release artifacts, compile-time dependency graph and ASUS hardware resource deltas. |
-| Agent access | HTTP MCP shares the Linux tool registry | Verify transport and permission parity. Stdio and full backup/restore remain optional. |
+| Agent access | HTTP JSON-RPC MCP shares the Linux tool registry | Port full existing HTTP/stdio MCP contracts and Agent access UI; capture/inventory/recovery parity is required, while *full restorable backup/restore* is a separate future project. |
 
 ### Step 4 prerequisite — Platform builds and router resource baseline
 
@@ -319,28 +377,35 @@ acceptance and Steps 7–10 in their existing order.
 - Reuse Server Man's Svelte 5/Vite shell and responsive styles; compile to static assets only in the Linux release. Keep ASUS build and IPK free of the Svelte build toolchain/assets.
 - Adapt the existing Svelte `invokeTool`/`startJob` client: preserve or provide a compatible `POST /api/tools/{name}` transport, tool/module discovery, tracked jobs and predictable JSON error codes. Keep Maestro's existing REST endpoints working.
 - Port the core registry concepts (schema validation, read/write policy, bounded output, management-job locking, audit, cancellation) into Rust incrementally.
-- Port Linux browser session flow and Host/Origin protection; do not change ASUS bearer-token behavior. Require explicit permission boundaries for privileged Linux actions.
-- Establish a shared navigation/dashboard contribution contract; Linux tab assembly uses Svelte components and lazy loading, while ASUS keeps its embedded renderer.
+- Port **complete** Linux authentication: one-time token-authorized administrator setup, username/password authentication, token fallback, durable HttpOnly/SameSite session cookies and logout/revocation, Host/Origin checks, first-use setup and tests. Do not change ASUS bearer-token behavior. Require explicit permission boundaries for privileged Linux actions.
+- Establish a shared navigation/dashboard contribution contract; Linux tab assembly uses Svelte components and lazy loading, while ASUS keeps its embedded renderer. Port every Server Man screen and shared UX workflow (including typed editors, Activity, Configuration, Agent access, readiness alerts and theme switching), not only the current five Linux pages.
 - Gate with Linux UI login/auth, discovery, job lifecycle, responsive routing and no regression to ASUS paths.
+
+### Step 4a — Linux unprivileged execution and privileged helper (mandatory prerequisite)
+
+- Implement and package the Linux-only `maestro-admin` restricted root-owned helper described above, with a reviewed typed protocol and no persistent elevated service. Linux Maestro itself runs as the normal workload owner; ASUS remains root with no helper.
+- Port Server Man's privileged-operation routing, helper request validation, fixed allowlisted operations, host installation/sudoers rules, audit, error reporting and rejection tests. Verify read-only/rootless continuity without helper access.
+- Route protected system units, package writes, Samba/NFS and Samba-password/setup operations through the helper. Keep user-scope systemd, Podman rootless and unprivileged functions direct. Never use helper access as a shortcut around managed-resource safety.
+- **Gate:** non-root native guest tests prove successful allowed operations, rejected arbitrary requests/paths, denied sudo policy, no helper route in router build, and no process-wide Linux root requirement.
 
 ### Step 5 — Linux systemd Services adapter and shared Services UI
 
 - Port Server Man's system/user `systemctl` and `journalctl` implementation under the common `ServiceManager` interface.
 - Preserve installed vs loaded units, partial inventory warnings, bounded logs, validated `.service` names and explicit boot enablement semantics.
-- Preserve restricted system privilege routing. Application-owned generated units must be directed to the declarative coordinator once Applications exists.
+- Preserve restricted system privilege routing through the Linux-only helper. Application-owned generated units must be directed to the declarative coordinator once Applications exists; native system/user service details and ownership distinctions must retain Server Man behavior.
 - Compare outputs and behavior against original Go tests and native systemd environments.
 
 ### Step 6 — Linux monitoring and package updates
 
 - Port bounded Linux resource/process histories, metrics and dashboard widgets with isolated refresh/error handling. Start the shared sampler on the first monitoring request so startup and deployments that never read metrics avoid periodic host probes.
-- Port distribution-aware package status/refresh/install for apt, dnf, pacman, zypper, with exact validated operations, job locks, privilege checks, reboot evidence and read-only cached queries.
+- Port distribution-aware package status/refresh/install for apt, dnf, pacman, zypper, with exact validated operations, job locks, privilege checks, reboot evidence and read-only cached queries. **Also port named package installation, backend dependency presets, server setup actions and installer package-selection behavior**, using the Linux helper for privileged writes.
 - Preserve router `opkg`/self-upgrade behavior as separate platform operations; do not confuse router-specific binary upgrades with Linux OS updates.
 
 ### Step 7 — Applications declarative foundation (no provider shortcut)
 
 - Port typed workload YAML `version: 1`, validation (duplicate keys, custom tags, refs, dependency cycles, identity rules), revision-checked owner-only store, exact-byte history and conflict handling.
-- Preserve one authoritative YAML for managed workloads, storage/bindings, private file references and shares. Put global host/server settings in the Rust application's config with an explicit migration from the original Server Man `server` stanza; never maintain dual sources of truth.
-- Port plan/review/apply, deterministic resource fingerprints/ownership markers, dependency ordering, private journal, preflight/readiness, startup recovery blockers and reviewed revert.
+- Preserve Server Man's **single authoritative Linux YAML** for its server/access settings **and** managed workloads, storage/bindings, private file references and shares, or an explicitly approved behaviorally equivalent single-authority mapping. Keep unrelated existing Maestro/router TOML configuration intact. Implement an explicit migration from Server Man's `server` stanza and make server-only edits, restart-required state and mixed-edit protections behaviorally equivalent; never maintain two competing authorities for the same Linux setting.
+- Port plan/review/apply, deterministic resource fingerprints/ownership markers, dependency ordering, private journal, preflight/readiness, startup recovery blockers and reviewed revert. Include native artifact checksums, drift/conflict review, metadata-only reconciliation, stale revisions, pending job/reboot guards and explicit recovery paths found in the reference commit.
 - Port safe command execution, bounded output, durable jobs and privilege separation first. Do not advertise workload creation until underlying mutation/recovery invariants are validated.
 
 ### Step 8 — Applications providers, one tab
@@ -353,24 +418,35 @@ Port in small, native-tested increments:
 4. **KVM/libvirt:** existing-disk profiles, stable UUID/ownership, persistent definitions, current state and native autostart.
 5. **Incus VM:** local project/profile semantics, stopped-guest edits, runtime/boot separation and safe handling of native-owned resources.
 
-All providers appear in **one Applications tab** with type/backend filters and typed editors; no provider-specific top-level tab. Preserve start/stop distinct from enable/disable, partially running group diagnostics, logs, configuration-drift/status separation, and conservative refusal on unverified native ownership.
+All providers appear in **one Applications tab** with type/backend filters and typed editors; no provider-specific top-level tab. Preserve start/stop distinct from enable/disable, partially running group diagnostics, logs, configuration-drift/status separation, safe stopped/deferred edits, failed launcher diagnostics, host port/storage/network preflights, readiness and conservative refusal on unverified native ownership. Include all Server Man-supported v1 fields/actions, stable identities, container/VM lifecycle semantics and UI recovery flows; test cold boot and process/daemon restarts for each provider.
 
 ### Step 9 — Storage provisioning, Samba/NFS shares and configuration health
 
-- Port typed storage/binding prerequisites and explicitly reviewed creation of missing owned directories/disks; do not invent missing data or mount points.
-- Port Samba/NFS ownership markers, bounded native inventory, conflict detection, candidate validation, publication/rollback and privilege-helper restrictions.
-- Expose a File Sharing tab if enabled; optionally contribute small dashboard health widgets.
+- Port typed storage/binding prerequisites and explicitly reviewed creation of missing owned directories/disks; include supported checksum-pinned initial disk-image cloning, read-only filesystem/mount identity and permissions checks; do not invent missing data or mount points.
+- Port Samba/NFS ownership markers, bounded native inventory, conflict detection, candidate validation, publication/rollback, typed UI editors, Samba-password operations and privilege-helper restrictions. Preserve unmanaged server configuration/data and independent share service setup.
+- Expose File Sharing and Configuration workflows, typed resource editors, global/per-resource configuration-health alerts and explicit repair actions. Dashboard widgets remain optional; **existing Server Man UI features are not optional**.
 - Share model/recovery/preflight infrastructure with Applications rather than creating a second source of configuration truth.
 
-### Step 10 — MCP/agent interface and deferred backup work
+### Step 9a — Production Linux installation, packaging and upgrade (mandatory)
 
-- Consider porting Server Man's HTTP/stdio MCP adapters onto the same validated Rust operation registry and auth/write policy; optional and **not** a requirement for completing the first Linux Applications milestone.
-- Retain any transferred backup inventory/capture safety checks and recovery blockers, but **do not label existing Server Man `captured` artifacts as restorable backups**. Full backup/restore needs its own native acceptance project and safety gate.
+- Port Server Man's native source/release installer as a Maestro Linux distribution workflow: dry-run/plan/confirmation, selected backend dependencies, non-root workload account, reviewed group/sockets/lingering prerequisites, root-owned helper and sudoers, systemd service, private single-authority configuration, package/version policy and checksum-verified release artifacts.
+- Preserve existing credentials/configuration and managed data on reinstall/upgrade. Verify clean installation, repeated installs, permission failure, package absence, safe no-op and rollback/recovery guidance in disposable Ubuntu/Debian environments. Do not require build tools on the target when using a release archive.
+- Keep Linux installation/package management entirely out of the router/IPK build and runtime.
+
+### Step 10 — MCP/agent interface and existing backup/capture features (mandatory)
+
+- Port **all existing** Server Man MCP features: Streamable HTTP and stdio transports, supported protocol negotiation, schema and tool-operation parity with the JSON registry, structured/error results, auth/write/confirmation policies, jobs/cancellation, Agent access UI and documented standard-client setup. Test with the official MCP SDK; do not claim parity from a custom JSON-RPC handler alone.
+- Port Server Man's **implemented** backup inventory, capture, native/portable metadata collection, verification and interrupted workload/publication recovery semantics and corresponding UI/API/MCP operations as inventoried at the pinned reference commit. Preserve safeguards that block conflicting mutations when recovery is pending, even if complete backup/restore is unavailable.
+- **Full, successfully restorable backup/restore is not implemented by reference Server Man and is a separate future milestone.** Capture artifacts must never be advertised as restorable backups. No completed Server Man functionality can be deferred without explicit user approval.
 - Retain source/test references to the original Go version until production Linux acceptance is complete.
 
 ## Phase 2 acceptance gates
 
-For each migrated capability: contract fixtures compared to Go, unit and integration tests, native Linux guest acceptance where it performs host mutations, permission/privilege tests, failure rollback, restart/boot persistence, and UI tests. Ubuntu is the first deployment target; Debian follows according to available native evidence; Arch is not claimed validated merely because package mappings exist. Keep host-specific tests in disposable VMs or other isolated environments.
+For **every inventoried Server Man feature**, require contract fixtures compared to Go, Rust unit/API/operation-schema tests, Linux UI tests, non-root permission tests, native Linux guest acceptance wherever host mutations or real providers are involved, failure rollback, restart/boot persistence, and interrupted-operation recovery where applicable. Ubuntu is the first deployment target; Debian follows according to available native evidence; Arch is not claimed validated merely because package mappings exist. Keep host-specific tests in disposable VMs or other isolated environments.
+
+**Hard M2 completion rule:** Zero unresolved *existing reference feature* rows in the parity matrix. Every row is `accepted` with evidence or has a specifically recorded user-approved change to the 100% requirement; `modeled`, `gated`, `unit-tested` and `CI green` alone never qualify. Ensure privileged workflows run through the helper with the main Linux process non-root, and that user-owned apps remain rootless. Exercise missing-backend, missing-data, permission-denied, artifact drift, rollback, interrupted journal and restart conditions. Confirm the reference backup/capture limitations explicitly rather than dropping the implemented functions. Verify every Server Man UI workflow, tool/schema/transport and non-destructive setup path; check native Ubuntu and Debian gates per the reference's accepted support scope, with Arch explicitly unverified unless separately approved.
+
+**Scope freeze and sign-off:** Keep the Server Man reference pinned; changes to matrix classification, accepted behavior or non-implementation exceptions require review. Do not merge, tag or announce Phase 2 feature parity until the complete matrix, privileged-helper threat/sudoers review, Linux production installer tests and native acceptance record are signed off. No code changes or runtime permission escalation are authorized by this documentation update alone.
 
 ### Router resource and profile acceptance
 
@@ -463,6 +539,9 @@ The final acceptance matrix must cover:
 | Existing config/data or upgrade break | Keep paths/schemas through M1; separate versioned rebrand migration with rollback |
 | Legacy Router Hub installation conflicts with Maestro | Keep the IPK conflict guard, run an explicit one-time data transfer, remove old boot hooks, reboot to clear old firewall chains, and preserve offline rollback artifacts |
 | Go workload port loses transactional safety | Preserve revision, ownership, preflight, journal and review gates; native guest acceptance |
+| Existing Server Man features silently omitted or mislabeled optional | Pin reference commit, inventory every tool/UI/backend/recovery feature and block M2 on incomplete parity rows |
+| Linux process accidentally runs as root or invokes overly broad sudo | Non-root server requirement, narrowly scoped separately owned helper, typed root-side validation, sudoers and negative tests |
+| Linux installation/update breaks rootless ownership or host data | Explicit reviewed installer, workload account/group/lingering checks, preserved config/data and disposable-guest reinstall/upgrade acceptance |
 | CI accidentally runs before M1 | Keep branch outside `main`/`ci/**`, no tags or manual dispatch; audit changed workflows |
 
 ## Completion checklist
@@ -482,10 +561,16 @@ The final acceptance matrix must cover:
 - [ ] Phase 2 router acceptance: pinned-toolchain CI and matching-hardware resource and parity measurements against v0.11.0.
 - [x] Phase 2 local Linux artifact: pinned Rust 1.85.0 `linux-ui` release built and passed the unprivileged loopback smoke test for Linux tool discovery, token API authentication, metrics and nginx.
 - [x] Phase 2 local Linux browser smoke: headless Chromium verified token sign-in, narrow-viewport navigation, lazy Applications loading, session persistence after reload and sign-out against the loopback release binary. A follow-up run against the updated debug build verified that edits invalidate the current workload preview and a blocked native Compose resource hides Apply.
-- [ ] Phase 2: Svelte shell, operation registry and Linux auth accepted. Token sessions are implemented. Administrator credentials remain pending.
+- [ ] Phase 2: Svelte shell, complete Server Man UI workflows, operation registry and Linux auth accepted. Token sessions are implemented; administrator credentials and durable sessions remain pending.
 - [x] Phase 2: systemd Services + monitoring + Linux package updates implemented and tested.
 - [x] Phase 2: declarative coordinator/storage model and Quadlet provider implemented. The native Podman generator accepted the rendered rootless units in dry-run mode. Systemd lifecycle and boot persistence need native guest validation.
 - [ ] Phase 2: Applications UI and native Podman Compose, Docker Compose, libvirt and Incus acceptance.
 - [ ] Phase 2: native Samba/NFS, provisioning and configuration-health acceptance.
 - [x] Phase 2: MCP JSON-RPC protocol interface and agent tools integration.
+- [ ] Phase 2: **100% reference parity inventory** completed against pinned Server Man `c1a9f32f5898146ae7ac339043b910b8e2a2c438`, with traceability to all reference tools, UI, native behavior, tests, partial backup/capture and setup/release operations.
+- [ ] Phase 2: Linux server runs as non-root workload account; restricted Linux-only root-owned helper and no-root router isolation proven by positive/negative native tests.
+- [ ] Phase 2: All Server Man native operations (packages/dependencies/share setup, applications/VMs/storage/shares, boot, recovery, native readiness) and operator UI workflows accepted.
+- [ ] Phase 2: Complete administrator authentication, durable sessions, production Linux installer/reinstall/upgrade, and both HTTP+stdio MCP verified with official clients.
+- [ ] Phase 2: Existing Server Man backup inventory, capture, manifest verification, pending-journal and reviewed publication/recovery functionality ported with explicit non-restorable status.
+- [ ] **M2 hard parity gate:** Every implemented reference feature is accepted with linked test/native evidence; no unapproved omission or downgraded safety contract.
 - [ ] Phase 2: Linux native acceptance, router parity and releases completed.
