@@ -36,6 +36,8 @@ enum Tool {
     MonitorSnapshot,
     MonitorProcesses,
     UpdatesStatus,
+    PackagesInstall,
+    DependenciesInstall,
     WorkloadsGet,
     WorkloadsPlan,
     WorkloadsApply,
@@ -51,7 +53,7 @@ enum Tool {
 }
 
 impl Tool {
-    const ALL: [Self; 23] = [
+    const ALL: [Self; 25] = [
         Self::Status,
         Self::Capabilities,
         Self::JobsList,
@@ -63,6 +65,8 @@ impl Tool {
         Self::MonitorSnapshot,
         Self::MonitorProcesses,
         Self::UpdatesStatus,
+        Self::PackagesInstall,
+        Self::DependenciesInstall,
         Self::WorkloadsGet,
         Self::WorkloadsPlan,
         Self::WorkloadsApply,
@@ -129,6 +133,16 @@ impl Tool {
                 "updates_status",
                 "Pending system updates",
                 "Read the native package manager's cached pending updates.",
+            ),
+            Self::PackagesInstall => (
+                "packages_install",
+                "Install named native packages",
+                "Install up to 32 validated repository package names via an authorized helper.",
+            ),
+            Self::DependenciesInstall => (
+                "dependencies_install",
+                "Install backend dependencies",
+                "Install a fixed set of supported native packages for a selected backend.",
             ),
             Self::WorkloadsGet => (
                 "workloads_get",
@@ -311,7 +325,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
             let module = match tool {
                 Tool::ServicesList | Tool::ServicesDetails | Tool::ServicesLogs => "systemd",
                 Tool::MonitorSnapshot | Tool::MonitorProcesses => "monitor",
-                Tool::UpdatesStatus => "updates",
+                Tool::UpdatesStatus | Tool::PackagesInstall | Tool::DependenciesInstall => "updates",
                 Tool::WorkloadsGet
                 | Tool::WorkloadsPlan
                 | Tool::WorkloadsApply
@@ -332,6 +346,8 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     | Tool::WorkloadsResume
                     | Tool::WorkloadsRevert
                     | Tool::ApplicationsAction
+                    | Tool::PackagesInstall
+                    | Tool::DependenciesInstall
             );
             let input_schema = match tool {
                 Tool::JobsGet | Tool::JobsCancel => json!({
@@ -340,6 +356,24 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                         "id": {"type": "string", "format": "uuid"}
                     },
                     "required": ["id"],
+                    "additionalProperties": false
+                }),
+                Tool::PackagesInstall => json!({
+                    "type": "object",
+                    "properties": {
+                        "packages": {"type": "string", "minLength": 1, "maxLength": 4096},
+                        "confirm": {"const": true}
+                    },
+                    "required": ["packages", "confirm"],
+                    "additionalProperties": false
+                }),
+                Tool::DependenciesInstall => json!({
+                    "type": "object",
+                    "properties": {
+                        "target": {"type": "string", "enum": ["podman", "docker", "samba", "nfs", "virtualization", "incus"]},
+                        "confirm": {"const": true}
+                    },
+                    "required": ["target", "confirm"],
                     "additionalProperties": false
                 }),
                 Tool::ServicesDetails => json!({
@@ -445,7 +479,8 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                 "readOnly": read_only,
                 "destructive": matches!(
                     tool,
-                    Tool::WorkloadsApply | Tool::WorkloadsResume | Tool::WorkloadsRevert | Tool::ApplicationsAction
+                    Tool::WorkloadsApply | Tool::WorkloadsResume | Tool::WorkloadsRevert
+                        | Tool::ApplicationsAction | Tool::PackagesInstall | Tool::DependenciesInstall
                 ),
                 "inputSchema": input_schema
             })
@@ -496,6 +531,17 @@ async fn permissions(state: &AppState) -> Value {
     let system_ready = systemd::available(state) && state.config.platform == crate::config::Platform::Linux
         && state.config.services.systemd_system_write_units
             .iter().any(|unit| systemd::permits(state, systemd::Scope::System, unit) && helper.permits_unit(unit));
+    let package_policy = state.config.system.allow_package_writes;
+    let package_ready = package_policy && package_updates::available(state) && helper.permits_packages();
+    let package_reason = if !package_policy {
+        "Package writes are disabled in Maestro configuration."
+    } else if !package_updates::available(state) {
+        "No supported native package manager is available."
+    } else if !helper.permits_packages() {
+        "An authorized helper with root-owned package_writes policy is required."
+    } else {
+        "Package updates and installation are authorized."
+    };
     json!({
         "helper": helper,
         "systemServices": {
@@ -507,9 +553,9 @@ async fn permissions(state: &AppState) -> Value {
             }
         },
         "packageWrites": {
-            "status": "unavailable",
-            "code": "helper_routing_pending",
-            "reason": "Package mutations remain gated until the restricted helper operations have been validated."
+            "status": if package_ready { "ready" } else { "unavailable" },
+            "code": if package_ready { "ready" } else if !package_policy { "writes_disabled" } else { "helper_unavailable" },
+            "reason": package_reason
         }
     })
 }
@@ -592,16 +638,16 @@ pub async fn execute_tool(
                 ),
             );
         }
-        if !package_updates::permits(state, install) {
+        if !package_updates::permits(state, install).await {
             let policy_disabled = !state.config.system.allow_package_writes;
             return (
                 if policy_disabled { StatusCode::FORBIDDEN } else { StatusCode::SERVICE_UNAVAILABLE },
                 json_err(
-                    if policy_disabled { "writes_disabled" } else { "helper_routing_pending" },
+                    if policy_disabled { "writes_disabled" } else { "helper_unavailable" },
                     if policy_disabled {
                         "Package writes are disabled by policy."
                     } else {
-                        "Protected package operations are unavailable until their restricted helper verbs and native safety checks are implemented."
+                        "Protected package operations require an installed, authorized and compatible root-owned helper and supported native manager."
                     },
                 ),
             );
@@ -619,6 +665,60 @@ pub async fn execute_tool(
             }
         })
         .await;
+    }
+
+    if matches!(name, "packages_install" | "dependencies_install") {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct PackageArgs {
+            packages: String,
+            confirm: bool,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct DependencyArgs {
+            target: String,
+            confirm: bool,
+        }
+        let (named, argument) = if name == "packages_install" {
+            let Ok(input) = serde_json::from_value::<PackageArgs>(Value::Object(arguments)) else {
+                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Provide package names and confirm=true."));
+            };
+            if !input.confirm
+                || crate::platforms::admin_packages::package_names(&input.packages).is_err()
+            {
+                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments",
+                    "Provide 1–32 unique bare repository package names and confirm=true."));
+            }
+            (true, input.packages)
+        } else {
+            let Ok(input) = serde_json::from_value::<DependencyArgs>(Value::Object(arguments)) else {
+                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Provide a supported dependency target and confirm=true."));
+            };
+            if !input.confirm || !matches!(input.target.as_str(), "podman" | "docker" | "samba" | "nfs" | "virtualization" | "incus") {
+                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Dependency target and confirmation are invalid."));
+            }
+            (false, input.target)
+        };
+        if !package_updates::permits(state, true).await {
+            return (StatusCode::SERVICE_UNAVAILABLE, json_err("helper_unavailable",
+                "Named and dependency package installs require enabled package-write policy and an authorized privileged helper."));
+        }
+        let state_clone = state.clone();
+        if named {
+            return start_job_value(jobs, "packages_install", move |running| async move {
+                match package_updates::run_named_job(&state_clone, &argument, &running).await {
+                    Ok(result) => running.finish(Outcome::Succeeded(result)),
+                    Err(error) => running.finish(Outcome::Failed(error.to_string())),
+                }
+            }).await;
+        }
+        return start_job_value(jobs, "dependencies_install", move |running| async move {
+            match package_updates::run_dependency_job(&state_clone, &argument, &running).await {
+                Ok(result) => running.finish(Outcome::Succeeded(result)),
+                Err(error) => running.finish(Outcome::Failed(error.to_string())),
+            }
+        }).await;
     }
 
     if let Some(action) = name.strip_prefix("services_").and_then(|action| {
@@ -742,7 +842,7 @@ pub async fn execute_tool(
                     "hostname": String::from_utf8_lossy(&hostname[..end]),
                     "startedAt": started_at,
                     "version": env!("CARGO_PKG_VERSION"),
-                    "allowWrites": systemd::writes_enabled(state) || package_updates::writes_enabled(state) || writes_allowed(state)
+                    "allowWrites": systemd::writes_enabled(state) || package_updates::writes_enabled(state).await || writes_allowed(state)
                 }),
             )
         }
@@ -754,7 +854,7 @@ pub async fn execute_tool(
                 StatusCode::OK,
                 json!({
                     "modules": modules(state),
-                    "allowWrites": privileged_writes || systemd::writes_enabled(state) || package_updates::writes_enabled(state) || writes_allowed(state),
+                    "allowWrites": privileged_writes || systemd::writes_enabled(state) || package_updates::writes_enabled(state).await || writes_allowed(state),
                     "permissions": permission_states
                 }),
             )
@@ -1400,7 +1500,7 @@ async fn status(
         "hostname": String::from_utf8_lossy(&hostname[..end]),
         "startedAt": started_at,
         "version": env!("CARGO_PKG_VERSION"),
-        "allowWrites": privileged_writes || systemd::writes_enabled(&state) || package_updates::writes_enabled(&state) || writes_allowed(&state)
+        "allowWrites": privileged_writes || systemd::writes_enabled(&state) || package_updates::writes_enabled(&state).await || writes_allowed(&state)
     }))
     .into_response()
 }
