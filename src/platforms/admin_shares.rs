@@ -2,7 +2,6 @@
 //! Target account derives from the verified sudo caller UID, not request data.
 use std::{
     ffi::CStr,
-    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -42,7 +41,7 @@ fn caller_name(uid: u32) -> Result<String> {
     ensure!(
         !name.is_empty() && name.len() <= 32
             && name.bytes().next().is_some_and(|c| c.is_ascii_lowercase() || c == b'_')
-            && name.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_ -".contains(&c))
+            && name.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_-".contains(&c))
             && !name.contains(' '),
         "Unsupported workload username"
     );
