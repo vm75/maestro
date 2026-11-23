@@ -23,6 +23,8 @@
       load: () => import('./Shares.svelte'),
     },
     { id: 'updates', title: 'Updates', module: 'updates', load: () => import('./Updates.svelte') },
+    { id: 'activity', title: 'Activity', load: () => import('./Activity.svelte') },
+    { id: 'agents', title: 'Agent access', load: () => import('./AgentAccess.svelte') },
   ]
   let selected = $state('overview')
   const visiblePages = $derived(pages.filter(candidate =>
