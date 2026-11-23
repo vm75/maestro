@@ -31,6 +31,8 @@ struct Request {
     unit: Option<String>,
     #[serde(default)]
     action: Option<String>,
+    #[serde(default)]
+    confirm: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -154,7 +156,7 @@ fn validate_request(request: &Request) -> Result<()> {
     ensure!(request.version == PROTOCOL, "unsupported helper protocol");
     match request.operation.as_str() {
         "probe" => ensure!(
-            request.unit.is_none() && request.action.is_none(),
+            request.unit.is_none() && request.action.is_none() && request.confirm.is_none(),
             "probe accepts no arguments"
         ),
         "system_service" => {
@@ -164,6 +166,10 @@ fn validate_request(request: &Request) -> Result<()> {
             ensure!(
                 matches!(action, "start" | "stop" | "restart" | "reload" | "enable" | "disable"),
                 "unsupported service action"
+            );
+            ensure!(
+                matches!(action, "start" | "enable") || request.confirm == Some(true),
+                "destructive system service action requires confirmation"
             );
         }
         _ => anyhow::bail!("unknown privileged operation"),
@@ -191,6 +197,7 @@ pub async fn probe() -> Probe {
         operation: "probe".into(),
         unit: None,
         action: None,
+        confirm: None,
     };
     match call(&request, Duration::from_secs(6)).await {
         Ok(reply) if reply.ok => Probe::ready(reply.system_units),
@@ -211,6 +218,7 @@ pub async fn system_service(unit: &str, action: &str) -> Result<String> {
         operation: "system_service".into(),
         unit: Some(unit.into()),
         action: Some(action.into()),
+        confirm: (!matches!(action, "start" | "enable")).then_some(true),
     };
     validate_request(&request)?;
     let capability = probe().await;
@@ -364,6 +372,7 @@ mod tests {
             r#"{"version":1,"operation":"system_service","unit":"../maestro.service","action":"stop"}"#,
             r#"{"version":1,"operation":"system_service","unit":"maestro.service","action":"stop"}"#,
             r#"{"version":1,"operation":"system_service","unit":"sshd.service","action":"execute"}"#,
+            r#"{"version":1,"operation":"system_service","unit":"sshd.service","action":"stop"}"#,
             r#"{"version":1,"operation":"probe","unit":"sshd.service"}"#,
             r#"{"version":2,"operation":"probe"}"#,
         ] {
@@ -381,6 +390,7 @@ mod tests {
             operation: "system_service".into(),
             unit: Some("sshd.service".into()),
             action: Some("restart".into()),
+            confirm: Some(true),
         };
         assert!(validate_request(&request).is_ok());
         assert!(!safe_system_unit("maestro.service"));
