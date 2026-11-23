@@ -1,4 +1,5 @@
 mod apply;
+pub mod backup_inventory;
 pub use apply::{ApplyProvider, ObservedResource, RecoveryProvider};
 pub mod compose;
 pub mod composite;
