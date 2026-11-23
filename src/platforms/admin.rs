@@ -12,7 +12,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use tokio::{io::AsyncWriteExt, process::Command, time::timeout};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, process::Command, time::timeout};
 
 pub const HELPER_PATH: &str = "/usr/local/libexec/maestro-admin";
 const POLICY_PATH: &str = "/etc/maestro/admin-policy.json";
@@ -111,8 +111,20 @@ fn helper_installation() -> Probe {
         }
     }
     match trusted_component(Path::new(HELPER_PATH), false) {
-        Ok(metadata) if metadata.mode() & 0o111 != 0 => {}
+        Ok(metadata) if metadata.mode() & 0o111 != 0 && metadata.mode() & 0o6000 == 0 => {}
         _ => return Probe::unavailable("helper_unsafe", "The helper must be an executable, root-owned regular file without untrusted write access."),
+    }
+    if !Path::new(POLICY_PATH).exists() {
+        return Probe::unavailable("helper_policy_missing", "Install an explicit root-owned private helper policy for the workload account.");
+    }
+    for path in ["/etc", "/etc/maestro"] {
+        if trusted_component(Path::new(path), true).is_err() {
+            return Probe::unavailable("helper_policy_unsafe", "The privileged policy has an untrusted parent directory.");
+        }
+    }
+    match trusted_component(Path::new(POLICY_PATH), false) {
+        Ok(metadata) if metadata.mode() & 0o077 == 0 && metadata.len() <= MAX_REPLY as u64 => {}
+        _ => return Probe::unavailable("helper_policy_unsafe", "The helper policy must be a root-owned mode 0600 regular file with bounded size."),
     }
     if !Path::new(SUDO_PATH).is_file() {
         return Probe::unavailable("sudo_missing", "Noninteractive sudo is not installed at the supported path.");
@@ -134,15 +146,23 @@ async fn call(request: &Request, deadline: Duration) -> Result<Reply> {
         .kill_on_drop(true)
         .spawn()
         .context("noninteractive sudo is unavailable")?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(&data).await?;
-    }
-    let result = timeout(deadline, child.wait_with_output())
-        .await
-        .context("privileged helper timed out")??;
-    ensure!(result.status.success(), "privileged helper is unauthorized or unavailable");
-    ensure!(result.stdout.len() <= MAX_REPLY, "privileged helper reply is too large");
-    let reply: Reply = serde_json::from_slice(&result.stdout)
+    let stdout = child.stdout.take().context("privileged helper has no stdout")?;
+    let mut output = Vec::with_capacity(1024);
+    timeout(deadline, async {
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(&data).await?;
+        }
+        // Reading only MAX_REPLY+1 avoids an unbounded allocation even if the
+        // installed executable is corrupt or has an incompatible protocol.
+        stdout.take((MAX_REPLY + 1) as u64).read_to_end(&mut output).await?;
+        ensure!(output.len() <= MAX_REPLY, "privileged helper reply is too large");
+        let status = child.wait().await?;
+        ensure!(status.success(), "privileged helper is unauthorized or unavailable");
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .context("privileged helper timed out")??;
+    let reply: Reply = serde_json::from_slice(&output)
         .context("unrecognized privileged helper response")?;
     ensure!(reply.version == PROTOCOL, "privileged helper protocol mismatch");
     ensure!(
@@ -249,6 +269,7 @@ fn load_policy(caller_uid: u32) -> Result<Policy> {
 }
 
 fn lock_root_operation() -> Result<fs::File> {
+    trusted_component(Path::new("/run"), true)?;
     fs::create_dir_all("/run/maestro-admin")?;
     let directory = trusted_component(Path::new("/run/maestro-admin"), true)?;
     ensure!(directory.mode() & 0o077 == 0, "unsafe privileged runtime directory");

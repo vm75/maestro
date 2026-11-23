@@ -243,3 +243,5 @@ Reference: `internal/declarative/backup_tools.go`; tests: `internal/declarative/
 - Shared HTTP/MCP service write actions now require `confirm=true` for `stop`, `restart`, `reload`, `disable`; discovery describes these as destructive and MCP tool annotations expose read-only/destructive hints. User-scope actions follow the same confirmation policy. This is a source change only: test/SDK acceptance remains pending.
 
 - The root helper now independently rejects destructive system-service JSON without `confirm=true`, in addition to the shared REST/MCP check. Authorization remains the bounded caller UID and root policy; a separate privileged sudo-granted workload account should itself be treated as highly trusted.
+
+- Helper client output is now read-bounded at 16 KiB plus one byte before decoding; it never calls an unbounded `wait_with_output`. Client stat-checks the private root policy before sudo, and the helper rechecks internally. The router-only build rejects accidental runtime Linux mode rather than exposing incomplete Linux functionality. No binary/guest verification yet.

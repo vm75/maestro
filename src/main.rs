@@ -152,6 +152,10 @@ fn main() -> Result<()> {
         config.apply_test_mode(&cli.config)?;
     }
     config.validate()?;
+    #[cfg(not(feature = "linux"))]
+    if config.platform == Platform::Linux {
+        anyhow::bail!("Linux mode requires a Linux-feature build; the router profile excludes Linux management");
+    }
     #[cfg(feature = "linux")]
     if config.platform == Platform::Linux && !config.test_mode && unsafe { libc::geteuid() } == 0 {
         anyhow::bail!("Linux Maestro must run as a non-root workload account; privileged host changes require optional maestro-admin");
