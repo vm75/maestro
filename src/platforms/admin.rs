@@ -160,7 +160,7 @@ fn helper_installation() -> Probe {
     if !Path::new(SUDO_PATH).is_file() {
         return Probe::unavailable("sudo_missing", "Noninteractive sudo is not installed at the supported path.");
     }
-    Probe::ready(vec![])
+    Probe::ready(vec![], false, false)
 }
 
 async fn call(request: &Request, deadline: Duration) -> Result<Reply> {
