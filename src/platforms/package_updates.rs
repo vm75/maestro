@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::Serialize;
 
-use crate::{core::jobs::RunningJob, state::AppState};
+use crate::{core::jobs::RunningJob, platforms::{admin, admin_packages}, state::AppState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -30,7 +30,7 @@ struct Manager {
     title: &'static str,
     available: bool,
     reason: Option<&'static str>,
-    write_reason: Option<&'static str>,
+    write_reason: Option<String>,
     can_refresh: bool,
     can_install: bool,
 }
@@ -133,10 +133,12 @@ pub fn available(state: &AppState) -> bool {
     availability_reason(state, family, &program).is_none()
 }
 
-pub fn writes_enabled(_state: &AppState) -> bool {
-    // Fail closed until each native package mutation has been moved into the
-    // root-owned helper. Running the workload server as root is not a fallback.
-    false
+pub async fn writes_enabled(state: &AppState) -> bool {
+    state.config.system.allow_package_writes
+        && !state.config.test_mode
+        && state.config.platform == crate::config::Platform::Linux
+        && available(state)
+        && admin::probe().await.permits_packages()
 }
 
 pub async fn status(state: &AppState) -> Status {
@@ -152,22 +154,33 @@ pub async fn status(state: &AppState) -> Status {
         }
     }
     let reason = availability_reason(state, family, &program);
+    let helper = if state.config.system.allow_package_writes {
+        Some(admin::probe().await)
+    } else {
+        None
+    };
+    let enabled = reason.is_none()
+        && state.config.system.allow_package_writes
+        && helper.as_ref().is_some_and(admin::Probe::permits_packages);
+    let write_reason = if !state.config.system.allow_package_writes {
+        Some("Package writes are disabled by administrator policy.".to_owned())
+    } else if reason.is_some() {
+        Some("The native package manager is unavailable.".to_owned())
+    } else if !enabled {
+        Some(helper.as_ref().map_or("Privileged helper is unavailable.", |probe| probe.reason.as_str()).to_owned())
+    } else {
+        None
+    };
     let mut snapshot = Status {
         manager: Manager {
             id: family,
             title,
             available: reason.is_none(),
             reason,
-            write_reason: if !state.config.system.allow_package_writes {
-                Some("Package writes are disabled by the administrator policy.")
-            } else {
-                Some("Protected package operations are gated until their restricted helper verbs and native acceptance are completed.")
-            },
-            can_install: reason.is_none() && writes_enabled(state),
-            can_refresh: reason.is_none()
-                && writes_enabled(state)
-                && (family != Family::Pacman
-                    || is_executable(&paths.package_bin_dir.join("checkupdates"))),
+            write_reason,
+            can_install: enabled,
+            can_refresh: enabled && (family != Family::Pacman
+                || is_executable(&paths.package_bin_dir.join("checkupdates"))),
         },
         distribution: release.pretty_name,
         packages: vec![],
@@ -225,6 +238,7 @@ fn private_dir(path: &Path) -> bool {
     })
 }
 
+#[cfg(test)]
 fn refresh_args(family: Family) -> &'static [&'static str] {
     match family {
         Family::Apt => &["-o", "APT::Update::Error-Mode=any", "update"],
@@ -234,6 +248,7 @@ fn refresh_args(family: Family) -> &'static [&'static str] {
     }
 }
 
+#[cfg(test)]
 fn install_args(family: Family) -> &'static [&'static str] {
     match family {
         Family::Apt => &[
@@ -259,20 +274,14 @@ fn install_args(family: Family) -> &'static [&'static str] {
     }
 }
 
-fn permits_operation(state: &AppState, family: Family, program: &Path, install: bool) -> bool {
-    writes_enabled(state)
-        && availability_reason(state, family, program).is_none()
-        && (install
-            || family != Family::Pacman
-            || is_executable(&state.config.paths.package_bin_dir.join("checkupdates")))
-}
-
-pub fn permits(state: &AppState, install: bool) -> bool {
-    if !writes_enabled(state) {
+pub async fn permits(state: &AppState, install: bool) -> bool {
+    if !writes_enabled(state).await {
         return false;
     }
     let (_, family, _, program, _) = detect(state);
-    permits_operation(state, family, &program, install)
+    availability_reason(state, family, &program).is_none()
+        && (install || family != Family::Pacman
+            || is_executable(&state.config.paths.package_bin_dir.join("checkupdates")))
 }
 
 pub async fn run_job(
@@ -280,14 +289,51 @@ pub async fn run_job(
     install: bool,
     job: &RunningJob,
 ) -> anyhow::Result<serde_json::Value> {
-    let (_, family, _, program, _) = detect(state);
     anyhow::ensure!(
-        permits_operation(state, family, &program, install),
-        "Package operation is unavailable or outside the write policy."
+        permits(state, install).await,
+        "Package operation is unavailable, unprivileged, or outside the independent write policies."
     );
-    run_native_job(state, family, &program, install, job).await
+    let action = if install { "package_upgrade" } else { "package_refresh" };
+    let output = admin::package_operation(action, vec![], None).await?;
+    job.append_output(&output);
+    let (_, family, _, _, _) = detect(state);
+    Ok(serde_json::json!({
+        "manager": family,
+        "action": if install { "updates installed" } else { "metadata refreshed" },
+        "reboot": reboot(family, &state.config.paths.reboot_required)
+    }))
 }
 
+pub async fn run_named_job(
+    state: &AppState,
+    names: &str,
+    job: &RunningJob,
+) -> anyhow::Result<serde_json::Value> {
+    let packages = admin_packages::package_names(names)?;
+    anyhow::ensure!(permits(state, true).await, "Native package installation is not authorized.");
+    let output = admin::package_operation("package_install", packages.clone(), None).await?;
+    job.append_output(&output);
+    Ok(serde_json::json!({ "action": "packages installed", "packages": packages }))
+}
+
+pub async fn run_dependency_job(
+    state: &AppState,
+    target: &str,
+    job: &RunningJob,
+) -> anyhow::Result<serde_json::Value> {
+    anyhow::ensure!(
+        matches!(target, "podman" | "docker" | "samba" | "nfs" | "virtualization" | "incus"),
+        "unsupported dependency group"
+    );
+    anyhow::ensure!(permits(state, true).await, "Native dependency installation is not authorized.");
+    let output = admin::package_operation("dependency_install", vec![], Some(target.to_owned())).await?;
+    job.append_output(&output);
+    Ok(serde_json::json!({ "action": "dependencies installed", "target": target }))
+}
+
+// Retained only as a fixture implementation until real helper-mode acceptance:
+// production requests never call native package executables directly.
+#[cfg(test)]
 async fn run_native_job(
     state: &AppState,
     family: Family,
@@ -360,6 +406,7 @@ async fn run_native_job(
     }))
 }
 
+#[cfg(test)]
 async fn execute(
     state: &AppState,
     job: &RunningJob,
