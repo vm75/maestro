@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invokeTool } from './lib/api'
+  import Sparkline from './lib/Sparkline.svelte'
+  import { bytes, percent, rate, uptime } from './lib/monitor'
 
   interface Snapshot {
     valid: boolean
@@ -8,9 +10,10 @@
     intervalSeconds: number
     cpu: { usage: number | null }
     memory: { total: number; used: number }
+    uptimeSeconds: number | null
     load: number[] | null
     networks: Array<{ name: string; rxBytesPerSecond: number | null; txBytesPerSecond: number | null }>
-    history: Array<{ at: string; cpu: number | null; memoryPercent: number }>
+    history: Array<{ at: string; cpu: number | null; memoryPercent: number; rx: number | null; tx: number | null }>
     disks: Array<{ mount: string; filesystem: string; used: number; total: number }>
     diskIO: Array<{ name: string; readBytesPerSecond: number | null; writeBytesPerSecond: number | null }>
     temperatures: Array<{ name: string; celsius: number }>
@@ -20,9 +23,7 @@
 
   let snapshot = $state<Snapshot | null>(null)
   let error = $state('')
-  const percent = (value: number | null) => value === null ? '—' : `${value.toFixed(1)}%`
-  const memory = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`
-  const rate = (value: number | null) => value === null ? '—' : `${(value / 1024).toFixed(1)} KiB/s`
+  const sampleTimes = $derived(snapshot?.history.map(point => new Date(point.at).getTime()) ?? [])
 
   onMount(() => {
     const controller = new AbortController()
@@ -58,7 +59,8 @@
   {#if snapshot?.valid}
     <dl>
       <dt>CPU</dt><dd>{percent(snapshot.cpu.usage)}</dd>
-      <dt>Memory</dt><dd>{memory(snapshot.memory.used)} of {memory(snapshot.memory.total)}</dd>
+      <dt>Memory</dt><dd>{bytes(snapshot.memory.used)} of {bytes(snapshot.memory.total)}</dd>
+      <dt>Uptime</dt><dd>{uptime(snapshot.uptimeSeconds)}</dd>
       {#if snapshot.load}<dt>Load average</dt><dd>{snapshot.load.map(value => value.toFixed(2)).join(' / ')}</dd>{/if}
       {#each snapshot.networks as nic (nic.name)}
         <dt>{nic.name}</dt><dd>{rate(nic.rxBytesPerSecond)} received · {rate(nic.txBytesPerSecond)} sent</dd>
@@ -70,7 +72,7 @@
         <summary>Disks and temperatures</summary>
         <dl>
           {#each snapshot.disks as disk}
-            <dt>{disk.mount} ({disk.filesystem})</dt><dd>{memory(disk.used)} of {memory(disk.total)}</dd>
+            <dt>{disk.mount} ({disk.filesystem})</dt><dd>{bytes(disk.used)} of {bytes(disk.total)}</dd>
           {/each}
           {#each snapshot.diskIO as disk (disk.name)}
             <dt>{disk.name}</dt><dd>{rate(disk.readBytesPerSecond)} read · {rate(disk.writeBytesPerSecond)} written</dd>
@@ -83,10 +85,13 @@
     {/if}
     {#each snapshot.warnings as warning}<p role="status">{warning}</p>{/each}
     {#if snapshot.history.length > 1}
-      <div class="history" aria-label="Recent memory utilization" role="img">
-        {#each snapshot.history as point (point.at)}
-          <span style:height={`${point.memoryPercent}%`} title={percent(point.memoryPercent)}></span>
-        {/each}
+      <div class="history">
+        <h3>CPU utilization</h3>
+        <Sparkline values={snapshot.history.map(point => point.cpu)} times={sampleTimes} windowSeconds={snapshot.intervalSeconds * 60} ceiling={100} label="Recent CPU utilization" />
+        <h3>Memory utilization</h3>
+        <Sparkline values={snapshot.history.map(point => point.memoryPercent)} times={sampleTimes} windowSeconds={snapshot.intervalSeconds * 60} ceiling={100} label="Recent memory utilization" />
+        <h3>Network throughput</h3>
+        <Sparkline values={snapshot.history.map(point => point.rx)} secondary={snapshot.history.map(point => point.tx)} times={sampleTimes} windowSeconds={snapshot.intervalSeconds * 60} label="Recent receive and transmit rates" />
       </div>
     {/if}
   {:else if !error}
@@ -97,6 +102,6 @@
 <style>
   details { margin: 1rem 0; }
   summary { cursor: pointer; margin-bottom: .6rem; }
-  .history { display: flex; align-items: end; gap: 2px; height: 2.5rem; margin-top: 1rem; }
-  .history span { flex: 1; max-width: 1rem; background: var(--accent); border-radius: 2px 2px 0 0; }
+  .history { margin-top: 1rem; }
+  .history :global(.sparkline) { display: block; width: 100%; height: 4rem; }
 </style>

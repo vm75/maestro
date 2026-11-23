@@ -341,7 +341,11 @@ fn cpu_delta(old: &CpuStat, current: &CpuStat) -> Option<f64> {
         .into_iter()
         .zip(counters(old))
         .map(|(current, old)| current.checked_sub(old));
-    let idle = deltas.next()??.checked_add(deltas.next()??)?;
+    // Linux iowait can decrease without indicating a counter reset.
+    // Match Server Man parse.go: clamp only that component.
+    let idle = deltas
+        .next()??
+        .checked_add(deltas.next()?.unwrap_or(0))?;
     let active = deltas.try_fold(0_u64, |total, delta| total.checked_add(delta?))?;
     let total = idle.checked_add(active)?;
     (total != 0).then(|| 100.0 * active as f64 / total as f64)
@@ -384,6 +388,25 @@ mod tests {
         assert!(!clone.snapshot().valid);
         assert!(monitor.cache.get().is_some());
         assert!(std::ptr::eq(monitor.samples(), clone.samples()));
+    }
+
+    #[test]
+    fn cpu_delta_clamps_iowait_but_rejects_other_resets() {
+        let old = CpuStat {
+            user: 100,
+            idle: 100,
+            iowait: 20,
+            ..CpuStat::default()
+        };
+        let mut current = CpuStat {
+            user: 120,
+            idle: 120,
+            iowait: 10,
+            ..CpuStat::default()
+        };
+        assert_eq!(cpu_delta(&old, &current), Some(50.0));
+        current.user = 99;
+        assert_eq!(cpu_delta(&old, &current), None);
     }
 
     #[test]

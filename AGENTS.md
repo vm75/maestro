@@ -98,6 +98,10 @@ Do not introduce automatic NGINX build triggers or router deployment.
 - Keep the self-contained UI offline-capable; do not add a frontend package manager or CDN dependency. Edit `web/src/`, then regenerate `web/index.html` with `python3 scripts/build-web-ui.py`.
 - Phase 1 was merged as v0.10.5. Phase 1.5 rebrands the application to Maestro on `refactor/rebrand-maestro`. Preserve legacy installed configuration, state, NGINX inputs and firewall identities. Keep the existing Go `vm75/server-man` as a Phase 2 reference; do not port its features in Phase 1.5.
 
+## Phase 2 source-guided migration
+
+Use Server Man at `c1a9f32f5898146ae7ac339043b910b8e2a2c438` as the behavioral reference. Prefer direct translation of Go domain logic and tests, and reuse existing Svelte components. Retain equivalent Rust code; replace divergent implementations where simpler. Finish and validate vertical slices before expanding scope. Keep Linux non-root, the optional restricted helper, unified YAML, and router build isolation. Do not claim native parity from source changes alone.
+
 ## Documentation routing
 
 - Update `README.md` for the user-facing overview and quick start; keep detailed installation, configuration, development, Linux integration, and release guidance in the linked `docs/` guides.
