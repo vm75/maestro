@@ -17,7 +17,7 @@ use crate::{
         jobs::{Jobs, Outcome},
         monitor::{Monitor, ProcessSort},
     },
-    platforms::{package_updates, systemd},
+    platforms::{admin, package_updates, systemd},
     state::AppState,
 };
 use uuid::Uuid;
@@ -470,8 +470,30 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
     tools
 }
 
+async fn permissions(state: &AppState) -> Value {
+    let helper = admin::probe().await;
+    let system_ready = state.config.services.systemd_system_write_units
+        .iter().any(|unit| helper.permits_unit(unit));
+    json!({
+        "helper": helper,
+        "systemServices": {
+            "status": if system_ready { "ready" } else { "unavailable" },
+            "reason": if system_ready {
+                "Configured system units are authorized through the helper."
+            } else {
+                "Protected system-unit actions require configured units and matching root-owned helper policy."
+            }
+        },
+        "packageWrites": {
+            "status": "unavailable",
+            "code": "helper_routing_pending",
+            "reason": "Package mutations remain gated until the restricted helper operations have been validated."
+        }
+    })
+}
+
 async fn discover(State(state): State<AppState>) -> Json<Value> {
-    Json(json!({ "tools": discover_tools(&state), "modules": modules(&state) }))
+    Json(json!({ "tools": discover_tools(&state), "modules": modules(&state), "permissions": permissions(&state).await }))
 }
 
 pub struct ToolContext<'a> {
@@ -549,11 +571,16 @@ pub async fn execute_tool(
             );
         }
         if !package_updates::permits(state, install) {
+            let policy_disabled = !state.config.system.allow_package_writes;
             return (
-                StatusCode::FORBIDDEN,
+                if policy_disabled { StatusCode::FORBIDDEN } else { StatusCode::SERVICE_UNAVAILABLE },
                 json_err(
-                    "writes_disabled",
-                    "Package operations require explicit opt-in, native tools, and root permissions.",
+                    if policy_disabled { "writes_disabled" } else { "helper_routing_pending" },
+                    if policy_disabled {
+                        "Package writes are disabled by policy."
+                    } else {
+                        "Protected package operations are unavailable until their restricted helper verbs and native safety checks are implemented."
+                    },
                 ),
             );
         }
@@ -604,6 +631,22 @@ pub async fn execute_tool(
                     "This service and scope are outside the write policy.",
                 ),
             );
+        }
+        if matches!(input.scope, systemd::Scope::System) {
+            let helper = admin::probe().await;
+            if !helper.permits_unit(&input.unit) {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err(
+                        "helper_unavailable",
+                        if helper.status == "ready" {
+                            "The selected service is not authorized by the root-owned helper policy."
+                        } else {
+                            &helper.reason
+                        },
+                    ),
+                );
+            }
         }
 
         let tool = match action {
@@ -679,7 +722,8 @@ pub async fn execute_tool(
             StatusCode::OK,
             json!({
                 "modules": modules(state),
-                "allowWrites": systemd::writes_enabled(state) || package_updates::writes_enabled(state) || writes_allowed(state)
+                "allowWrites": systemd::writes_enabled(state) || package_updates::writes_enabled(state) || writes_allowed(state),
+                "permissions": permissions(state).await
             }),
         ),
 
@@ -1281,11 +1325,14 @@ async fn status(
         .iter()
         .position(|&byte| byte == 0)
         .unwrap_or(hostname.len());
+    let helper = admin::probe().await;
+    let privileged_writes = state.config.services.systemd_system_write_units
+        .iter().any(|unit| helper.permits_unit(unit));
     Json(json!({
         "hostname": String::from_utf8_lossy(&hostname[..end]),
         "startedAt": started_at,
         "version": env!("CARGO_PKG_VERSION"),
-        "allowWrites": systemd::writes_enabled(&state) || package_updates::writes_enabled(&state) || writes_allowed(&state)
+        "allowWrites": privileged_writes || systemd::writes_enabled(&state) || package_updates::writes_enabled(&state) || writes_allowed(&state)
     }))
     .into_response()
 }

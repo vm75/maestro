@@ -5,7 +5,7 @@
   let { status: _status, discovery: _discovery }: { status: Status; discovery: Discovery } = $props()
 
   interface PackageStatus {
-    manager: { title: string; available: boolean; canRefresh: boolean; canInstall: boolean }
+    manager: { title: string; available: boolean; canRefresh: boolean; canInstall: boolean; writeReason?: string }
     distribution: string
     packages: Array<{ name: string; architecture?: string; installed?: string; candidate?: string; kind: string }>
     valid: boolean
@@ -99,6 +99,7 @@
   {#if result}
     {#if result.distribution}<p>{result.distribution} · {result.manager.title}</p>{/if}
     <p>{result.notice}</p>
+    {#if result.manager.writeReason}<p role="status">{result.manager.writeReason} Read-only cached package inspection remains available.</p>{/if}
     <p>{result.reboot.reason}</p>
     {#if result.valid && result.packages.length}
       <div class="table-scroll">

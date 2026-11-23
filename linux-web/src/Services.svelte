@@ -9,6 +9,7 @@
     available: boolean
     journalAvailable: boolean
     reason?: string
+    permissionReason?: string
     warnings: string[]
     services: Array<{
       name: string
@@ -143,6 +144,9 @@
     {#if !inventory.available}
       <p>{inventory.reason ?? 'Systemd is unavailable.'}</p>
     {:else}
+      {#if inventory.permissionReason}
+        <p role="status">{inventory.permissionReason} You can continue reading system services and managing authorized user services without the optional helper.</p>
+      {/if}
       {#each inventory.warnings as warning}
         <p role="status">{warning}</p>
       {/each}

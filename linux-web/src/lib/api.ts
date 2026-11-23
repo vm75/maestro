@@ -19,7 +19,12 @@ export interface Job {
 
 export interface Module { id: string; title: string; available: boolean; reason?: string; writable?: boolean }
 export interface Tool { name: string; module: string; title: string; description: string; readOnly: boolean; destructive: boolean; inputSchema: Record<string, unknown> }
-export interface Discovery { tools: Tool[]; modules: Module[] }
+export interface HelperPermission { status: 'ready' | 'unavailable' | 'unknown'; code: string; reason: string; systemUnits: string[] }
+export interface Discovery {
+  tools: Tool[]
+  modules: Module[]
+  permissions?: { helper: HelperPermission; systemServices: { status: string; reason: string }; packageWrites: { status: string; code: string; reason: string } }
+}
 
 export class ApiError extends Error {
   constructor(message: string, public status: number, public code?: string) { super(message) }
