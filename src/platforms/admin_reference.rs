@@ -643,7 +643,7 @@ pub(super) async fn execute(request: Request, policy: &Policy, uid: u32) -> Resp
             operation if operation.starts_with("services_") => service(operation,input,policy,&mut output).await,
             "shares_samba_password" => password(input,policy,uid).await,
             "updates_status" | "updates_refresh" | "updates_install" | "packages_install" | "dependencies_install" => packages(&request.operation,input,policy,&mut output).await,
-            "shares_list" | "shares_setup" | "shares_definitions_inspect" | "shares_definitions_validate" | "shares_definitions_apply" => shares::execute(&request.operation,input).await,
+            "shares_list" | "shares_setup" | "shares_definitions_inspect" | "shares_definitions_validate" | "shares_definitions_apply" => shares::execute(&request.operation,input,policy).await,
             _ => Err(Failure::invalid("unknown operation")),
         },
     };
