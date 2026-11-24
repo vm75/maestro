@@ -97,9 +97,7 @@ pub fn require_router(platform: Platform, test_mode: bool) -> Result<()> {
 }
 
 fn entware_tag(tag: &str) -> bool {
-    tag.starts_with("toolbox-")
-        && tag.contains("-entware-")
-        && validate_asset_name(tag).is_ok()
+    tag.starts_with("toolbox-") && tag.contains("-entware-") && validate_asset_name(tag).is_ok()
 }
 
 fn package_parts(filename: &str) -> Result<(&str, &str)> {
@@ -122,7 +120,12 @@ fn bundle(release: &Release) -> Result<Vec<&Asset>> {
         "not a published Toolbox Entware release"
     );
     ensure!(
-        release.assets.iter().filter(|a| a.name == "SHA256SUMS").count() == 1,
+        release
+            .assets
+            .iter()
+            .filter(|a| a.name == "SHA256SUMS")
+            .count()
+            == 1,
         "release must contain one SHA256SUMS manifest"
     );
     let mut packages = Vec::new();
@@ -159,12 +162,13 @@ fn bundle(release: &Release) -> Result<Vec<&Asset>> {
     Ok(packages)
 }
 
-fn verify_manifest(
-    packages: &[&Asset],
-    checksums: &HashMap<String, String>,
-) -> Result<()> {
+fn verify_manifest(packages: &[&Asset], checksums: &HashMap<String, String>) -> Result<()> {
     ensure!(
-        checksums.keys().filter(|name| name.ends_with(".ipk")).count() == packages.len(),
+        checksums
+            .keys()
+            .filter(|name| name.ends_with(".ipk"))
+            .count()
+            == packages.len(),
         "IPK assets and checksum manifest disagree"
     );
     for asset in packages {
@@ -174,7 +178,8 @@ fn verify_manifest(
         if let Some(digest) = &asset.digest {
             ensure!(
                 digest.strip_prefix("sha256:") == Some(checksum.as_str()),
-                "GitHub digest and manifest disagree for {}", asset.name
+                "GitHub digest and manifest disagree for {}",
+                asset.name
             );
         }
     }
@@ -320,7 +325,8 @@ async fn download_and_verify_asset(
 
 fn validate_asset_name(name: &str) -> Result<()> {
     ensure!(
-        !name.is_empty() && name != "."
+        !name.is_empty()
+            && name != "."
             && name
                 .bytes()
                 .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'.' | b'-' | b'_' | b'+'))
@@ -827,11 +833,7 @@ async fn verify_installed(packages: &[&Asset]) -> Result<()> {
     Ok(())
 }
 
-pub async fn run(
-    config: &AppConfig,
-    config_path: &Path,
-    command: ToolboxCommand,
-) -> Result<()> {
+pub async fn run(config: &AppConfig, config_path: &Path, command: ToolboxCommand) -> Result<()> {
     require_router(config.platform, config.test_mode)?;
     let client = client()?;
     match command {
@@ -873,18 +875,13 @@ async fn install(
     } else {
         None
     };
-    let bytes = request_bytes(
-        client,
-        &format!("{TAG_API_BASE}/{tag}"),
-        MAX_RELEASE_BYTES,
-    )
-    .await?;
+    let bytes = request_bytes(client, &format!("{TAG_API_BASE}/{tag}"), MAX_RELEASE_BYTES).await?;
     let release: Release = serde_json::from_slice(&bytes)?;
     ensure!(release.tag_name == tag, "release tag mismatch");
     let packages = bundle(&release)?;
-    let nginx = packages.iter().any(|asset| {
-        package_parts(&asset.name).is_ok_and(|(name, _)| name == "nginx-ssl")
-    });
+    let nginx = packages
+        .iter()
+        .any(|asset| package_parts(&asset.name).is_ok_and(|(name, _)| name == "nginx-ssl"));
     if automatic {
         check_downgrades(&packages, allow_downgrade).await?;
         if nginx {
@@ -923,7 +920,10 @@ async fn install(
                 asset.size,
             )
             .await?;
-            ensure!(fs::metadata(&path)?.len() == asset.size, "IPK size mismatch");
+            ensure!(
+                fs::metadata(&path)?.len() == asset.size,
+                "IPK size mismatch"
+            );
         }
         Ok(())
     }
@@ -969,20 +969,27 @@ async fn install(
     if !automatic {
         println!("To install as root: {manual_cmd}");
         if nginx {
-            println!("Manual installation requires NGINX configuration testing and binary activation.");
+            println!(
+                "Manual installation requires NGINX configuration testing and binary activation."
+            );
         }
         return Ok(());
     }
 
     println!("Installing all IPKs. Manual retry command: {manual_cmd}");
     let mut opkg_cmd = AsyncCommand::new(OPKG);
-    opkg_cmd.args(&opkg_options).arg("install").args(&package_paths);
+    opkg_cmd
+        .args(&opkg_options)
+        .arg("install")
+        .args(&package_paths);
     if nginx {
         install_nginx(config, opkg_cmd, &packages).await?;
     } else {
         let output = bounded_command(opkg_cmd, OPKG_TIMEOUT, "opkg install")
             .await
-            .context("installation state may be partial; inspect opkg and package hooks before retrying")?;
+            .context(
+                "installation state may be partial; inspect opkg and package hooks before retrying",
+            )?;
         ensure!(
             output.status.success(),
             "opkg install failed: {}{}",
@@ -1109,11 +1116,14 @@ mod tests {
     use super::*;
 
     fn release(tag: &str, names: &[&str]) -> Release {
-        let mut assets: Vec<Asset> = names.iter().map(|name| Asset {
-            name: (*name).into(),
-            size: 123,
-            digest: None,
-        }).collect();
+        let mut assets: Vec<Asset> = names
+            .iter()
+            .map(|name| Asset {
+                name: (*name).into(),
+                size: 123,
+                digest: None,
+            })
+            .collect();
         assets.push(Asset {
             name: "SHA256SUMS".into(),
             size: 100,

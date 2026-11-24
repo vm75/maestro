@@ -14,13 +14,13 @@ mod modules;
 mod nginx_ingress;
 mod nginx_mutation;
 mod nginx_render;
-#[path = "platforms/toolbox.rs"]
-mod toolbox;
 pub mod platforms;
 mod restore;
 mod state;
 mod storage;
 mod system;
+#[path = "platforms/toolbox.rs"]
+mod toolbox;
 #[path = "platforms/upgrade.rs"]
 mod upgrade;
 mod util;
@@ -515,8 +515,12 @@ mod cli_tests {
             })
         ));
         let cli = Cli::try_parse_from([
-            "maestro", "toolbox", "install", "toolbox-nginx-entware-1.30.8-99_aarch64",
-            "--download-only", "--allow-downgrade",
+            "maestro",
+            "toolbox",
+            "install",
+            "toolbox-nginx-entware-1.30.8-99_aarch64",
+            "--download-only",
+            "--allow-downgrade",
         ])
         .unwrap();
         assert!(matches!(
