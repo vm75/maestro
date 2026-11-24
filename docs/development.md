@@ -136,6 +136,22 @@ IPK using the version in `Cargo.toml`. The package and its SHA-256 checksum are
 written to `dist/maestro_<version>-1_aarch64-3.10.ipk` and `.ipk.sha256`.
 This uses the same cross-compilation toolchain as `make release`.
 
+### Cross-compilation for AArch64 musl
+
+When cross-compiling for `aarch64-unknown-linux-musl` without a local `aarch64-linux-musl-gcc` toolchain, build with `cross`:
+
+1. Install `cross`:
+   ```sh
+   cargo install cross --git https://github.com/cross-rs/cross
+   # Or download the prebuilt binary directly to ~/.cargo/bin:
+   curl -fsSL https://github.com/cross-rs/cross/releases/download/v0.2.5/cross-x86_64-unknown-linux-musl.tar.gz | tar -xz -C ~/.cargo/bin
+   ```
+
+2. Build with `cross`:
+   ```sh
+   cross build --release --locked --target aarch64-unknown-linux-musl --no-default-features --features asuswrt
+   ```
+
 With the Python environment active, run `make test-nginx` for the bundled
 nginx policy and loopback tests. `make test-linux` exercises the API with real
 nginx, including managed-site persistence, regeneration, and HTTPS.

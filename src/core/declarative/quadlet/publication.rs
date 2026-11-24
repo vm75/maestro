@@ -9,12 +9,15 @@ use rustix::io::Errno;
 
 use crate::core::declarative::{Change, Config, ObservedResource, store};
 
+#[cfg(test)]
 use super::render_quadlet;
+use super::render_quadlet_at;
 
 /// Publication for an explicitly configured, owner-only rootless Quadlet directory.
 pub struct QuadletArtifacts {
     pub(super) directory: PathBuf,
     pub(super) storage_base: PathBuf,
+    pub(super) private_base: PathBuf,
 }
 
 impl QuadletArtifacts {
@@ -25,8 +28,18 @@ impl QuadletArtifacts {
         );
         Ok(Self {
             directory,
+            private_base: storage_base.clone(),
             storage_base,
         })
+    }
+
+    pub fn with_private_base(mut self, private_base: PathBuf) -> Result<Self> {
+        ensure!(
+            private_base.is_absolute(),
+            "Quadlet private file base must be absolute"
+        );
+        self.private_base = private_base;
+        Ok(self)
     }
 
     pub fn observe(
@@ -35,7 +48,13 @@ impl QuadletArtifacts {
         previous: &Config,
         desired: &Config,
     ) -> Result<ObservedResource> {
-        let transition = Transition::new(change, previous, desired, &self.storage_base)?;
+        let transition = Transition::new(
+            change,
+            previous,
+            desired,
+            &self.storage_base,
+            &self.private_base,
+        )?;
         transition.observe(&store::open_directory(&self.directory)?)
     }
 
@@ -43,7 +62,13 @@ impl QuadletArtifacts {
     /// A crash during a multi-file update can leave a mixed state. The caller
     /// retains its journal and must reconcile that state before retrying.
     pub fn publish(&self, change: &Change, previous: &Config, desired: &Config) -> Result<()> {
-        let transition = Transition::new(change, previous, desired, &self.storage_base)?;
+        let transition = Transition::new(
+            change,
+            previous,
+            desired,
+            &self.storage_base,
+            &self.private_base,
+        )?;
         let directory = store::open_directory(&self.directory)?;
         let directory = store::LockedDirectory::try_acquire(directory)?;
         ensure!(
@@ -90,6 +115,7 @@ impl Transition {
         previous: &Config,
         desired: &Config,
         root: &Path,
+        private_base: &Path,
     ) -> Result<Self> {
         let id = change.resource.strip_prefix("service/").unwrap_or_default();
         ensure!(
@@ -97,7 +123,7 @@ impl Transition {
             "resource is not a Quadlet application"
         );
         let render = |config, fingerprint: Option<&str>| match fingerprint {
-            Some(fingerprint) => render_quadlet(config, id, root, fingerprint),
+            Some(fingerprint) => render_quadlet_at(config, id, root, private_base, fingerprint),
             None => Ok(BTreeMap::new()),
         };
         let before = render(previous, change.before.as_deref())?;
@@ -166,6 +192,34 @@ mod tests {
     const APP: &[u8] =
         b"version: 1\nservices:\n  app: {kind: container, containers: {web: {image: alpine}}}\n";
     const EMPTY: &[u8] = b"version: 1\n";
+
+    #[test]
+    fn publishes_environment_paths_relative_to_the_authority() {
+        let (temp, artifacts, store) = fixture();
+        let artifacts = artifacts
+            .with_private_base(temp.path().join("state"))
+            .unwrap();
+        let yaml = b"version: 1\nsecrets: {settings: private/app.env}\nservices:\n  app: {kind: container, containers: {web: {image: alpine, env_files: [settings]}}}\n";
+        let desired = parse(yaml).unwrap();
+        let plan = store.preview(yaml, MISSING_REVISION).unwrap();
+        artifacts
+            .publish(&plan.changes[0], &parse(EMPTY).unwrap(), &desired)
+            .unwrap();
+        let definitions: String = std::fs::read_dir(temp.path().join("units"))
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect();
+        assert!(definitions.contains(&format!(
+            "EnvironmentFile={}/state/private/app.env",
+            temp.path().display()
+        )));
+        assert_eq!(
+            artifacts
+                .observe(&plan.changes[0], &parse(EMPTY).unwrap(), &desired)
+                .unwrap(),
+            ObservedResource::After
+        );
+    }
 
     #[test]
     fn publishes_updates_and_removes_only_exact_generated_files() {

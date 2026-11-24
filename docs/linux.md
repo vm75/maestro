@@ -260,6 +260,9 @@ loaded units before changing state or reading journals. The Applications
 inventory reports verified systemd state, including mixed member states.
 Failed or timed-out inspections leave the state unknown. Lifecycle controls
 also require verified units for workload dependencies.
+Configuration readiness reports actual rootless Podman and user-manager access
+failures. Quadlet lifecycle actions verify generated files, loaded unit ownership,
+and runtime state; boot enablement separately checks startup policy and lingering.
 
 For an interrupted apply, inspect the journal with `workloads_pending` and
 submit the reviewed plan fingerprint to `workloads_resume`. The coordinator
@@ -352,6 +355,23 @@ Maestro enforces:
 - Deterministic change plan review with unique plan fingerprints.
 - Transactional apply with recovery journaling and rollback support.
 - Full revision history and revert capabilities.
+
+### Podman Quadlet
+
+Quadlet applications use `kind: container`, `engine: podman`, and
+`backend: quadlet`. Container options preserve user namespaces and UID/GID
+maps, devices, capabilities, explicit privilege settings, temporary filesystems,
+pull policy, and container logging limits. Private `env_files` reference
+`secrets` paths relative to the authoritative YAML directory; managed storage
+paths remain relative to the storage directory.
+
+Within an application, `network_mode: service:<member>` shares that member's
+network namespace. A `depends_on: {<member>: healthy}` dependency waits for
+the upstream Podman healthcheck through Quadlet's startup notification.
+`stop_grace_period` currently accepts positive whole seconds, such as `20s`.
+Entrypoint overrides, TTY, and shared-memory size overrides remain unsupported
+by the Quadlet renderer. The native generator smoke test covers rendering;
+live service lifecycle and boot persistence require separate validation.
 
 ### Podman and Docker Compose
 

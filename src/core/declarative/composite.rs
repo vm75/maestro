@@ -95,7 +95,11 @@ impl CompositeProvider {
 
     pub fn new(config: &AppConfig, runner: CommandRunner) -> Self {
         let quadlet_artifacts = config.paths.quadlet_dir.as_ref().and_then(|directory| {
-            QuadletArtifacts::new(directory.clone(), config.paths.storage_dir.clone()).ok()
+            let store = crate::core::linux_config::store(config).ok()?;
+            let authority = store.path();
+            let private_base = authority.parent()?.to_path_buf();
+            QuadletArtifacts::new(directory.clone(), config.paths.storage_dir.clone())
+                .and_then(|artifacts| artifacts.with_private_base(private_base)).ok()
         });
         let quadlet = quadlet_artifacts.and_then(|artifacts| {
             QuadletProvider::new(

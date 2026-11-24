@@ -2,6 +2,7 @@ mod provider;
 mod runtime;
 pub use provider::QuadletProvider;
 pub use runtime::ContainerMemberStatus;
+mod options;
 mod publication;
 pub use publication::QuadletArtifacts;
 use std::{collections::BTreeMap, fmt::Write, path::Path};
@@ -18,7 +19,22 @@ pub fn render_quadlet(
     base: &Path,
     fingerprint: &str,
 ) -> Result<BTreeMap<String, String>> {
+    render_quadlet_at(config, id, base, base, fingerprint)
+}
+
+/// Private environment files are relative to the authoritative YAML directory.
+pub fn render_quadlet_at(
+    config: &Config,
+    id: &str,
+    base: &Path,
+    private_base: &Path,
+    fingerprint: &str,
+) -> Result<BTreeMap<String, String>> {
     ensure!(base.is_absolute(), "Quadlet storage base must be absolute");
+    ensure!(
+        private_base.is_absolute(),
+        "Quadlet private file base must be absolute"
+    );
     ensure!(
         super::id_valid(id) && super::store::valid_revision(fingerprint),
         "invalid Quadlet resource identity"
@@ -33,6 +49,7 @@ pub fn render_quadlet(
         is_quadlet(service),
         "resource is not a Podman Quadlet application"
     );
+    super::compose::validate_options(service)?;
     let ownership = format!("{HEADER}\n# resource=service/{id}\n# fingerprint={fingerprint}\n");
     let network = format!("maestro-network-{}", &revision(id.as_bytes())[..24]);
     let mut files = BTreeMap::from([(
@@ -42,7 +59,10 @@ pub fn render_quadlet(
         ),
     )]);
     for (name, container) in &service.containers {
-        reject_unrendered_options(container)?;
+        ensure!(
+            container.entrypoint.is_empty() && !container.tty && container.shm_size.is_empty(),
+            "workload specifies a Quadlet option that cannot yet be rendered"
+        );
         let unit = unit_name(id, name);
         let mut body = format!("{ownership}[Unit]\nDescription=Maestro container {id}/{name}\n");
         for dependency in &service.depends_on {
@@ -55,11 +75,7 @@ pub fn render_quadlet(
                 add_dependency(&mut body, &unit_name(dependency, member))?;
             }
         }
-        for (member, condition) in &container.depends_on {
-            ensure!(
-                condition == "started",
-                "Quadlet dependency condition is unsupported"
-            );
+        for member in container.depends_on.keys() {
             add_dependency(&mut body, &unit_name(id, member))?;
         }
         writeln!(body, "\n[Container]")?;
@@ -83,13 +99,26 @@ pub fn render_quadlet(
         match container.network_mode.as_str() {
             "" => writeln!(body, "Network={network}.network\nNetworkAlias={name}")?,
             "host" | "none" => writeln!(body, "Network={}", container.network_mode)?,
-            _ => return Err(anyhow!("unsupported Quadlet network mode")),
+            mode => {
+                let peer = mode
+                    .strip_prefix("service:")
+                    .ok_or_else(|| anyhow!("unsupported Quadlet network mode"))?;
+                writeln!(body, "Network={}.container", unit_name(id, peer))?;
+            }
         }
         writeln!(
             body,
             "Label=io.maestro.service={id}\nLabel=io.maestro.container={name}\nLabel=io.maestro.fingerprint={fingerprint}"
         )?;
-        writeln!(body, "NoNewPrivileges=true")?;
+        options::render(&mut body, container)?;
+        if service.containers.values().any(|dependent| {
+            dependent
+                .depends_on
+                .get(name)
+                .is_some_and(|condition| condition == "healthy")
+        }) {
+            writeln!(body, "Notify=healthy")?;
+        }
         if container.read_only {
             writeln!(body, "ReadOnly=true")?;
         }
@@ -118,7 +147,7 @@ pub fn render_quadlet(
             writeln!(body, "Environment={}", word(&format!("{key}={value}"))?)?;
         }
         for reference in &container.env_files {
-            let path = base.join(&config.secrets[reference]);
+            let path = private_base.join(&config.secrets[reference]);
             writeln!(
                 body,
                 "EnvironmentFile={}",
@@ -174,6 +203,18 @@ pub fn render_quadlet(
             _ => return Err(anyhow!("unsupported Quadlet restart policy")),
         };
         writeln!(body, "\n[Service]\nRestart={restart}")?;
+        if !container.stop_grace_period.is_empty() {
+            // Let Podman finish its own graceful stop before systemd kills it.
+            writeln!(body, "TimeoutStopSec=infinity")?;
+        }
+        if service.containers.values().any(|dependent| {
+            dependent
+                .depends_on
+                .get(name)
+                .is_some_and(|condition| condition == "healthy")
+        }) {
+            writeln!(body, "TimeoutStartSec=900")?;
+        }
         if service.enabled {
             writeln!(body, "\n[Install]\nWantedBy=default.target")?;
         }
@@ -262,33 +303,6 @@ fn valid_env(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
-fn reject_unrendered_options(container: &Container) -> Result<()> {
-    let unsupported = !container.entrypoint.is_empty()
-        || !container.user.is_empty()
-        || !container.userns_mode.is_empty()
-        || !container.uid_maps.is_empty()
-        || !container.gid_maps.is_empty()
-        || !container.group_add.is_empty()
-        || !container.devices.is_empty()
-        || !container.cap_add.is_empty()
-        || !container.cap_drop.is_empty()
-        || !container.security_opt.is_empty()
-        || container.privileged
-        || container.tty
-        || !container.tmpfs.is_empty()
-        || !container.shm_size.is_empty()
-        || !container.stop_grace_period.is_empty()
-        || !container.pull_policy.is_empty()
-        || !container.log_driver.is_empty()
-        || !container.log_options.is_empty()
-        || container.healthcheck.is_some();
-    ensure!(
-        !unsupported,
-        "workload specifies a Quadlet option that cannot yet be rendered"
-    );
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,6 +351,17 @@ services:
         assert!(body.contains("Volume=/tmp/quadlet-test/volumes/cache:/cache:ro"));
         assert!(body.contains("[Install]\nWantedBy=default.target"));
         assert!(body.contains(&format!("# fingerprint={fingerprint}")));
+        let relocated = render_quadlet_at(
+            &configuration,
+            "demo",
+            base,
+            Path::new("/tmp/private-root"),
+            &fingerprint,
+        )
+        .unwrap();
+        let relocated = &relocated[&format!("{}.container", unit_name("demo", "web"))];
+        assert!(relocated.contains("EnvironmentFile=/tmp/private-root/private/env"));
+        assert!(relocated.contains("Volume=/tmp/quadlet-test/volumes/cache:/cache:ro"));
 
         let disabled = super::super::parse(
             FIXTURE
@@ -376,8 +401,109 @@ services:
             .get_mut("web")
             .unwrap();
         container.environment.clear();
-        container.privileged = true;
+        container.entrypoint = vec!["/entrypoint".into()];
         assert!(render_quadlet(&configuration, "demo", base, &fingerprint).is_err());
+    }
+
+    const ADVANCED: &str = r#"
+version: 1
+services:
+  migration:
+    kind: container
+    containers:
+      vpn:
+        image: ghcr.io/vm75/vpn-sandbox:0.5.2
+        container_name: vpn
+        init: true
+        user: '0:0'
+        userns_mode: keep-id
+        devices: [/dev/net/tun]
+        cap_add: [NET_ADMIN]
+        log_driver: k8s-file
+        log_options: {max-size: 100k, path: '/tmp/log with spaces.log'}
+        pull_policy: missing
+        healthcheck:
+          test: [CMD-SHELL, 'test -n "${VALUE}"']
+          interval: 10s
+          timeout: 5s
+          retries: 10
+          start_period: 20s
+      client:
+        image: ghcr.io/flaresolverr/flaresolverr:latest
+        network_mode: service:vpn
+        depends_on: {vpn: healthy}
+        read_only: true
+        cap_drop: [ALL]
+        security_opt: [no-new-privileges:true]
+        tmpfs: ['/tmp:rw,noexec,nosuid,nodev,size=64m']
+        stop_grace_period: 20s
+        healthcheck:
+          test: [CMD, python, '-c', 'print("healthy")']
+      mapped:
+        image: docker.io/nodered/node-red:latest-minimal
+        uid_maps: ['1000:0:1', '0:1:1000', '1001:1001:64536']
+      home:
+        image: ghcr.io/home-assistant/home-assistant:stable
+        privileged: true
+        network_mode: host
+        security_opt: [no-new-privileges]
+"#;
+
+    #[test]
+    fn compose_migration_preserves_options_and_readiness() {
+        let config = super::super::parse(ADVANCED.as_bytes()).unwrap();
+        let files = render_quadlet(
+            &config,
+            "migration",
+            Path::new("/tmp/storage"),
+            &revision(ADVANCED.as_bytes()),
+        )
+        .unwrap();
+        let vpn = &files[&format!("{}.container", unit_name("migration", "vpn"))];
+        assert!(vpn.contains("Notify=healthy"));
+        assert!(vpn.contains("HealthRetries=10"));
+        assert!(vpn.contains("$${VALUE}"));
+        assert!(vpn.contains("PodmanArgs=\"--device=/dev/net/tun\""));
+        assert!(vpn.contains("PodmanArgs=\"--log-opt=path=/tmp/log with spaces.log\""));
+        let client = &files[&format!("{}.container", unit_name("migration", "client"))];
+        assert!(client.contains(&format!(
+            "Network={}.container",
+            unit_name("migration", "vpn")
+        )));
+        assert!(client.contains("StopTimeout=20"));
+        assert!(client.contains("TimeoutStopSec=infinity"));
+        assert!(client.contains("NoNewPrivileges=true"));
+        let home = &files[&format!("{}.container", unit_name("migration", "home"))];
+        assert!(home.contains("PodmanArgs=--privileged"));
+        assert!(home.contains("Network=host"));
+        assert!(home.contains("NoNewPrivileges=true"));
+        let cycle = ADVANCED
+            .replace(
+                "network_mode: host",
+                "network_mode: service:client\n        depends_on: {mapped: started}",
+            )
+            .replace("uid_maps:", "network_mode: service:home\n        uid_maps:");
+        let config = super::super::parse(cycle.as_bytes()).unwrap();
+        assert!(
+            render_quadlet(
+                &config,
+                "migration",
+                Path::new("/tmp/storage"),
+                &revision(cycle.as_bytes())
+            )
+            .is_err()
+        );
+        let injected = ADVANCED.replace("1000:0:1", "1000:0:1 --privileged");
+        let config = super::super::parse(injected.as_bytes()).unwrap();
+        assert!(
+            render_quadlet(
+                &config,
+                "migration",
+                Path::new("/tmp/storage"),
+                &revision(injected.as_bytes())
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -393,6 +519,17 @@ services:
         )
         .unwrap();
         for (name, contents) in files {
+            std::fs::write(temp.path().join(name), contents).unwrap();
+        }
+        let advanced = super::super::parse(ADVANCED.as_bytes()).unwrap();
+        for (name, contents) in render_quadlet(
+            &advanced,
+            "migration",
+            temp.path(),
+            &revision(ADVANCED.as_bytes()),
+        )
+        .unwrap()
+        {
             std::fs::write(temp.path().join(name), contents).unwrap();
         }
         let generator = std::env::var_os("MAESTRO_QUADLET_GENERATOR")
@@ -415,5 +552,8 @@ services:
         let label = format!("io.maestro.fingerprint={}", revision(FIXTURE.as_bytes()));
         assert!(stdout.matches(&label).count() >= 3, "{stdout}");
         assert!(stdout.contains("default.target"), "{stdout}");
+        assert!(stdout.contains("--sdnotify=healthy"), "{stdout}");
+        assert!(stdout.contains("--uidmap=1000:0:1"), "{stdout}");
+        assert!(stdout.contains("--network container:vpn"), "{stdout}");
     }
 }

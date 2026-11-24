@@ -555,10 +555,10 @@ async fn backend_prerequisites(
                 issues.push(backend_issue(backend, "error", "missing_adapter",
                     "The rootless Quadlet provider is unavailable."));
             }
-            // A reachable manager alone does not prove generator, boot or
-            // resource-specific readiness.
-            issues.push(backend_issue(backend, "unknown", "generator_check_pending",
-                "Quadlet generator, boot and resource prerequisites are not fully verified."));
+            // The provider verifies generated files, loaded unit ownership and
+            // runtime state before lifecycle actions. Boot enablement separately
+            // verifies boot policy and lingering. An unconditional unknown here
+            // would disable every Quadlet application's controls in the UI.
         }
         "podman/compose" | "docker/compose" => {
             let engine = if backend == "podman/compose" {"podman"} else {"docker"};
@@ -755,6 +755,72 @@ impl ReadinessCache {
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
+
+    #[tokio::test]
+    async fn quadlet_readiness_allows_reachable_runtime_but_preserves_access_errors() {
+        use crate::{
+            command::CommandRunner,
+            config::{AppConfig, Platform},
+            firewall::FirewallManager,
+            state::AppState,
+            storage::Stores,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let podman = root.path().join("podman");
+        fs::write(&podman, "#!/bin/sh\nprintf 'true\\n'\n").unwrap();
+        fs::set_permissions(&podman, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut config = AppConfig {
+            platform: Platform::Linux,
+            ..Default::default()
+        };
+        config.paths.data_dir = root.path().to_path_buf();
+        config.certificates.certs_dir = root.path().join("certs");
+        config.nginx.root_dir = root.path().join("nginx");
+        config.nginx.inputs_dir = root.path().join("inputs");
+        config.commands.podman = podman;
+        config.commands.systemctl = "/bin/true".into();
+        let stores = Stores::load(&config).await.unwrap();
+        let firewall = FirewallManager::new(config.clone(), stores.clone())
+            .await
+            .unwrap();
+        let mut state = AppState::new(config, stores, firewall);
+        state.runner = CommandRunner::new(false);
+        let workloads = super::super::parse(b"version: 1\nservices:\n  app: {kind: container, containers: {web: {image: alpine}}}\n").unwrap();
+        assert!(
+            backend_prerequisites(&state, true, "podman/quadlet", &workloads)
+                .await
+                .is_empty()
+        );
+        let unavailable = backend_prerequisites(&state, false, "podman/quadlet", &workloads).await;
+        assert_eq!(unavailable.len(), 1);
+        assert_eq!(unavailable[0].code, "missing_adapter");
+        let settings = std::sync::Arc::make_mut(&mut state.config);
+        settings.commands.systemctl = "/bin/false".into();
+        settings.commands.podman = "/bin/false".into();
+        let errors = backend_prerequisites(&state, true, "podman/quadlet", &workloads).await;
+        assert!(
+            errors
+                .iter()
+                .any(|issue| issue.code == "rootless_unavailable" && issue.severity == "error")
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|issue| issue.code == "user_manager_unavailable" && issue.severity == "error")
+        );
+        let mut health = Health {
+            checked_at: Utc::now(),
+            runtime_checked_at: None,
+            issues: Vec::new(),
+        };
+        propagate(&workloads, &mut health, errors);
+        assert!(
+            health
+                .issues
+                .iter()
+                .any(|issue| issue.resource == "service/app" && issue.severity == "error")
+        );
+    }
 
     #[test]
     fn mount_flags_and_visible_mount_match_reference() {

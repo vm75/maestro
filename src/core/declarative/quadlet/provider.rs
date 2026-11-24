@@ -32,7 +32,7 @@ impl QuadletProvider {
         let render=|config:&Config|->Result<std::collections::BTreeMap<String,Vec<u8>>>{
             if !config.services.contains_key(id){return Ok(Default::default())}
             let fingerprint=service_fingerprint(config,id)?;
-            Ok(super::render_quadlet(config,id,&self.artifacts.storage_base,&fingerprint)?.into_iter().map(|(k,v)|(k,v.into_bytes())).collect())
+            Ok(super::render_quadlet_at(config,id,&self.artifacts.storage_base,&self.artifacts.private_base,&fingerprint)?.into_iter().map(|(k,v)|(k,v.into_bytes())).collect())
         };
         Ok(vec![Target::quadlet(self.artifacts.directory.clone(),id,render(previous)?,render(desired)?)?])
     }
@@ -187,7 +187,7 @@ impl QuadletProvider {
             self.artifacts.observe(&change, &empty, config)? == ObservedResource::After,
             "Quadlet files do not match the saved workload revision"
         );
-        let transition = Transition::new(&change, &empty, config, &self.artifacts.storage_base)?;
+        let transition = Transition::new(&change, &empty, config, &self.artifacts.storage_base, &self.artifacts.private_base)?;
         let mut units = Vec::new();
         for file in transition.after.keys() {
             if let Some(unit) = generated_service(file) {
@@ -356,7 +356,7 @@ impl QuadletProvider {
                 self.verify_enable_prerequisites().await?;
             }
         }
-        let transition = Transition::new(change, previous, desired, &self.artifacts.storage_base)?;
+        let transition = Transition::new(change, previous, desired, &self.artifacts.storage_base, &self.artifacts.private_base)?;
         for file in transition.before.keys().chain(
             transition
                 .after
@@ -453,7 +453,7 @@ impl crate::core::declarative::RecoveryProvider for QuadletProvider {
         mode: ApplyMode,
     ) -> Result<ObservedResource> {
         let observed = self.artifacts.observe(change, previous, desired)?;
-        let transition = Transition::new(change, previous, desired, &self.artifacts.storage_base)?;
+        let transition = Transition::new(change, previous, desired, &self.artifacts.storage_base, &self.artifacts.private_base)?;
         let verified = match observed {
             ObservedResource::Before => {
                 self.verify_loaded_mode(
@@ -514,7 +514,7 @@ impl ApplyProvider for QuadletProvider {
         mode: ApplyMode,
     ) -> Result<()> {
         self.check_mode(change, previous, desired, mode).await?;
-        let transition = Transition::new(change, previous, desired, &self.artifacts.storage_base)?;
+        let transition = Transition::new(change, previous, desired, &self.artifacts.storage_base, &self.artifacts.private_base)?;
         self.artifacts.publish(change, previous, desired)?;
         self.runner
             .capture_bounded(
