@@ -1,3 +1,32 @@
+export interface Host { hostname: string; os: string; kernel: string; architecture: string; cpuModel: string }
+export interface CPU { usage: number | null; cores: { name: string; usage: number | null }[]; frequencyMHz: number | null }
+export interface Memory { total: number; available: number; used: number; cached: number; buffers: number; swapTotal: number; swapUsed: number }
+export interface Disk { device: string; mount: string; filesystem: string; total: number; used: number; available: number }
+export interface DiskIO { name: string; readBytesPerSecond: number | null; writeBytesPerSecond: number | null }
+export interface Network { name: string; rxBytes: number; txBytes: number; rxBytesPerSecond: number | null; txBytesPerSecond: number | null }
+export interface Point { at: string; cpu: number | null; memoryPercent: number; rx: number | null; tx: number | null }
+export interface Snapshot {
+  valid: boolean
+  at: string
+  intervalSeconds: number
+  host: Host
+  cpu: CPU
+  memory: Memory
+  uptimeSeconds: number | null
+  load: [number, number, number] | null
+  disks: Disk[]
+  diskIO: DiskIO[]
+  networks: Network[]
+  temperatures: { name: string; celsius: number }[]
+  processCount: number
+  processesLimited: boolean
+  history: Point[]
+  warnings: string[]
+  lastError?: string
+}
+export interface Process { pid: number; name: string; state: string; cpu: number | null; memory: number; threads: number; nice: number }
+export interface ProcessList { at: string; processes: Process[]; matched: number; limited: boolean }
+
 export function bytes(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '—'
   if (value < 1024) return `${Math.round(value)} B`

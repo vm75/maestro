@@ -1,5 +1,5 @@
 <script lang="ts">
-  let { values, times, windowSeconds, secondary = [], ceiling, label, color = 'var(--sparkline-primary, var(--accent))', secondaryColor = 'var(--sparkline-secondary, var(--accent, #2563eb))' }: {
+  let { values, times, windowSeconds, secondary = [], ceiling, label, color = 'var(--sparkline-primary, var(--accent))', secondaryColor = 'var(--sparkline-secondary, var(--blue))' }: {
     values: (number | null)[]; times: number[]; windowSeconds: number; secondary?: (number | null)[]; ceiling?: number; label: string; color?: string; secondaryColor?: string
   } = $props()
   const gradId = $props.id()
