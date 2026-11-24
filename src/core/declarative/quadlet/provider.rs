@@ -259,6 +259,41 @@ impl QuadletProvider {
         })
     }
 
+    /// Verify generated boot links through the loaded user manager, not
+    /// systemctl enable/disable (Quadlet units are generator-owned).
+    pub async fn verify_boot_policy(&self, config: &Config, id: &str) -> Result<()> {
+        let service = config.services.get(id).ok_or_else(|| anyhow::anyhow!("unknown managed service"))?;
+        let output = self.runner.capture_bounded(&self.systemctl, &[
+            "--user", "--no-pager", "--no-ask-password", "show", "--property=Wants", "default.target",
+        ], Duration::from_secs(12), 64 * 1024).await?;
+        let text = std::str::from_utf8(&output)?;
+        let mut lines = text.lines().filter_map(|line| line.strip_prefix("Wants="));
+        let wants = lines.next().ok_or_else(|| anyhow::anyhow!("user default target boot dependencies are unavailable"))?;
+        ensure!(lines.next().is_none(), "ambiguous boot dependencies");
+        for member in service.containers.keys() {
+            let unit = format!("{}.service", super::unit_name(id, member));
+            ensure!(wants.split_ascii_whitespace().any(|name| name == unit) == service.enabled,
+                "loaded boot policy does not match the authoritative definition");
+        }
+        Ok(())
+    }
+
+    async fn verify_enable_prerequisites(&self) -> Result<()> {
+        let loginctl = Path::new("/usr/bin/loginctl");
+        ensure!(loginctl.is_file(), "loginctl is unavailable; user boot persistence cannot be verified");
+        let uid = unsafe { libc::geteuid() }.to_string();
+        let result = self.runner.capture_bounded(loginctl,
+            &["show-user", &uid, "--property=Linger", "--value"],
+            Duration::from_secs(5), 4096).await?;
+        ensure!(std::str::from_utf8(&result)?.trim() == "yes",
+            "enable lingering for the workload account explicitly before enabling boot startup");
+        let result = self.runner.capture_bounded(&self.podman,
+            &["--remote=false", "info", "--format", "{{.Host.Security.Rootless}}"],
+            Duration::from_secs(5), 4096).await?;
+        ensure!(std::str::from_utf8(&result)?.trim() == "true", "local rootless Podman could not be verified");
+        Ok(())
+    }
+
     async fn check_mode(
         &self,
         change: &Change,
@@ -284,6 +319,12 @@ impl QuadletProvider {
                 32 * 1024,
             )
             .await?;
+        if let Some(id) = changed_boot_policy(change, previous, desired) {
+            self.verify_boot_policy(previous, id).await?;
+            if desired.services[id].enabled {
+                self.verify_enable_prerequisites().await?;
+            }
+        }
         let transition = Transition::new(change, previous, desired, &self.artifacts.storage_base)?;
         for file in transition.before.keys().chain(
             transition
@@ -403,7 +444,11 @@ impl crate::core::declarative::RecoveryProvider for QuadletProvider {
             }
             ObservedResource::Unknown => return Ok(ObservedResource::Unknown),
         };
-        Ok(if verified.is_ok() {
+        let boot_verified = if let Some(id) = changed_boot_policy(change, previous, desired) {
+            let config = if observed == ObservedResource::Before { previous } else { desired };
+            self.verify_boot_policy(config, id).await.is_ok()
+        } else { true };
+        Ok(if verified.is_ok() && boot_verified {
             observed
         } else {
             ObservedResource::Unknown
@@ -454,7 +499,11 @@ impl ApplyProvider for QuadletProvider {
             change.after.as_deref(),
             mode,
         )
-        .await
+        .await?;
+        if let Some(id) = changed_boot_policy(change, previous, desired) {
+            self.verify_boot_policy(desired, id).await?;
+        }
+        Ok(())
     }
 }
 
@@ -486,6 +535,13 @@ impl QuadletProvider {
         }
         Ok(())
     }
+}
+
+fn changed_boot_policy<'a>(change: &'a Change, previous: &Config, desired: &Config) -> Option<&'a str> {
+    let id = change.resource.strip_prefix("service/")?;
+    let before = previous.services.get(id)?;
+    let after = desired.services.get(id)?;
+    (before.enabled != after.enabled).then_some(id)
 }
 
 fn unit_members_match_runtime(
