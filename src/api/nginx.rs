@@ -667,6 +667,7 @@ pub async fn ingress_usage(
             ("listener_profile", "listener"),
             ("access_policy", "access"),
             ("restricted_sessions_policy", "access"),
+            ("limit_policy", "limit"),
         ] {
             if let Some(name) = settings.get(field).and_then(serde_json::Value::as_str) {
                 let rows = usage.entry(format!("{prefix}:{name}")).or_default();
@@ -678,11 +679,13 @@ pub async fn ingress_usage(
         for key in ["routes", "children"] {
             if let Some(routes) = settings.get(key).and_then(serde_json::Value::as_array) {
                 for route in routes {
-                    collect(
-                        route.as_object().unwrap(),
-                        &format!("{label} {}", route["path"].as_str().unwrap_or("")),
-                        usage,
-                    );
+                    if let Some(fields) = route.as_object() {
+                        collect(
+                            fields,
+                            &format!("{label} {}", route["path"].as_str().unwrap_or("")),
+                            usage,
+                        );
+                    }
                 }
             }
         }

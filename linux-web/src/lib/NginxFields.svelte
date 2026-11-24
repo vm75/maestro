@@ -20,7 +20,7 @@
         {/if}
       </label>
       {#if field.type !== 'bool' && field.type !== 'select'}
-        <label class="override"><input type="checkbox" checked={value[field.key] !== undefined} disabled={disabled} onchange={event => value = setField(value,field.key,event.currentTarget.checked ? inherited[field.key] ?? field.fallback ?? '' : undefined)} /> Override inherited value</label>
+        <label class="override"><input type="checkbox" checked={value[field.key] !== undefined} disabled={disabled} onchange={event => value = setField(value,field.key,event.currentTarget.checked ? inherited[field.key] ?? field.fallback ?? (field.type === 'number' ? 1 : '') : undefined)} /> Override inherited value</label>
       {/if}
       {#if field.help}<small>{field.help}</small>{/if}
     </div>

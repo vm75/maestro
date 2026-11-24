@@ -114,6 +114,7 @@
     actionError = ''; busy = true
     try {
       const detail = await request<{settings: Settings | null; content: string; upstream?: string; server_names: string[]}>('/api/shared/' + objectPath(site))
+      previewController?.abort(); previewBusy = false
       editingSite = site; siteKind = site.kind; siteDomain = site.domain; siteName = site.name
       siteUpstream = detail.upstream || ''; customSite = !site.managed
       siteSettings = detail.settings || {}; preview = null; previewError = ''; siteContent = detail.content; siteServerNames = detail.server_names.join(' ')
@@ -203,7 +204,7 @@
       {#if allowWrites}
         <details open={!!editingSite}><summary>{editingSite ? 'Edit site' : 'Add site'}</summary>
           <form onsubmit={event => { event.preventDefault(); void saveSite() }}>
-            <label>Kind <select bind:value={siteKind} disabled={!!editingSite} onchange={()=>{if(siteKind==='subfolder'){const next={...siteSettings};delete next.listener_profile;siteSettings=next}preview=null}}><option value="domain">Domain</option><option value="subdomain">Subdomain</option><option value="subfolder">Subfolder</option></select></label>
+            <label>Kind <select bind:value={siteKind} disabled={!!editingSite} onchange={event=>{if(event.currentTarget.value==='subfolder'){const next={...siteSettings};delete next.listener_profile;siteSettings=next}preview=null;previewController?.abort();previewBusy=false}}><option value="domain">Domain</option><option value="subdomain">Subdomain</option><option value="subfolder">Subfolder</option></select></label>
             <label>Domain <input bind:value={siteDomain} required disabled={!!editingSite} /></label>
             {#if siteKind !== 'domain'}<label>Name <input bind:value={siteName} required disabled={!!editingSite} /></label>{/if}
             <label>Upstream <input bind:value={siteUpstream} placeholder="http://127.0.0.1:8080" /></label>

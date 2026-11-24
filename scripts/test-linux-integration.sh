@@ -193,6 +193,20 @@ PYSHAREDNGINX
 shared_get nginx/ingress-usage | python3 -c 'import json,sys; assert isinstance(json.load(sys.stdin),dict)'
 shared_write -d '{"kind":"domain","domain":"preview.test","settings":{"access_policy":"public"}}' "$api/api/shared/nginx/access-preview" | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["access_policy"]=="public" and x["allowed_sources"] is None, x'
 [[ $(shared_code -b "$lab/cookies" -H 'Content-Type: application/json' -X PUT --data-binary "@$lab/shared-nginx-settings.json" "$api/api/shared/nginx/settings") == 403 ]]
+# Exercise actual global config mutations through the browser session API.
+python3 - "$lab/shared-nginx-settings.json" "$lab/shared-nginx-candidate.json" <<'PYNGINXCANDIDATE'
+import json, sys
+x=json.load(open(sys.argv[1]))
+x.setdefault("access_policies",{})["linux_test"]={"allow":["192.0.2.0/24"]}
+x["limit_policies"]["linux_test"]={"rate":"10r/s","burst":20,"nodelay":True,"connections":10}
+x["site_defaults"]["limit_policy"]="linux_test"
+json.dump(x,open(sys.argv[2],"w"))
+PYNGINXCANDIDATE
+shared_write -X PUT --data-binary "@$lab/shared-nginx-candidate.json" "$api/api/shared/nginx/settings" >/dev/null
+shared_get nginx/settings | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["access_policies"]["linux_test"]["allow"]==["192.0.2.0/24"] and x["site_defaults"]["limit_policy"]=="linux_test", x'
+shared_get nginx/ingress-usage | python3 -c 'import json,sys; assert "Global defaults" in json.load(sys.stdin)["limit:linux_test"]'
+shared_write -d '{"kind":"domain","domain":"preview.test","settings":{"access_policy":"linux_test"}}' "$api/api/shared/nginx/access-preview" | python3 -c 'import json,sys; assert json.load(sys.stdin)["allowed_sources"]==["192.0.2.0/24"]'
+# Restore the fixture so subsequent bearer API tests retain their original defaults.
 shared_write -X PUT --data-binary "@$lab/shared-nginx-settings.json" "$api/api/shared/nginx/settings" >/dev/null
 shared_write -X POST "$api/api/shared/nginx/test" | real_result
 

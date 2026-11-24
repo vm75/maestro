@@ -4,6 +4,7 @@
   import { clone, lines, sharedFields, listenerNames, type GlobalSettings, type Endpoint, type Usage, type Listener, type HttpAccess } from './nginx-config'
   let { initial, usage, disabled = false, onSave, onCancel }:
     {initial: GlobalSettings; usage: Usage; disabled?: boolean; onSave: (value: GlobalSettings) => Promise<void>; onCancel: () => void} = $props()
+  // The editor is mounted only when a new saved snapshot is opened.
   let draft = $state<GlobalSettings>(clone(initial))
   let listenerName = $state('')
   let accessName = $state('')
@@ -17,8 +18,7 @@
   function add(kind: 'listener' | 'access' | 'limit') {
     error=''
     const name = (kind==='listener' ? listenerName : kind==='access' ? accessName : limitName).trim()
-    if (!/^[A-Za-z0-9_][A-Za-z0-9_-]{0,31}$/.test(name) || ['legacy','public','deny','default'].includes(name.toLowerCase())) { error='Choose a unique, non-reserved policy name (letters, numbers, underscore; hyphen for ingress only).';return }
-    if (kind==='limit' && !/^[A-Za-z0-9_]+$/.test(name)) {error='Limit names cannot contain hyphens';return}
+    if (!/^[A-Za-z0-9_]{1,32}$/.test(name) || ['legacy','public','deny','default','__proto__','constructor','prototype'].includes(name.toLowerCase())) { error='Choose a unique, non-reserved policy name (letters, numbers or underscore, up to 32 characters).';return }
     if (kind==='listener') { if (draft.listener_profiles[name]) {error='Listener already exists';return}; draft.listener_profiles[name]={https:[{address:'127.0.0.1',port:8444}],http:[],http_redirect:false}; listenerName='' }
     else if (kind==='access') {if (draft.access_policies[name]) {error='Access rule already exists';return};draft.access_policies[name]={allow:[]};accessName=''}
     else {if (draft.limit_policies[name]) {error='Limit policy already exists';return};draft.limit_policies[name]={rate:'30r/s',burst:60,nodelay:true,connections:30};limitName=''}
@@ -36,6 +36,7 @@
     try {
       const next=clone(draft)
       next.allowed_ips=lines(allowed);next.free_subdomains=lines(suffixes)
+      if (http.wan && !confirm('Remove the old firmware WAN gate from these settings? Existing router-owned rules must be released by the administrator.')) return
       if(manageHttp) next.http_access={...http,wan:null}
       else delete next.http_access
       await onSave(next)
