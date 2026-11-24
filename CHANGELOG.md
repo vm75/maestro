@@ -2,8 +2,12 @@
 
 ## Unreleased
 
+## 0.12.0
+
 ### Changed
 
+- Move custom Entware package builds to Toolbox; replace the NGINX-specific upgrade command with `maestro toolbox list` and `maestro toolbox install TAG`, verifying every IPK in the selected release.
+- Keep router lab provisioning independent of custom Toolbox installation; require an explicit release selection.
 - Use YAML for main configuration and managed nginx settings/sites on ASUS and Linux. Startup no longer reads TOML configuration.
 
 ### Added
