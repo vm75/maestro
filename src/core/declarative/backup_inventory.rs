@@ -552,7 +552,7 @@ pub fn inventory(
     result.requirement("bundle", "private_destination",
         "A capture needs a private, owner-only destination and a checksummed manifest before publication.")?;
     result.requirement("bundle", "metadata",
-        "UID/GID, xattrs, ACLs, SELinux labels, hardlinks, symlinks and sparse allocation require verified preservation.")?;
+        "Capture source UID/GID, timestamps, visible xattrs (including readable ACLs and labels), and link relationships in the private bundle; review privileged attribute visibility, inode flags and restoration separately.")?;
     result.input(BackupInput {
         id: "configuration".to_owned(),
         kind: "configuration",

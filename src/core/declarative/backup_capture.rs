@@ -2,6 +2,9 @@
 //! restorable backup. Incomplete or unsupported coverage fails closed.
 use std::{collections::{BTreeMap,BTreeSet},fs::{self,File,Metadata},io::{Read,Write,Seek,SeekFrom},os::unix::fs::{MetadataExt},os::fd::AsRawFd,path::{Path,PathBuf},time::{Duration,Instant}};
 use anyhow::{Result,anyhow,ensure,Context};
+use base64::{Engine as _,engine::general_purpose::STANDARD};
+use std::ffi::CString;
+use std::os::unix::ffi::OsStrExt;
 use chrono::{DateTime,Utc};
 use serde::{Deserialize,Serialize};
 use sha2::{Digest,Sha256};
@@ -25,13 +28,16 @@ pub struct NativeExport{
     pub resources:Vec<String>,pub backend:String,pub kind:String,pub bundle_path:String,
     pub size_bytes:u64,pub sha256:String,pub native:NativeObject,
 }
-#[derive(Debug,Serialize,Deserialize)]
+#[derive(Clone,Debug,Serialize,Deserialize,PartialEq,Eq)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct ManifestFile{
     #[serde(rename="type")]kind:String,
     uid:u32,gid:u32,atime:String,mtime:String,mode:String,
     source_link_count:u64,source_allocated_bytes:u64,
     #[serde(default,skip_serializing_if="is_zero")]captured_link_count:u64,
+    #[serde(default,skip_serializing_if="String::is_empty")]link_target:String,
+    #[serde(default,skip_serializing_if="String::is_empty")]hardlink_to:String,
+    #[serde(default,skip_serializing_if="BTreeMap::is_empty")]xattrs:BTreeMap<String,String>,
     xattr_coverage:String,bundle_path:String,size_bytes:u64,sha256:String,
 }
 fn is_zero(v:&u64)->bool{*v==0}
@@ -45,13 +51,20 @@ struct Manifest{
 }
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-struct Principal{uid:u32,gid:u32,groups:Vec<u32>}
+struct Principal{uid:u32,gid:u32,groups:Vec<u32>,#[serde(default)]uid_map:String,#[serde(default)]gid_map:String}
 fn principal()->Result<Principal>{
     let count=unsafe{libc::getgroups(0,std::ptr::null_mut())};
     ensure!((0..=1024).contains(&count),"workload principal groups cannot be established");
     let mut groups=vec![0;count as usize];
     ensure!(unsafe{libc::getgroups(count,groups.as_mut_ptr())}==count,"workload principal groups changed");
-    Ok(Principal{uid:unsafe{libc::geteuid()},gid:unsafe{libc::getegid()},groups})
+    let mapping=|path:&str|->Result<String>{
+        let mut raw=Vec::new();
+        File::open(path)?.take(65537).read_to_end(&mut raw)?;
+        ensure!(!raw.is_empty()&&raw.len()<=65536,"invalid capture account mapping");
+        Ok(String::from_utf8(raw)?)
+    };
+    Ok(Principal{uid:unsafe{libc::geteuid()},gid:unsafe{libc::getegid()},groups,
+        uid_map:mapping("/proc/self/uid_map")?,gid_map:mapping("/proc/self/gid_map")?})
 }
 #[derive(Debug,Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -91,7 +104,10 @@ fn clean_absolute(p:&str)->bool{
     p.len()<=4096&&super::path_valid(p,true)&&p!="/"&&!p.chars().any(char::is_control)
 }
 fn portable(p:&str)->bool{
-    p.len()<=4096&&super::path_valid(p,false)&&p!="."&&!p.chars().any(char::is_control)
+    // Bundle member names are UTF-8 and JSON-escaped; unlike declared host
+    // paths, descendant filenames may contain line breaks or tabs.
+    !p.is_empty()&&p.len()<=4096&&!p.contains('\0')&&!p.starts_with('/')
+        &&p.split('/').all(|part|!matches!(part,""|"."|".."))
 }
 fn pending(j:&Recovery)->bool{
     !matches!(j.stage.as_str(),"complete"|"released")||!matches!(j.artifact.stage.as_str(),"published"|"discarded"|"released")
@@ -190,17 +206,109 @@ pub(super) fn hash_file(mut file:&File,end:Instant)->Result<(u64,String)>{
     Ok((count,format!("{:x}",h.finalize())))
 }
 fn metadata(meta:&Metadata,kind:&str,path:&str)->Result<ManifestFile>{
-    let ts=|sec,nsec|DateTime::<Utc>::from_timestamp(sec,nsec as u32).map(|t|t.to_rfc3339()).context("invalid file timestamp");
+    let ts=|sec,nsec|DateTime::<Utc>::from_timestamp(sec,nsec as u32).map(|t|t.to_rfc3339_opts(chrono::SecondsFormat::AutoSi,true)).context("invalid file timestamp");
     Ok(ManifestFile{kind:kind.into(),uid:meta.uid(),gid:meta.gid(),atime:ts(meta.atime(),meta.atime_nsec())?,
         mtime:ts(meta.mtime(),meta.mtime_nsec())?,mode:format!("{:04o}",meta.mode()&0o7777),source_link_count:meta.nlink(),
         source_allocated_bytes:meta.blocks().saturating_mul(512),captured_link_count:if kind=="file"{1}else{0},
+        link_target:String::new(),hardlink_to:String::new(),xattrs:BTreeMap::new(),
         xattr_coverage:"visible".into(),bundle_path:path.into(),size_bytes:0,sha256:String::new()})
 }
-fn reject_xattrs(file:&File)->Result<()>{
-    // This first filesystem collector cannot yet preserve ACLs or arbitrary
-    // xattrs. Refuse rather than silently lose visible metadata.
-    let n=unsafe{libc::flistxattr(file.as_raw_fd(),std::ptr::null_mut(),0)};
-    ensure!(n==0,"source xattrs/ACLs are present or cannot be read; full metadata capture is pending");Ok(())
+// Source attributes stay in the private manifest, not on payloads. Linux may
+// hide privileged namespaces from an unprivileged workload account. ACLs and
+// security labels, when visible, are captured as exact binary xattr values.
+const MAX_XATTR_BYTES:usize=64*1024;
+type Xattrs=BTreeMap<String,String>;
+fn read_xattrs(file:Option<&File>,link:Option<&Path>)->Result<(Xattrs,String)>{
+    let path=link.map(|p|CString::new(p.as_os_str().as_bytes())).transpose()?;
+    ensure!(file.is_some()!=path.is_some(),"invalid xattr source");
+    let call=|name:Option<&CString>,buffer:&mut [u8]|->std::io::Result<usize>{
+        let ptr=if buffer.is_empty(){std::ptr::null_mut()}else{buffer.as_mut_ptr().cast::<libc::c_void>()};
+        let len=buffer.len();
+        let n=unsafe{match (file,path.as_ref(),name){
+            (Some(f),_,None)=>libc::flistxattr(f.as_raw_fd(),ptr.cast(),len),
+            (Some(f),_,Some(n))=>libc::fgetxattr(f.as_raw_fd(),n.as_ptr(),ptr,len),
+            (None,Some(p),None)=>libc::llistxattr(p.as_ptr(),ptr.cast(),len),
+            (None,Some(p),Some(n))=>libc::lgetxattr(p.as_ptr(),n.as_ptr(),ptr,len),
+            _=>unreachable!(),
+        }};
+        if n<0{Err(std::io::Error::last_os_error())}else{Ok(n as usize)}
+    };
+    let size=match call(None,&mut []){
+        Ok(n)=>n,
+        Err(e) if e.raw_os_error()==Some(libc::ENOTSUP)=>return Ok((BTreeMap::new(),"unsupported_source_fs".into())),
+        Err(_)=>return Err(anyhow!("source extended attribute names cannot be read")),
+    };
+    ensure!(size<=MAX_XATTR_BYTES,"source attribute names exceed capture limit");
+    let mut attrs=BTreeMap::new();
+    if size==0{return Ok((attrs,"visible".into()))}
+    let mut names=vec![0;size];
+    let n=call(None,&mut names).map_err(|_|anyhow!("source attribute names changed during capture"))?;
+    ensure!(n<=size&&n>0&&names[n-1]==0,"invalid source attribute names");
+    let mut value=vec![0;MAX_XATTR_BYTES];
+    let mut encoded_bytes=0usize;
+    for raw in names[..n-1].split(|b|*b==0){
+        ensure!(!raw.is_empty()&&raw.len()<=255&&attrs.len()<256,"invalid source attribute name/count");
+        let name=std::str::from_utf8(raw).map_err(|_|anyhow!("non-UTF-8 source attribute name"))?;
+        let c_name=CString::new(raw)?;
+        let count=call(Some(&c_name),&mut value).map_err(|_|anyhow!("source attribute value cannot be read"))?;
+        ensure!(count<=value.len(),"source attribute exceeds capture limit");
+        let encoded=STANDARD.encode(&value[..count]);
+        encoded_bytes=encoded_bytes.checked_add(name.len()+encoded.len()).context("attribute size overflow")?;
+        ensure!(encoded_bytes<=MAX_MANIFEST,"source attribute metadata exceeds capture limit");
+        ensure!(attrs.insert(name.to_owned(),encoded).is_none(),"duplicate source attribute");
+    }
+    Ok((attrs,"visible".into()))
+}
+fn observe_attrs(row:&mut ManifestFile,file:Option<&File>,link:Option<&Path>)->Result<()>{
+    (row.xattrs,row.xattr_coverage)=read_xattrs(file,link)?;Ok(())
+}
+fn check_attrs(row:&ManifestFile,file:Option<&File>,link:Option<&Path>)->Result<()>{
+    let (attrs,coverage)=read_xattrs(file,link)?;
+    ensure!(attrs==row.xattrs&&coverage==row.xattr_coverage,"source extended attributes changed during capture");
+    Ok(())
+}
+// Resolve only lexical components; never follow a symlink on the source or
+// target. Relative links may be dangling, but must stay within their declared
+// directory tree. Manifest verification additionally requires bundle scope.
+fn resolve_link(path:&str,target:&str,boundary:&str)->Result<String>{
+    ensure!(!target.is_empty()&&target.len()<=4096&&!target.starts_with('/')&&!target.contains('\0'),"invalid or absolute backup symlink");
+    let parent=path.rsplit_once('/').map_or("",|(p,_)|p);
+    let mut parts:Vec<&str>=parent.split('/').filter(|p|!p.is_empty()).collect();
+    let minimum=boundary.split('/').filter(|p|!p.is_empty()).count();
+    ensure!(minimum<=parts.len()&&(boundary.is_empty()||parent==boundary||parent.strip_prefix(boundary).is_some_and(|s|s.starts_with('/'))),"invalid symlink capture boundary");
+    for part in target.split('/'){
+        match part{
+            ""|"."=>{},
+            ".."=>{ensure!(parts.len()>minimum,"symlink escapes its declared directory");parts.pop();},
+            _=>parts.push(part),
+        }
+    }
+    let result=parts.join("/");
+    ensure!(!result.is_empty()&&portable(&result),"symlink target is not a portable bundle path");
+    Ok(result)
+}
+fn real_parent(root:&File,path:&str)->Result<(File,String)>{
+    ensure!(portable(path),"invalid backup path");
+    let mut parts=path.split('/').collect::<Vec<_>>();
+    let leaf=parts.pop().unwrap().to_owned();
+    let mut parent=root.try_clone()?;
+    for part in parts{parent=open_at(&parent,part,true)?;}
+    Ok((parent,leaf))
+}
+fn leaf_metadata(parent:&File,name:&str)->Result<Metadata>{
+    Ok(fs::symlink_metadata(fd_path(parent).join(name))?)
+}
+fn leaf_target(parent:&File,name:&str)->Result<String>{
+    fs::read_link(fd_path(parent).join(name))?.into_os_string().into_string().map_err(|_|anyhow!("non-UTF-8 symlink target"))
+}
+fn open_source(parent:&File,name:&str,directory:bool)->Result<File>{
+    let flags=OFlags::RDONLY|OFlags::NOFOLLOW|OFlags::CLOEXEC|OFlags::NONBLOCK|OFlags::NOATIME
+        |if directory{OFlags::DIRECTORY}else{OFlags::empty()};
+    match unix_fs::openat(parent,name,flags,Mode::empty()){
+        Ok(fd)=>Ok(fd.into()),
+        Err(rustix::io::Errno::PERM)=>open_at(parent,name,directory),
+        Err(e)=>Err(e.into()),
+    }
 }
 fn mkdir_at(parent:&File,name:&str)->Result<File>{
     match unix_fs::mkdirat(parent,name,Mode::from_bits_truncate(0o700)){
@@ -230,42 +338,135 @@ pub(super) fn native_export(root:&File,path:&str,kind:&str,resources:Vec<String>
     ensure!(size_bytes>0,"native export is empty");
     Ok(NativeExport{resources,backend:native.backend.clone(),kind:kind.into(),bundle_path:path.into(),size_bytes,sha256,native})
 }
-struct Collector<'a>{root:&'a File,files:Vec<ManifestFile>,paths:BTreeSet<String>,end:Instant}
-impl Collector<'_>{
-    fn capture(&mut self,source:&File,path:&str,depth:usize,source_mount:&str)->Result<()>{
+struct CapturedInode{path:String,sha256:String,info:Metadata}
+struct Collector<'a>{
+    root:&'a File,files:Vec<ManifestFile>,paths:BTreeSet<String>,end:Instant,
+    links:BTreeMap<(u64,u64),CapturedInode>,metadata_bytes:usize,
+}
+impl<'a> Collector<'a>{
+    fn new(root:&'a File,end:Instant)->Self{
+        Self{root,files:vec![],paths:BTreeSet::new(),end,links:BTreeMap::new(),metadata_bytes:0}
+    }
+    fn append(&mut self,row:ManifestFile)->Result<()>{
+        ensure!(self.files.len()<MAX_ENTRIES&&self.paths.insert(row.bundle_path.clone()),"capture entry limit or duplicate path");
+        self.metadata_bytes=self.metadata_bytes.checked_add(serde_json::to_vec(&row)?.len()).context("capture metadata overflow")?;
+        ensure!(self.metadata_bytes<=MAX_MANIFEST,"capture-wide metadata limit exceeded");
+        self.files.push(row);
+        Ok(())
+    }
+    // Declared inputs must themselves be real regular files or directories.
+    // Descendant symlinks are captured without traversal.
+    fn declared(&mut self,source:&Path,path:&str,directory:bool)->Result<()>{
+        let parent=open_absolute(source.parent().context("missing capture source parent")?,true)?;
+        let name=source.file_name().and_then(|s|s.to_str()).context("invalid capture source name")?;
+        let before=leaf_metadata(&parent,name)?;
+        ensure!(if directory{before.is_dir()}else{before.is_file()},"declared capture input changed type");
+        let opened=open_source(&parent,name,directory)?;
+        ensure!(same(&before,&opened.metadata()?),"declared capture input changed");
+        let source_mount=mount(&opened)?;
+        self.capture(&opened,path,0,&source_mount,path)?;
+        ensure!(same(&before,&leaf_metadata(&parent,name)?),"declared capture input changed during capture");
+        // Ensure the originally opened parent remains at the declared path.
+        let current=open_absolute(source.parent().unwrap(),true)?;
+        let a=parent.metadata()?;let b=current.metadata()?;
+        ensure!((a.dev(),a.ino())==(b.dev(),b.ino()),"declared capture parent changed");
+        Ok(())
+    }
+    fn capture(&mut self,source:&File,path:&str,depth:usize,source_mount:&str,boundary:&str)->Result<()>{
         check_time(self.end)?;
-        ensure!(depth<=128&&self.files.len()<MAX_ENTRIES&&portable(path)&&self.paths.insert(path.into()),"backup tree exceeds limit or contains duplicate path");
+        ensure!(depth<=128&&self.files.len()<MAX_ENTRIES&&portable(path)&&!self.paths.contains(path),"backup tree exceeds limit or contains duplicate path");
         let before=source.metadata()?;
         ensure!(mount(source)?==source_mount,"capture crosses an unreviewed mount");
-        reject_xattrs(source)?;
         if before.is_dir(){
             let (parent,leaf)=target_parent(self.root,path)?;
             let dst=mkdir_at(&parent,&leaf)?;
-            self.files.push(metadata(&before,"directory",path)?);
+            let mut row=metadata(&before,"directory",path)?;
+            observe_attrs(&mut row,Some(source),None)?;
+            self.append(row.clone())?;
             for entry in fs::read_dir(fd_path(source))?{
                 check_time(self.end)?;let entry=entry?;
                 let name=entry.file_name().into_string().map_err(|_|anyhow!("non-UTF-8 capture path"))?;
-                let child=open_at(source,&name,false)?;
-                self.capture(&child,&format!("{path}/{name}"),depth+1,source_mount)?;
+                let child_path=format!("{path}/{name}");
+                ensure!(portable(&child_path)&&depth<128&&self.files.len()<MAX_ENTRIES,"invalid or excessive source tree");
+                let info=leaf_metadata(source,&name)?;
+                if info.file_type().is_symlink(){
+                    self.capture_link(source,&name,&child_path,&info,boundary,source_mount)?;
+                }else{
+                    ensure!(info.is_file()||info.is_dir(),"special files need an explicit capture strategy");
+                    let child=open_source(source,&name,info.is_dir())?;
+                    ensure!(same(&info,&child.metadata()?),"source entry changed before capture");
+                    self.capture(&child,&child_path,depth+1,source_mount,boundary)?;
+                }
+                ensure!(same(&info,&leaf_metadata(source,&name)?),"source entry changed during capture");
             }
+            check_attrs(&row,Some(source),None)?;
             dst.sync_all()?;
         }else{
-            ensure!(before.is_file()&&before.nlink()==1,"symlink, hardlink or special input requires full filesystem capture support");
+            ensure!(before.is_file(),"special files need an explicit capture strategy");
             let mut row=metadata(&before,"file",path)?;
-            let mut destination=create_payload(self.root,path)?;
-            let mut src=source;let mut h=Sha256::new();let mut count=0u64;let mut buffer=vec![0;128*1024];
-            loop{
-                check_time(self.end)?;let n=src.read(&mut buffer)?;if n==0{break}
-                h.update(&buffer[..n]);count=count.checked_add(n as u64).context("capture size overflow")?;
-                ensure!(count<=before.len(),"capture source grew during copy");if buffer[..n].iter().all(|v|*v==0){destination.seek(SeekFrom::Current(n as i64))?;}else{destination.write_all(&buffer[..n])?;}
+            observe_attrs(&mut row,Some(source),None)?;
+            let identity=(before.dev(),before.ino());
+            if let Some(prior)=self.links.get(&identity){
+                ensure!(same(&before,&prior.info),"hardlinked source changed during capture");
+                let (old_parent,old_name)=real_parent(self.root,&prior.path)?;
+                let (new_parent,new_name)=target_parent(self.root,path)?;
+                unix_fs::linkat(&old_parent,old_name.as_str(),&new_parent,new_name.as_str(),unix_fs::AtFlags::empty())?;
+                new_parent.sync_all()?;
+                row.kind="hardlink".into();row.hardlink_to=prior.path.clone();
+                row.size_bytes=before.len();row.sha256=prior.sha256.clone();
+            }else{
+                let mut destination=create_payload(self.root,path)?;
+                let mut src=source;let mut h=Sha256::new();let mut count=0u64;let mut buffer=vec![0;128*1024];
+                loop{
+                    check_time(self.end)?;let n=src.read(&mut buffer)?;if n==0{break}
+                    h.update(&buffer[..n]);count=count.checked_add(n as u64).context("capture size overflow")?;
+                    ensure!(count<=before.len(),"capture source grew during copy");
+                    if buffer[..n].iter().all(|v|*v==0){destination.seek(SeekFrom::Current(n as i64))?;}else{destination.write_all(&buffer[..n])?;}
+                }
+                destination.set_len(count)?;destination.sync_all()?;
+                ensure!(count==before.len(),"capture source changed during copy");
+                row.size_bytes=count;row.sha256=format!("{:x}",h.finalize());
+                self.links.insert(identity,CapturedInode{path:path.into(),sha256:row.sha256.clone(),info:before.clone()});
             }
-            destination.set_len(count)?;
-            destination.sync_all()?;
-            ensure!(count==before.len(),"capture source changed during copy");
-            row.size_bytes=count;row.sha256=format!("{:x}",h.finalize());self.files.push(row);
+            check_attrs(&row,Some(source),None)?;
+            self.append(row)?;
         }
         ensure!(same(&before,&source.metadata()?),"source changed during capture");
         Ok(())
+    }
+    fn capture_link(&mut self,parent:&File,name:&str,path:&str,info:&Metadata,boundary:&str,source_mount:&str)->Result<()>{
+        check_time(self.end)?;
+        // O_PATH + O_NOFOLLOW opens the symlink inode itself, not its target.
+        let link_fd:File=unix_fs::openat(parent,name,OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty())?.into();
+        ensure!(mount(&link_fd)?==source_mount&&same(info,&link_fd.metadata()?),"source symlink identity or mount changed");
+        let link=leaf_target(parent,name)?;
+        resolve_link(path,&link,boundary)?;
+        let source_path=fd_path(parent).join(name);
+        let mut row=metadata(info,"symlink",path)?;
+        row.link_target=link;
+        observe_attrs(&mut row,None,Some(&source_path))?;
+        let (dst,leaf)=target_parent(self.root,path)?;
+        unix_fs::symlinkat(row.link_target.as_str(),&dst,leaf.as_str())?;
+        dst.sync_all()?;
+        check_attrs(&row,None,Some(&source_path))?;
+        ensure!(leaf_target(parent,name)?==row.link_target&&same(info,&leaf_metadata(parent,name)?),"source symlink changed during capture");
+        self.append(row)
+    }
+    fn finish(mut self)->Result<Vec<ManifestFile>>{
+        let mut counts=BTreeMap::<String,u64>::new();
+        for row in &self.files{
+            if row.kind=="file"{*counts.entry(row.bundle_path.clone()).or_default()+=1;}
+            else if row.kind=="hardlink"{*counts.entry(row.hardlink_to.clone()).or_default()+=1;}
+        }
+        for row in &mut self.files{
+            if row.kind=="file"||row.kind=="hardlink"{
+                let path=if row.kind=="file"{&row.bundle_path}else{&row.hardlink_to};
+                row.captured_link_count=counts[path];
+                ensure!(row.captured_link_count<=row.source_link_count,"captured hardlink count exceeds source");
+            }
+        }
+        validate_file_metadata(&self.files)?;
+        Ok(self.files)
     }
 }
 struct Publication{parent:File,root:File,artifact:Artifact,destination:String}
@@ -426,16 +627,60 @@ async fn native_boundary(provider:&CompositeProvider,c:&Config,inv:&BackupInvent
         }
     }Ok(())
 }
+// Manifest metadata is untrusted until bounded and cross-checked. Keep source
+// permission/ACL observations separate from the intentionally private payload.
+fn validate_file_metadata(files:&[ManifestFile])->Result<()>{
+    let mut entries=BTreeMap::new();
+    let mut counts=BTreeMap::<&str,u64>::new();
+    for f in files{
+        ensure!(portable(&f.bundle_path)&&f.bundle_path!="manifest.json"&&!f.bundle_path.starts_with("manifest.json/")
+            &&!f.bundle_path.starts_with("native/")&&f.bundle_path!="native","invalid capture path");
+        ensure!(f.source_link_count>0&&f.mode.len()==4&&u32::from_str_radix(&f.mode,8).is_ok_and(|v|v<=0o7777)
+            &&DateTime::parse_from_rfc3339(&f.atime).is_ok()&&DateTime::parse_from_rfc3339(&f.mtime).is_ok(),"invalid captured metadata");
+        ensure!(matches!(f.xattr_coverage.as_str(),"visible"|"unsupported_source_fs")&&f.xattrs.len()<=256
+            &&(f.xattr_coverage!="unsupported_source_fs"||f.xattrs.is_empty()),"invalid attribute coverage");
+        let mut names=0usize;
+        for (name,value) in &f.xattrs{
+            names+=name.len()+1;
+            ensure!(!name.is_empty()&&name.len()<=255&&!name.contains('\0')&&names<=MAX_XATTR_BYTES
+                &&value.len()<=MAX_XATTR_BYTES.div_ceil(3)*4,"invalid captured attribute");
+            let raw=STANDARD.decode(value).map_err(|_|anyhow!("invalid captured attribute encoding"))?;
+            ensure!(raw.len()<=MAX_XATTR_BYTES&&STANDARD.encode(raw)==*value,"invalid captured attribute value");
+        }
+        match f.kind.as_str(){
+            "file"|"hardlink"=>{
+                ensure!(store::valid_revision(&f.sha256)&&f.link_target.is_empty()&&f.captured_link_count>0
+                    &&f.captured_link_count<=f.source_link_count&&if f.kind=="file"{f.hardlink_to.is_empty()}else{portable(&f.hardlink_to)},"invalid file or hardlink metadata");
+                let canonical=if f.kind=="file"{f.bundle_path.as_str()}else{f.hardlink_to.as_str()};
+                *counts.entry(canonical).or_default()+=1;
+            },
+            "directory"|"symlink"=>{
+                ensure!(f.sha256.is_empty()&&f.size_bytes==0&&f.captured_link_count==0&&f.hardlink_to.is_empty(),"invalid directory or symlink metadata");
+                if f.kind=="symlink"{resolve_link(&f.bundle_path,&f.link_target,"")?;}else{ensure!(f.link_target.is_empty(),"invalid directory target");}
+            },
+            _=>return Err(anyhow!("unsupported manifest payload type")),
+        }
+        ensure!(entries.insert(f.bundle_path.as_str(),f).is_none(),"duplicate manifest payload");
+    }
+    for f in files{
+        if f.kind=="file"{ensure!(counts[f.bundle_path.as_str()]==f.captured_link_count,"manifest hardlink count differs");}
+        else if f.kind=="hardlink"{
+            let canonical=entries.get(f.hardlink_to.as_str()).context("hardlink canonical payload missing")?;
+            ensure!(canonical.kind=="file","hardlink canonical payload is not a file");
+            let mut compare=(**canonical).clone();
+            compare.kind=f.kind.clone();compare.bundle_path=f.bundle_path.clone();
+            compare.hardlink_to=f.hardlink_to.clone();compare.atime=f.atime.clone();
+            ensure!(&compare==f,"hardlink source metadata differs");
+        }
+    }
+    Ok(())
+}
 fn expected_paths(m:&Manifest)->Result<BTreeMap<String,(String,u64,String)>>{
     ensure!(m.version==1&&m.stage=="captured"&&store::valid_revision(&m.revision)&&clean_absolute(&m.source_root)
         &&!m.files.is_empty()&&m.files.len()<=MAX_ENTRIES&&m.native_exports.len()<=2048,"invalid capture manifest");
+    validate_file_metadata(&m.files)?;
     let mut expected=BTreeMap::new();
     for f in &m.files{
-        ensure!(portable(&f.bundle_path)&&f.bundle_path!="manifest.json"&&!f.bundle_path.starts_with("native/")&&f.bundle_path!="native","invalid capture path");
-        ensure!(matches!(f.kind.as_str(),"file"|"directory")&&f.mode.len()==4&&u32::from_str_radix(&f.mode,8).is_ok_and(|v|v<=0o7777)
-            &&DateTime::parse_from_rfc3339(&f.atime).is_ok()&&DateTime::parse_from_rfc3339(&f.mtime).is_ok(),"invalid captured metadata");
-        ensure!(if f.kind=="file"{store::valid_revision(&f.sha256)&&f.source_link_count==1&&f.captured_link_count==1}
-            else{f.sha256.is_empty()&&f.size_bytes==0&&f.captured_link_count==0},"invalid manifest payload");
         ensure!(expected.insert(f.bundle_path.clone(),(f.kind.clone(),f.size_bytes,f.sha256.clone())).is_none(),"duplicate manifest payload");
     }
     ensure!(expected.get("server-man.yaml").is_some_and(|(k,_,hash)|k=="file"&&hash==&m.revision),"capture has no pinned configuration");
@@ -451,7 +696,9 @@ fn expected_paths(m:&Manifest)->Result<BTreeMap<String,(String,u64,String)>>{
     let keys:Vec<_>=expected.keys().cloned().collect();
     for key in keys{
         let mut at=Path::new(&key).parent();
+        let mut depth=0;
         while let Some(p)=at.filter(|p|!p.as_os_str().is_empty()){
+            depth+=1;ensure!(depth<=132,"manifest path depth exceeded");
             let pstr=p.to_str().context("invalid manifest ancestor")?;
             ensure!(expected.entry(pstr.into()).or_insert_with(||("directory".into(),0,String::new())).0=="directory","non-directory payload ancestor");
             at=p.parent();
@@ -466,24 +713,76 @@ fn read_small(root:&File,path:&str,limit:usize)->Result<Vec<u8>>{
     let mut raw=Vec::new();file.take(limit as u64+1).read_to_end(&mut raw)?;
     ensure!(raw.len()<=limit,"capture metadata exceeds limit");Ok(raw)
 }
-fn verify_tree(root:&File,expected:&BTreeMap<String,(String,u64,String)>,end:Instant)->Result<()>{
-    fn walk(dir:&File,prefix:&str,expected:&BTreeMap<String,(String,u64,String)>,seen:&mut BTreeSet<String>,mount_id:&str,end:Instant,depth:usize)->Result<()>{
-        check_time(end)?;ensure!(depth<=132,"capture verification depth exceeded");
-        let before=dir.metadata()?;
-        for entry in fs::read_dir(fd_path(dir))?{
-            check_time(end)?;let entry=entry?;let name=entry.file_name().into_string().map_err(|_|anyhow!("invalid capture member"))?;
-            let path=if prefix.is_empty(){name.clone()}else{format!("{prefix}/{name}")};
-            let (kind,size,digest)=expected.get(&path).context("unexpected capture payload")?;
-            ensure!(seen.insert(path.clone()),"duplicate capture payload");
-            let child=open_at(dir,&name,kind=="directory")?;
-            ensure!(mount(&child)?==mount_id&&private(&child.metadata()?,kind=="directory"),"unsafe capture member");
-            if kind=="directory"{walk(&child,&path,expected,seen,mount_id,end,depth+1)?;child.sync_all()?;}
-            else{ensure!(hash_file(&child,end)?==(*size,digest.clone()),"capture payload checksum/size mismatch");child.sync_all()?;}
-        }
-        ensure!(same(&before,&dir.metadata()?),"capture tree changed during verification");Ok(())
+fn verify_tree(root:&File,expected:&BTreeMap<String,(String,u64,String)>,files:&[ManifestFile],end:Instant)->Result<()>{
+    struct Verifier<'a>{
+        expected:&'a BTreeMap<String,(String,u64,String)>,
+        rows:BTreeMap<&'a str,&'a ManifestFile>,
+        seen:BTreeMap<String,Metadata>,
+        inodes:BTreeMap<(u64,u64),(String,Metadata)>,
+        end:Instant,mount_id:String,
     }
-    let mut seen=BTreeSet::new();walk(root,"",expected,&mut seen,&mount(root)?,end,0)?;
-    ensure!(seen.len()==expected.len(),"capture is missing a recorded payload");root.sync_all()?;Ok(())
+    impl Verifier<'_>{
+        fn walk(&mut self,dir:&File,prefix:&str,depth:usize)->Result<()>{
+            check_time(self.end)?;ensure!(depth<=132,"capture verification depth exceeded");
+            let before=dir.metadata()?;
+            ensure!(private(&before,true)&&mount(dir)?==self.mount_id,"unsafe capture directory");
+            for entry in fs::read_dir(fd_path(dir))?{
+                check_time(self.end)?;let entry=entry?;
+                let name=entry.file_name().into_string().map_err(|_|anyhow!("invalid capture member"))?;
+                let path=if prefix.is_empty(){name.clone()}else{format!("{prefix}/{name}")};
+                let (kind,size,digest)=self.expected.get(&path).context("unexpected capture payload")?.clone();
+                let info=leaf_metadata(dir,&name)?;
+                ensure!(self.seen.insert(path.clone(),info.clone()).is_none(),"duplicate capture payload");
+                if kind=="symlink"{
+                    let row=self.rows.get(path.as_str()).context("symlink manifest row missing")?;
+                    ensure!(info.file_type().is_symlink()&&info.uid()==unsafe{libc::geteuid()}&&info.nlink()==1
+                        &&leaf_target(dir,&name)?==row.link_target,"capture symlink identity or target differs");
+                    let link:File=unix_fs::openat(dir,name.as_str(),OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty())?.into();
+                    ensure!(mount(&link)?==self.mount_id&&same(&info,&link.metadata()?),"unsafe capture symlink");
+                }else{
+                    let child=open_at(dir,&name,kind=="directory")?;
+                    let opened=child.metadata()?;
+                    ensure!(same(&info,&opened)&&mount(&child)?==self.mount_id,"unsafe or changed capture member");
+                    if kind=="directory"{
+                        self.walk(&child,&path,depth+1)?;child.sync_all()?;
+                    }else{
+                        let row=self.rows.get(path.as_str());
+                        let links=row.map_or(1,|r|r.captured_link_count);
+                        let canonical=if kind=="hardlink"{row.context("hardlink row missing")?.hardlink_to.clone()}else{path.clone()};
+                        ensure!(opened.is_file()&&opened.uid()==unsafe{libc::geteuid()}&&opened.mode()&0o077==0
+                            &&opened.nlink()==links&&opened.len()==size,"capture payload identity, privacy or size differs");
+                        let identity=(opened.dev(),opened.ino());
+                        if let Some((prior,prior_info))=self.inodes.get(&identity){
+                            ensure!(prior==&canonical&&same(prior_info,&opened),"unrecorded or changed capture hardlink");
+                        }else{
+                            ensure!(hash_file(&child,self.end)?==(size,digest),"capture payload checksum/size mismatch");
+                            self.inodes.insert(identity,(canonical,opened));
+                        }
+                        child.sync_all()?;
+                    }
+                }
+                ensure!(same(&info,&leaf_metadata(dir,&name)?),"capture member changed during verification");
+            }
+            ensure!(same(&before,&dir.metadata()?),"capture tree changed during verification");Ok(())
+        }
+    }
+    let mut verifier=Verifier{expected,rows:files.iter().map(|r|(r.bundle_path.as_str(),r)).collect(),
+        seen:BTreeMap::new(),inodes:BTreeMap::new(),end,mount_id:mount(root)?};
+    verifier.walk(root,"",0)?;
+    ensure!(verifier.seen.len()==expected.len(),"capture is missing a recorded payload");
+    // Recheck through held, no-follow parents after the entire traversal.
+    for (path,info) in &verifier.seen{
+        check_time(end)?;
+        let (parent,leaf)=real_parent(root,path)?;
+        ensure!(same(info,&leaf_metadata(&parent,&leaf)?),"capture tree changed during verification");
+        if let Some(row)=verifier.rows.get(path.as_str()){
+            if row.kind=="hardlink"{
+                let canonical=verifier.seen.get(&row.hardlink_to).context("hardlink canonical payload missing")?;
+                ensure!((canonical.dev(),canonical.ino())==(info.dev(),info.ino()),"capture hardlink identity differs");
+            }
+        }
+    }
+    root.sync_all()?;Ok(())
 }
 fn verify_bundle(root:&File,checksum:&str,revision:&str,source_root:&Path,storage_root:&Path,end:Instant)->Result<Manifest>{
     ensure!(store::valid_revision(checksum),"reviewed manifest checksum required");
@@ -493,8 +792,14 @@ fn verify_bundle(root:&File,checksum:&str,revision:&str,source_root:&Path,storag
     ensure!(manifest.revision==revision&&Path::new(&manifest.source_root)==source_root,"capture revision or source root differs");
     let mut expected=expected_paths(&manifest)?;
     expected.insert("manifest.json".into(),("file".into(),raw.len() as u64,checksum.into()));
-    verify_tree(root,&expected,end)?;
-    let yaml=read_small(root,"server-man.yaml",super::MAX_CONFIG_BYTES)?;
+    verify_tree(root,&expected,&manifest.files,end)?;
+    let config_file=read_payload(root,"server-man.yaml",false)?;
+    let config_meta=config_file.metadata()?;
+    let config_row=manifest.files.iter().find(|f|f.bundle_path=="server-man.yaml").context("capture configuration missing")?;
+    ensure!(config_meta.is_file()&&config_meta.uid()==unsafe{libc::geteuid()}&&config_meta.mode()&0o077==0
+        &&config_meta.nlink()==config_row.captured_link_count&&config_meta.len()==config_row.size_bytes,"unsafe captured configuration");
+    let mut yaml=Vec::new();(&config_file).take(super::MAX_CONFIG_BYTES as u64+1).read_to_end(&mut yaml)?;
+    ensure!(yaml.len()<=super::MAX_CONFIG_BYTES&&same(&config_meta,&config_file.metadata()?),"capture configuration changed or exceeds limit");
     let config=super::parse(&yaml)?;
     ensure!(super::revision(&yaml)==revision,"captured configuration revision differs");
     // Validate coverage against the captured authoritative definition, not
@@ -503,12 +808,12 @@ fn verify_bundle(root:&File,checksum:&str,revision:&str,source_root:&Path,storag
     for storage in config.storage.values(){
         ensure!(!storage.external,"external data is not captured");
         let path=relative(storage_root.join(&storage.path))?;
-        ensure!(expected.get(&path).is_some_and(|(kind,_,_)|kind==if storage.kind=="file"{"file"}else{"directory"}),"declared storage is missing from capture");
+        ensure!(expected.get(&path).is_some_and(|(kind,_,_)|if storage.kind=="file"{matches!(kind.as_str(),"file"|"hardlink")}else{kind=="directory"}),"declared storage is missing from capture");
         if let Some(asset)=&storage.source{
-            ensure!(expected.get(&asset.path).is_some_and(|(kind,_,sha)|kind=="file"&&sha==&asset.sha256),"initial image asset checksum differs");
+            ensure!(expected.get(&asset.path).is_some_and(|(kind,_,sha)|matches!(kind.as_str(),"file"|"hardlink")&&sha==&asset.sha256),"initial image asset checksum differs");
         }
     }
-    for secret in config.secrets.values(){ensure!(expected.get(secret).is_some_and(|(kind,_,_)|kind=="file"),"private file is missing from capture");}
+    for secret in config.secrets.values(){ensure!(expected.get(secret).is_some_and(|(kind,_,_)|matches!(kind.as_str(),"file"|"hardlink")),"private file is missing from capture");}
     ensure!(!config.shares.values().any(|s|s.enabled),"published share data needs client quiescence");
     let mut native_ids=BTreeSet::new();
     for exp in &manifest.native_exports{
@@ -589,16 +894,13 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
                 j.services.insert(id.clone(),"stopped".into());persist(store,&dir,&mut j)?;
             }
             native_boundary(provider,&config,&inv).await?;
-            let mut collector=Collector{root:&publication.root,files:vec![],paths:BTreeSet::new(),end};
-            let source=open_absolute(&source_path,false)?;
-            collector.capture(&source,"server-man.yaml",0,&mount(&source)?)?;
+            let mut collector=Collector::new(&publication.root,end);
+            collector.declared(&source_path,"server-man.yaml",false)?;
             ensure!(collector.files[0].sha256==snapshot.revision,"configuration changed during copy");
             for input in inv.inputs.iter().filter(|i|i.strategy=="bundle_copy"&&i.id!="configuration"&&i.included_by.is_none()){
                 let path=input.path.as_deref().context("missing source path")?;
                 let bundle=input.bundle_path.as_deref().context("missing capture path")?;
-                let file=open_absolute(Path::new(path),input.kind=="directory")?;
-                ensure!(file.metadata()?.is_dir()==(input.kind=="directory"),"capture input type changed");
-                collector.capture(&file,bundle,0,&mount(&file)?)?;
+                collector.declared(Path::new(path),bundle,input.kind=="directory")?;
             }
             let mut exports=Vec::new();
             for input in inv.inputs.iter().filter(|i|i.strategy=="native_export"){
@@ -613,7 +915,7 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
             }
             native_boundary(provider,&config,&inv).await?;
             check_revision(store,&dir,&j.revision)?;
-            Ok::<_,anyhow::Error>((collector.files,exports))
+            Ok::<_,anyhow::Error>((collector.finish()?,exports))
         };
         // Timeout never drops the outer cleanup/recovery step. Persisted
         // stop intent handles commands which may have changed native state.
@@ -622,7 +924,7 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
         let (files,exports)=capture.context("backup capture deadline exceeded")??;
         let (resumed,failed)=recovery?;
         let manifest=Manifest{source_root:source_root.to_string_lossy().into_owned(),principal:principal()?,
-            verification_required:vec!["UID/GID mapping, privileged attributes, complete metadata, native and restore validation remain required.".into()],
+            verification_required:vec!["UID/GID mapping, privileged attribute visibility, inode flags, full durability and native/restore validation require review before this bundle can be marked prepared.".into()],
             version:1,stage:"captured".into(),revision:snapshot.revision.clone(),created_at:Utc::now(),server_man_version:env!("CARGO_PKG_VERSION").into(),
             files,native_exports:exports,running_workloads_at_backup:running,resumed_workloads:resumed.clone(),failed_resume:failed.clone()};
         let raw=serde_json::to_vec(&manifest)?;
@@ -635,7 +937,7 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
         check_revision(store,&dir,&j.revision)?;
         publication.rename()?;
         j.artifact.stage="published".into();persist(store,&dir,&mut j)?;
-        let total_bytes=manifest.files.iter().map(|f|f.size_bytes).chain(manifest.native_exports.iter().map(|n|n.size_bytes)).try_fold(raw.len() as u64,|a,b|a.checked_add(b).context("capture size overflow"))?;
+        let total_bytes=manifest.files.iter().filter(|f|f.kind=="file").map(|f|f.size_bytes).chain(manifest.native_exports.iter().map(|n|n.size_bytes)).try_fold(raw.len() as u64,|a,b|a.checked_add(b).context("capture size overflow"))?;
         Ok::<_,anyhow::Error>(serde_json::json!({"stage":"captured","destination":opts.destination,"revision":snapshot.revision,"preparedAt":manifest.created_at,
             "totalEntries":manifest.files.len()+manifest.native_exports.len()+1,"totalBytes":total_bytes,"manifestChecksum":checksum,"quiesced":opts.quiesce,
             "resumedServices":resumed,"failedResume":failed}))
@@ -688,6 +990,7 @@ pub fn publish(store:&Store,storage_root:&Path,revision:&str,token:&str,seconds:
 mod tests{
     use super::*;
     use std::os::unix::fs::{PermissionsExt,symlink};
+    use base64::Engine as _;
     use crate::{command::CommandRunner,config::AppConfig};
     fn fixture()->(tempfile::TempDir,Store,PathBuf,PathBuf){
         let tmp=tempfile::tempdir().unwrap();
@@ -721,6 +1024,89 @@ mod tests{
         fs::write(dest.join("storage/data/payload"),b"tampered").unwrap();
         assert!(publish(&store,&storage,&snapshot.revision,&current.review_token,30).is_err());
         assert_eq!(fs::read(dest.join("storage/data/payload")).unwrap(),b"tampered");
+    }
+    #[test]
+    fn metadata_and_links_are_captured_privately_and_verified(){
+        let tmp=tempfile::tempdir().unwrap();
+        let source=tmp.path().join("source");let target=tmp.path().join("target");
+        fs::create_dir(&source).unwrap();fs::create_dir(&target).unwrap();
+        fs::set_permissions(&target,fs::Permissions::from_mode(0o700)).unwrap();
+        fs::create_dir(source.join("nested")).unwrap();
+        fs::create_dir(source.join("empty")).unwrap();
+        let original=source.join("payload");fs::write(&original,b"private").unwrap();
+        fs::hard_link(&original,source.join("alias")).unwrap();
+        fs::hard_link(&original,tmp.path().join("outside-selection")).unwrap();
+        symlink("../payload",source.join("nested/link")).unwrap();
+        let f=File::open(&original).unwrap();
+        let value=b"\0binary\xff";
+        assert_eq!(unsafe{libc::fsetxattr(f.as_raw_fd(),c"user.server_man_test".as_ptr(),value.as_ptr().cast(),value.len(),0)},0);
+        let mut acl=2u32.to_le_bytes().to_vec();
+        for (tag,perm,id) in [(1u16,6u16,u32::MAX),(2,4,unsafe{libc::geteuid()}),(4,0,u32::MAX),(16,4,u32::MAX),(32,0,u32::MAX)]{
+            acl.extend(tag.to_le_bytes());acl.extend(perm.to_le_bytes());acl.extend(id.to_le_bytes());
+        }
+        assert_eq!(unsafe{libc::fsetxattr(f.as_raw_fd(),c"system.posix_acl_access".as_ptr(),acl.as_ptr().cast(),acl.len(),0)},0);
+        let root=File::open(&target).unwrap();
+        let end=Instant::now()+Duration::from_secs(30);
+        let mut collector=Collector::new(&root,end);
+        collector.declared(&source,"data",true).unwrap();
+        let rows=collector.finish().unwrap();
+        let aliases:Vec<_>=rows.iter().filter(|r|matches!(r.kind.as_str(),"file"|"hardlink")).collect();
+        assert_eq!(aliases.len(),2);
+        for row in aliases{
+            assert_eq!(row.source_link_count,3);assert_eq!(row.captured_link_count,2);
+            assert_eq!(STANDARD.decode(&row.xattrs["user.server_man_test"]).unwrap(),value.to_vec());
+            assert_eq!(STANDARD.decode(&row.xattrs["system.posix_acl_access"]).unwrap(),acl);
+        }
+        assert_eq!(fs::metadata(target.join("data/payload")).unwrap().ino(),fs::metadata(target.join("data/alias")).unwrap().ino());
+        assert_eq!(fs::read_link(target.join("data/nested/link")).unwrap(),Path::new("../payload"));
+        assert!(target.join("data/empty").is_dir());
+        let output=File::open(target.join("data/payload")).unwrap();
+        assert_eq!(output.metadata().unwrap().mode()&0o077,0);
+        assert!(!read_xattrs(Some(&output),None).unwrap().0.contains_key("system.posix_acl_access"));
+        let expected=rows.iter().map(|r|(r.bundle_path.clone(),(r.kind.clone(),r.size_bytes,r.sha256.clone()))).collect();
+        verify_tree(&root,&expected,&rows,end).unwrap();
+        // Equal bytes alone cannot substitute for a recorded hardlink.
+        fs::remove_file(target.join("data/alias")).unwrap();
+        fs::write(target.join("data/alias"),b"private").unwrap();
+        fs::set_permissions(target.join("data/alias"),fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(verify_tree(&root,&expected,&rows,end).is_err());
+    }
+    #[test]
+    fn hardlinks_across_declared_inputs_and_escaped_names(){
+        let tmp=tempfile::tempdir().unwrap();
+        let a=tmp.path().join("a");let b=tmp.path().join("b");let target=tmp.path().join("target");
+        fs::create_dir(&a).unwrap();fs::create_dir(&b).unwrap();fs::create_dir(&target).unwrap();
+        fs::set_permissions(&target,fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(a.join("line\nbreak"),b"data").unwrap();
+        fs::hard_link(a.join("line\nbreak"),b.join("alias")).unwrap();
+        symlink("line\nbreak",a.join("link")).unwrap();
+        let root=File::open(&target).unwrap();
+        let end=Instant::now()+Duration::from_secs(30);
+        let mut collector=Collector::new(&root,end);
+        collector.declared(&a,"one",true).unwrap();
+        collector.declared(&b,"two",true).unwrap();
+        let rows=collector.finish().unwrap();
+        let alias=rows.iter().find(|r|r.bundle_path=="two/alias").unwrap();
+        assert_eq!(alias.hardlink_to,"one/line\nbreak");
+        assert_eq!(alias.captured_link_count,2);
+        let expected=rows.iter().map(|r|(r.bundle_path.clone(),(r.kind.clone(),r.size_bytes,r.sha256.clone()))).collect();
+        verify_tree(&root,&expected,&rows,end).unwrap();
+        fs::remove_file(target.join("one/link")).unwrap();
+        symlink("different",target.join("one/link")).unwrap();
+        assert!(verify_tree(&root,&expected,&rows,end).is_err());
+    }
+    #[test]
+    fn symlink_boundary_and_metadata_validation(){
+        assert_eq!(resolve_link("data/nested/link","../payload","data").unwrap(),"data/payload");
+        assert!(resolve_link("data/nested/link","../../outside","data").is_err());
+        assert!(resolve_link("data/link","/etc/passwd","data").is_err());
+        assert!(resolve_link("data/link","../outside","data").is_err());
+        let temp=tempfile::tempdir().unwrap();
+        let path=temp.path().join("file");fs::write(&path,b"x").unwrap();
+        let mut row=metadata(&fs::metadata(&path).unwrap(),"file","data/file").unwrap();
+        row.sha256=super::super::revision(b"x");row.size_bytes=1;
+        row.xattrs.insert("user.invalid".into(),"not base64!".into());
+        assert!(validate_file_metadata(&[row]).is_err());
     }
     #[tokio::test]
     async fn interruption_blocks_writes_and_release_does_not_delete_staging(){
