@@ -11,7 +11,7 @@
       "name": "dependencies_install",
       "module": "updates",
       "title": "Install module dependencies",
-      "description": "Install native dependencies for an optional module. Does not add repositories or change container ownership, group memberships, or daemon startup settings. Native package scripts can start services; on Arch also upgrades the system. Restart server-man after installation to refresh provider discovery.",
+      "description": "Install native dependencies for an optional module. Does not add repositories or change container ownership, group memberships, or daemon startup settings. Native package scripts can start services; on Arch also upgrades the system. Restart Maestro after installation to refresh provider discovery.",
       "readOnly": false,
       "destructive": true,
       "inputSchema": {
@@ -1527,7 +1527,7 @@
       "name": "shares_samba_password",
       "module": "shares",
       "title": "Set Samba password",
-      "description": "Set or replace the Samba password for the Linux account running server-man. Does not change the Linux login password. The password is never stored in configuration or job output.",
+      "description": "Set or replace the Samba password for the Linux account running Maestro. Does not change the Linux login password. The password is never stored in configuration or job output.",
       "readOnly": false,
       "destructive": true,
       "inputSchema": {

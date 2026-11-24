@@ -38,13 +38,13 @@
   onMount(() => {
     const changed = () => { void load() }
     const visible = () => { if (!document.hidden) void load() }
-    window.addEventListener('server-man:job-finished', changed)
+    window.addEventListener('maestro:job-finished', changed)
     document.addEventListener('visibilitychange', visible)
     const timer = window.setInterval(visible, 60_000)
     void load()
     return () => {
       stopped = true; controller?.abort(); window.clearInterval(timer)
-      window.removeEventListener('server-man:job-finished', changed)
+      window.removeEventListener('maestro:job-finished', changed)
       document.removeEventListener('visibilitychange', visible)
     }
   })

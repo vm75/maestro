@@ -1,4 +1,4 @@
-//! Read-only native shares inventory, translated from Server Man's Samba/NFS
+//! Read-only native shares inventory, translated from the reference implementation's Samba/NFS
 //! parsers and inventory. This module never reloads daemons or publishes files.
 //! Ownership remains explicitly unverified until the transactional helper is ported.
 use std::{

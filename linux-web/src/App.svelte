@@ -66,9 +66,9 @@
     selectHash()
     window.addEventListener('hashchange', selectHash)
     const expired = () => { needsAuth = true; status = null; discovery = null; shared = null; menuOpen = false }
-    window.addEventListener('server-man:unauthorized', expired)
+    window.addEventListener('maestro:unauthorized', expired)
     void connect()
-    return () => { window.removeEventListener('server-man:unauthorized', expired); window.removeEventListener('hashchange', selectHash) }
+    return () => { window.removeEventListener('maestro:unauthorized', expired); window.removeEventListener('hashchange', selectHash) }
   })
 </script>
 

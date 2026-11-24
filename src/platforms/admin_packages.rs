@@ -78,7 +78,7 @@ pub fn package_names(text: &str) -> Result<Vec<String>> {
 }
 
 pub(super) fn dependency_packages(family: Family, distribution: &str, target: &str) -> Result<Vec<String>> {
-    // Pinned mappings from Server Man's dependencyPackages reference. Package
+    // Pinned mappings from the reference implementation's dependencyPackages reference. Package
     // manager policy and native signature checks are never modified.
     let names = match (target, family) {
         ("podman", Family::Apt) => {

@@ -1,6 +1,6 @@
 export type Theme = 'dark' | 'light'
 
-const STORAGE_KEY = 'server-man:theme'
+const STORAGE_KEY = 'maestro:theme'
 
 class ThemeManager {
   current = $state<Theme>('dark')

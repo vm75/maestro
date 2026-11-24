@@ -311,7 +311,7 @@ impl StorageProvider {
         ensure!(relative.components().all(|part| {
             let name = part.as_os_str().to_string_lossy();
             !name.starts_with(".maestro") && !name.starts_with(".workload-")
-                && !name.starts_with(".server-man-")
+                && !name.starts_with(".maestro-")
         }), "storage overlaps reserved generated state");
         for secret in config.secrets.values() {
             ensure!(!overlaps(&destination, &authority_root.join(secret)),

@@ -1,4 +1,4 @@
-//! Linux-only /proc parsers translated from Server Man's monitor/parse.go and source.go.
+//! Linux-only /proc parsers translated from the reference implementation's monitor/parse.go and source.go.
 //! Router system_usage parsing and response contracts are deliberately unchanged.
 
 use std::{collections::BTreeMap, fs::File, io::Read, path::Path};

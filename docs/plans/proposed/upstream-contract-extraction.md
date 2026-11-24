@@ -1,3 +1,8 @@
+# Upstream contract extraction (temporary porting reference)
+
+The following Go program runs **in a checkout of the pinned Server Man upstream**, not in Maestro. Copy it to the upstream repository root as a temporary Go source file, run it there, and remove it afterwards. Capture its JSON output, replace upstream product wording in descriptions with Maestro wording, and compare with `test-fixtures/phase2/maestro-tools.json`. The fixture tests Maestro's tool schemas; it is not an executable upstream dependency.
+
+```go
 package main
 
 import (
@@ -55,3 +60,5 @@ func main() {
 		panic(err)
 	}
 }
+
+```

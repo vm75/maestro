@@ -99,7 +99,7 @@ fn is_zero(v:&u64)->bool{*v==0}
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Manifest{
     source_root:String,principal:Principal,#[serde(with="go_slice")]verification_required:Vec<String>,version:u8,stage:String,
-    revision:String,#[serde(serialize_with="serialize_go_time")]created_at:DateTime<Utc>,server_man_version:String,files:Vec<ManifestFile>,
+    revision:String,#[serde(serialize_with="serialize_go_time")]created_at:DateTime<Utc>,maestro_version:String,files:Vec<ManifestFile>,
     #[serde(with="go_slice")]native_exports:Vec<NativeExport>,
     #[serde(with="go_slice")]running_workloads_at_backup:Vec<String>,
     #[serde(with="go_slice")]resumed_workloads:Vec<String>,
@@ -823,7 +823,7 @@ fn expected_paths(m:&Manifest)->Result<BTreeMap<String,(String,u64,String)>>{
         check_cancel()?;
         ensure!(expected.insert(f.bundle_path.clone(),(f.kind.clone(),f.size_bytes,f.sha256.clone())).is_none(),"duplicate manifest payload");
     }
-    ensure!(expected.get("server-man.yaml").is_some_and(|(k,_,hash)|k=="file"&&hash==&m.revision),"capture has no pinned configuration");
+    ensure!(expected.get("maestro.yaml").is_some_and(|(k,_,hash)|k=="file"&&hash==&m.revision),"capture has no pinned configuration");
     for export in &m.native_exports{
         check_cancel()?;
         ensure!(portable(&export.bundle_path)&&export.bundle_path.starts_with("native/")&&export.size_bytes>0&&export.size_bytes<=i64::MAX as u64&&!export.native.name.is_empty()
@@ -946,9 +946,9 @@ fn verify_bundle(root:&File,checksum:&str,revision:&str,source_root:&Path,storag
     let mut expected=expected_paths(&manifest)?;
     expected.insert("manifest.json".into(),("file".into(),raw.len() as u64,checksum.into()));
     verify_tree(root,&expected,&manifest.files,end)?;
-    let config_file=read_payload(root,"server-man.yaml",false)?;
+    let config_file=read_payload(root,"maestro.yaml",false)?;
     let config_meta=config_file.metadata()?;
-    let config_row=manifest.files.iter().find(|f|f.bundle_path=="server-man.yaml").context("capture configuration missing")?;
+    let config_row=manifest.files.iter().find(|f|f.bundle_path=="maestro.yaml").context("capture configuration missing")?;
     ensure!(config_meta.is_file()&&config_meta.uid()==unsafe{libc::geteuid()}&&config_meta.mode()&0o077==0
         &&config_meta.nlink()==config_row.captured_link_count&&config_meta.len()==config_row.size_bytes,"unsafe captured configuration");
     let mut yaml=Vec::new();(&config_file).take(super::MAX_CONFIG_BYTES as u64+1).read_to_end(&mut yaml)?;
@@ -1017,7 +1017,7 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
         ensure!(matches!(input.strategy,"bundle_copy"|"native_export"),"unsupported external/native backup input");
         if input.strategy=="bundle_copy"&&input.id!="configuration"{
             let path=input.bundle_path.as_deref().context("unresolved backup path")?;
-            ensure!(portable(path)&&!matches!(path,"manifest.json"|"native"|"server-man.yaml")&&!path.starts_with("native/"),"reserved capture path");
+            ensure!(portable(path)&&!matches!(path,"manifest.json"|"native"|"maestro.yaml")&&!path.starts_with("native/"),"reserved capture path");
         }else if input.strategy=="native_export"{
             let object=input.native.as_ref().context("unresolved native capture identity")?;
             let id=input.resources[0].strip_prefix("service/").context("invalid native capture resource")?;
@@ -1055,7 +1055,7 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
             }
             native_boundary(provider,&config,&inv).await?;
             let mut collector=Collector::new(&publication.root,end);
-            collector.declared(&source_path,"server-man.yaml",false)?;
+            collector.declared(&source_path,"maestro.yaml",false)?;
             ensure!(collector.files[0].sha256==snapshot.revision,"configuration changed during copy");
             for input in inv.inputs.iter().filter(|i|i.strategy=="bundle_copy"&&i.id!="configuration"&&i.included_by.is_none()){
                 let path=input.path.as_deref().context("missing source path")?;
@@ -1093,7 +1093,7 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
         running.sort();
         let manifest=Manifest{source_root:source_root.to_string_lossy().into_owned(),principal:principal()?,
             verification_required:vec!["UID/GID mapping, privileged attribute visibility, inode flags, full durability and native/restore validation require review before this bundle can be marked prepared.".into()],
-            version:1,stage:"captured".into(),revision:snapshot.revision.clone(),created_at:Utc::now(),server_man_version:env!("CARGO_PKG_VERSION").into(),
+            version:1,stage:"captured".into(),revision:snapshot.revision.clone(),created_at:Utc::now(),maestro_version:env!("CARGO_PKG_VERSION").into(),
             files,native_exports:exports,running_workloads_at_backup:running,resumed_workloads:resumed.clone(),failed_resume:failed.clone()};
         expected_paths(&manifest)?;
         check_time(end)?;
@@ -1200,7 +1200,7 @@ mod tests{
         let result=prepare(&store,&storage,&provider,PrepareOptions{revision:snapshot.revision.clone(),destination:dest.to_str().unwrap().into(),quiesce:true,deadline_seconds:30}).await.unwrap();
         assert_eq!(result["stage"],"captured");
         assert_eq!(fs::read(dest.join("storage/data/payload")).unwrap(),b"private payload");
-        assert_eq!(fs::read(dest.join("server-man.yaml")).unwrap(),snapshot.bytes);
+        assert_eq!(fs::read(dest.join("maestro.yaml")).unwrap(),snapshot.bytes);
         assert_eq!(fs::metadata(dest.join("manifest.json")).unwrap().mode()&0o077,0);
         let status_before=status(&store).unwrap();
         let j=status_before.journal.as_ref().unwrap();
@@ -1227,7 +1227,7 @@ mod tests{
         symlink("../payload",source.join("nested/link")).unwrap();
         let f=File::open(&original).unwrap();
         let value=b"\0binary\xff";
-        assert_eq!(unsafe{libc::fsetxattr(f.as_raw_fd(),c"user.server_man_test".as_ptr(),value.as_ptr().cast(),value.len(),0)},0);
+        assert_eq!(unsafe{libc::fsetxattr(f.as_raw_fd(),c"user.maestro_test".as_ptr(),value.as_ptr().cast(),value.len(),0)},0);
         let mut acl=2u32.to_le_bytes().to_vec();
         for (tag,perm,id) in [(1u16,6u16,u32::MAX),(2,4,unsafe{libc::geteuid()}),(4,0,u32::MAX),(16,4,u32::MAX),(32,0,u32::MAX)]{
             acl.extend(tag.to_le_bytes());acl.extend(perm.to_le_bytes());acl.extend(id.to_le_bytes());
@@ -1242,7 +1242,7 @@ mod tests{
         assert_eq!(aliases.len(),2);
         for row in aliases{
             assert_eq!(row.source_link_count,3);assert_eq!(row.captured_link_count,2);
-            assert_eq!(STANDARD.decode(&row.xattrs["user.server_man_test"]).unwrap(),value.to_vec());
+            assert_eq!(STANDARD.decode(&row.xattrs["user.maestro_test"]).unwrap(),value.to_vec());
             assert_eq!(STANDARD.decode(&row.xattrs["system.posix_acl_access"]).unwrap(),acl);
         }
         assert_eq!(fs::metadata(target.join("data/payload")).unwrap().ino(),fs::metadata(target.join("data/alias")).unwrap().ino());
@@ -1316,8 +1316,8 @@ mod tests{
     // Fixed version-1 wire fixture using the reference Go struct field order,
     // nil slice encoding, RFC3339Nano, and encoding/json HTML escaping.
     #[test]
-    fn server_man_manifest_wire_fixture_round_trips(){
-        let raw=br#"{"sourceRoot":"/source\u003cprivate\u003e","principal":{"uid":1000,"gid":1000,"groups":null,"uidMap":"","gidMap":""},"verificationRequired":null,"version":1,"stage":"captured","revision":"b79606fb3afea5bd1609ed40b622142f1c98125abcfe89a76a661b0e8e343910","createdAt":"2026-11-23T12:00:00.12Z","serverManVersion":"fixture","files":[{"capturedLinkCount":1,"type":"file","uid":1000,"gid":1000,"atime":"2026-11-23T12:00:00.12Z","sourceLinkCount":1,"sourceAllocatedBytes":4096,"xattrCoverage":"visible","bundlePath":"server-man.yaml","sizeBytes":6,"sha256":"b79606fb3afea5bd1609ed40b622142f1c98125abcfe89a76a661b0e8e343910","mode":"0600","mtime":"2026-11-23T12:00:00.12Z"}],"nativeExports":null,"runningWorkloadsAtBackup":null,"resumedWorkloads":null}"#;
+    fn maestro_manifest_wire_fixture_round_trips(){
+        let raw=br#"{"sourceRoot":"/source\u003cprivate\u003e","principal":{"uid":1000,"gid":1000,"groups":null,"uidMap":"","gidMap":""},"verificationRequired":null,"version":1,"stage":"captured","revision":"b79606fb3afea5bd1609ed40b622142f1c98125abcfe89a76a661b0e8e343910","createdAt":"2026-11-23T12:00:00.12Z","maestroVersion":"fixture","files":[{"capturedLinkCount":1,"type":"file","uid":1000,"gid":1000,"atime":"2026-11-23T12:00:00.12Z","sourceLinkCount":1,"sourceAllocatedBytes":4096,"xattrCoverage":"visible","bundlePath":"maestro.yaml","sizeBytes":6,"sha256":"b79606fb3afea5bd1609ed40b622142f1c98125abcfe89a76a661b0e8e343910","mode":"0600","mtime":"2026-11-23T12:00:00.12Z"}],"nativeExports":null,"runningWorkloadsAtBackup":null,"resumedWorkloads":null}"#;
         unique_manifest_json(raw).unwrap();
         let manifest:Manifest=serde_json::from_slice(raw).unwrap();
         assert!(expected_paths(&manifest).is_ok());

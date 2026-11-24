@@ -1,4 +1,4 @@
-//! Frozen Server Man server-setting contract, independent of workload validity.
+//! Frozen the reference implementation server-setting contract, independent of workload validity.
 //! Startup can inspect settings while leaving broken workload definitions repairable.
 use anyhow::{Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
@@ -35,7 +35,7 @@ impl Settings {
             libvirt_uri: "qemu:///system".into(),
             systemd_scope: "system".into(),
             samba_config: "/etc/samba/smb.conf".into(),
-            samba_managed_file: "/etc/samba/server-man.conf".into(),
+            samba_managed_file: "/etc/samba/maestro.conf".into(),
             package_manager: "auto".into(),
             state_dir: state_dir.to_string_lossy().into_owned(),
             token_file: config_dir.join("token").to_string_lossy().into_owned(),
@@ -91,7 +91,7 @@ impl Settings {
                 literal_path(path)
                     && !matches!(
                         path.as_str(),
-                        "/etc/exports" | "/etc/exports.d/server-man.exports"
+                        "/etc/exports" | "/etc/exports.d/maestro.exports"
                     ),
                 "invalid Samba configuration path"
             );
@@ -103,7 +103,7 @@ impl Settings {
         if self.privileged_operations {
             ensure!(
                 self.samba_config == "/etc/samba/smb.conf"
-                    && self.samba_managed_file == "/etc/samba/server-man.conf"
+                    && self.samba_managed_file == "/etc/samba/maestro.conf"
                     && self.package_manager == "auto",
                 "helper operations require fixed native paths and automatic package detection"
             );

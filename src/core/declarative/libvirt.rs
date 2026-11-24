@@ -1,4 +1,4 @@
-//! Direct port of Server Man libvirt.go. Native commands always address a
+//! Direct port of the reference implementation libvirt.go. Native commands always address a
 //! verified persistent UUID on an explicitly selected local connection.
 use std::{path::PathBuf,time::Duration};
 use anyhow::{Result,anyhow,ensure};
@@ -333,7 +333,7 @@ case "$1" in
  uri) echo qemu:///session;;
  domcapabilities) echo '<domainCapabilities><domain>kvm</domain><arch>x86_64</arch><machine>q35</machine></domainCapabilities>';;
  list) if [ -f '{persistent}' ]; then
-  if [ "$3" = --uuid ]; then echo '{uuid}'; else echo sm-guest; fi
+  if [ "$3" = --uuid ]; then echo '{uuid}'; else echo maestro-guest; fi
  fi;;
  dumpxml) if [ "$4" != --inactive ] && [ -f '{running}' ]; then cat '{active}'; else cat '{persistent}'; fi;;
  domstate) if [ -f '{running}' ]; then echo running; else echo 'shut off'; fi;;

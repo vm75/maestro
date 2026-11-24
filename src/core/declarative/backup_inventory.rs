@@ -209,7 +209,7 @@ impl BackupInventory {
     }
 }
 
-// Source-guided translation of Server Man references.go and backup_declared.go.
+// Source-guided translation of the reference implementation references.go and backup_declared.go.
 fn consumers(config: &Config, kind: &str, id: &str) -> Vec<String> {
     let mut resources = BTreeSet::from([format!("{kind}/{id}")]);
     for (service_id, service) in &config.services {

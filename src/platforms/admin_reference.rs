@@ -1,4 +1,4 @@
-//! Direct port of Server Man internal/admin/helper.go and core/schema.go.
+//! Direct port of the reference implementation internal/admin/helper.go and core/schema.go.
 //! The public helper envelope is independent of the Maestro HTTP/job transport.
 use std::{
     collections::BTreeMap,
@@ -117,8 +117,8 @@ fn schema(operation: &str) -> Value {
         return json!({"properties":properties,"required":required});
     }
     let registry: Value = serde_json::from_str(include_str!(
-        "../../test-fixtures/phase2/server-man-tools.json"
-    )).expect("checked-in Server Man registry fixture");
+        "../../test-fixtures/phase2/maestro-tools.json"
+    )).expect("checked-in the reference implementation registry fixture");
     registry["tools"].as_array().expect("tool array")
         .iter().find(|tool| tool["name"] == operation)
         .expect("allowlisted reference tool has a frozen schema")["inputSchema"].clone()
@@ -354,7 +354,7 @@ async fn service(operation: &str, input: &Map<String,Value>, policy: &Policy, ou
     if operation == "services_list" {
         let mut result = json!({"scope":"system","available":false,"journalAvailable":program("journalctl").is_some(),"services":[],"warnings":[]});
         let Some(systemctl) = program("systemctl") else {
-            result["reason"] = json!("systemctl was not found; install systemd tools and restart server-man");
+            result["reason"] = json!("systemctl was not found; install systemd tools and restart maestro");
             return Ok(result);
         };
         result["available"] = json!(true);
@@ -443,8 +443,8 @@ async fn password(input: &Map<String,Value>, policy: &Policy, uid: u32) -> Opera
         return Err(Failure::invalid("Samba password must be non-empty, at most 256 characters, and contain no NUL or line breaks"));
     }
     if !policy.samba_password { return Err(Failure::denied("Samba password administration is disabled by root policy")); }
-    let account = admin_shares::caller_name(uid).map_err(|_| Failure::unavailable("The server-man Linux account is unavailable or unsupported"))?;
-    if program("smbpasswd").is_none() { return Err(Failure::unavailable("smbpasswd is unavailable; set up the Samba server and restart server-man")); }
+    let account = admin_shares::caller_name(uid).map_err(|_| Failure::unavailable("The maestro Linux account is unavailable or unsupported"))?;
+    if program("smbpasswd").is_none() { return Err(Failure::unavailable("smbpasswd is unavailable; set up the Samba server and restart maestro")); }
     admin_shares::set_password(uid,password).await.map_err(|_| Failure::unavailable("Could not set the Samba password; check Samba installation and privileged helper access"))?;
     Ok(json!({"username":account,"updated":true}))
 }
@@ -518,7 +518,7 @@ impl PackageBackend {
         };
         backend.title=title.into();
         backend.program=program(name);
-        if backend.program.is_none() { backend.reason=format!("{name} executable was not found; install the native tools and restart server-man"); }
+        if backend.program.is_none() { backend.reason=format!("{name} executable was not found; install the native tools and restart maestro"); }
         if family==Family::Pacman && backend.checkupdates.is_none() {
             backend.refresh_reason="Install pacman-contrib/checkupdates for isolated metadata refresh. Install updates still uses a full pacman -Syu.".into();
         }
@@ -557,7 +557,7 @@ impl PackageBackend {
             result["notice"]=json!("Package listings use cached metadata. Refresh before reviewing updates; installation resolves the current repositories and may change the plan. APT holds/phased or dependency-blocked packages may remain deferred.");
         }
         if family==Family::Pacman && Path::new(PACMAN_DB).join("sync").is_dir(){
-            args.extend(["--dbpath",PACMAN_DB]);result["cacheSource"]=json!("server-man's isolated checkupdates database");
+            args.extend(["--dbpath",PACMAN_DB]);result["cacheSource"]=json!("maestro's isolated checkupdates database");
         }
         let Ok(native)=capture(program,&args,&[("NO_COLOR","1")],12).await else {
             result["notice"]=json!("Pending updates are unavailable; check package-manager permissions, cached metadata and native diagnostics");return result;

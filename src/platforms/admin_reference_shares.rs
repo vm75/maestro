@@ -1,4 +1,4 @@
-//! Direct port of Server Man shares/backend.go List and definitions.go InspectDefinitions.
+//! Direct port of the reference implementation shares/backend.go List and definitions.go InspectDefinitions.
 //! Uses the shared typed definition and native parser modules.
 use std::{collections::{BTreeMap, BTreeSet}, fs, path::{Path, PathBuf}};
 use anyhow::{Result, ensure};
@@ -12,10 +12,10 @@ use crate::core::declarative::{
 };
 
 const SAMBA_MAIN: &str = "/etc/samba/smb.conf";
-const SAMBA_MANAGED: &str = "/etc/samba/server-man.conf";
+const SAMBA_MANAGED: &str = "/etc/samba/maestro.conf";
 const NFS_MAIN: &str = "/etc/exports";
 const NFS_DIR: &str = "/etc/exports.d";
-const NFS_MANAGED: &str = "/etc/exports.d/server-man.exports";
+const NFS_MANAGED: &str = "/etc/exports.d/maestro.exports";
 
 fn file(protocol: &str) -> &'static str {
     if protocol == "samba" { SAMBA_MANAGED } else { NFS_MANAGED }
@@ -184,7 +184,7 @@ async fn list(protocol: &str) -> OperationResult<Value> {
                 _ => { warnings.push("Samba main configuration is inaccessible or missing".into()); true }
             };
             can_manage &= !setup;
-            if !available { reason = "testparm is unavailable; install Samba tools and restart server-man".into(); }
+            if !available { reason = "testparm is unavailable; install Samba tools and restart maestro".into(); }
             else if !control { reason = "smbcontrol is unavailable; inventory can be read but changes cannot be applied".into(); }
             if available && !discovery {
                 warnings.push("WS-Discovery server service is unavailable; install or repair the wsdd server for Windows network discovery".into());
@@ -225,7 +225,7 @@ async fn list(protocol: &str) -> OperationResult<Value> {
             let available = program("exportfs").is_some();
             let setup = !Path::new(NFS_DIR).is_dir();
             let mut can_manage = available && reason.is_empty() && !setup;
-            if !available { reason = "exportfs is unavailable; install the NFS server utilities and restart server-man".into(); }
+            if !available { reason = "exportfs is unavailable; install the NFS server utilities and restart maestro".into(); }
             let configured = nfs_configured().unwrap_or_else(|_| {
                 warnings.push("Unmanaged NFS configuration could not be fully read; changes are blocked".into());
                 can_manage = false; Vec::new()

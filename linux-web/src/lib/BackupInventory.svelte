@@ -77,8 +77,8 @@
       finally{if(!stopped)preparing=false}
     }
     void loadRecovery()
-    window.addEventListener('server-man:job-finished',finished)
-    return ()=>{stopped=true;controller?.abort();window.removeEventListener('server-man:job-finished',finished)}
+    window.addEventListener('maestro:job-finished',finished)
+    return ()=>{stopped=true;controller?.abort();window.removeEventListener('maestro:job-finished',finished)}
   })
 </script>
 <section class="panel backup-inventory" aria-label="Backup inventory">

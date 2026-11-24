@@ -191,7 +191,7 @@ pub fn load(path: &Path) -> Result<AppConfig> {
     )?);
     config.paths.applications_dir = root.join("applications");
     config.paths.samba_conf = settings.samba_managed_file.clone().into();
-    config.paths.exports_file = "/etc/exports.d/server-man.exports".into();
+    config.paths.exports_file = "/etc/exports.d/maestro.exports".into();
     config.services.init_dir = root.join("init.d");
     config.services.log_dirs = vec![root.join("logs")];
     config.firewall.log_dirs = vec![root.join("logs/nginx")];
@@ -538,7 +538,7 @@ mod tests {
             .restart_required
         );
         let reference: serde_json::Value = serde_json::from_str(include_str!(
-            "../../test-fixtures/phase2/server-man-tools.json"
+            "../../test-fixtures/phase2/maestro-tools.json"
         ))
         .unwrap();
         let (_, _, discovery) =

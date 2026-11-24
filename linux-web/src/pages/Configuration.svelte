@@ -71,7 +71,7 @@
     } catch(e) { error = e instanceof Error ? e.message : 'Could not reconcile artifact metadata' }
     finally { busy = false }
   }
-  onMount(() => { const finished = (e:Event) => { const job = (e as CustomEvent<Job>).detail; if (job.id !== activeJob) return; activeJob = null; feedback = job.state === 'succeeded' ? 'Configuration operation completed.' : job.error || `Operation ${job.state}.`; void load() }; window.addEventListener('server-man:job-finished',finished); void load(); return () => { stopped = true; controller?.abort(); window.removeEventListener('server-man:job-finished',finished) } })
+  onMount(() => { const finished = (e:Event) => { const job = (e as CustomEvent<Job>).detail; if (job.id !== activeJob) return; activeJob = null; feedback = job.state === 'succeeded' ? 'Configuration operation completed.' : job.error || `Operation ${job.state}.`; void load() }; window.addEventListener('maestro:job-finished',finished); void load(); return () => { stopped = true; controller?.abort(); window.removeEventListener('maestro:job-finished',finished) } })
 </script>
 
 {#if !allowWrites}

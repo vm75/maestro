@@ -1,4 +1,4 @@
-//! Native Compose adapter translated from Server Man compose_adapter.go and
+//! Native Compose adapter translated from the reference implementation compose_adapter.go and
 //! compose_render.go. Both engines share the same lifecycle and ownership path.
 use super::*;
 use super::super::artifacts::{read_artifact,check_bytes,publish_artifact};
@@ -17,8 +17,8 @@ const REMOVED: &[&str] = &[
     "COMPOSE_FILE","COMPOSE_PROJECT_NAME","COMPOSE_ENV_FILES","COMPOSE_PROFILES",
     "PODMAN_COMPOSE_PROVIDER",
 ];
-pub(super) fn project(id: &str) -> String { format!("sm-{id}-{}",&revision(id.as_bytes())[..12]) }
-fn unit(id: &str) -> String { format!("sm-compose-{id}.service") }
+pub(super) fn project(id: &str) -> String { format!("maestro-{id}-{}",&revision(id.as_bytes())[..12]) }
+fn unit(id: &str) -> String { format!("maestro-compose-{id}.service") }
 
 fn runtime_fingerprint(config: &Config,id: &str) -> Result<String> {
     let mut copy = config.clone();
@@ -145,9 +145,9 @@ fn parse_inventory(data: &[u8],id: &str) -> Result<BTreeMap<String,Member>> {
     let mut members = BTreeMap::new();
     for row in rows {
         let labels=labels(row.get("Labels").or_else(||row.get("labels")).ok_or_else(||anyhow!("native labels missing"))?)?;
-        ensure!(labels.get("io.server-man.service").is_some_and(|v|v==id),"foreign container in Compose project");
-        let name=labels.get("io.server-man.container").filter(|v|super::super::id_valid(v)).ok_or_else(||anyhow!("missing native member identity"))?.clone();
-        let fingerprint=labels.get("io.server-man.fingerprint").filter(|v|store::valid_revision(v)).ok_or_else(||anyhow!("invalid native runtime fingerprint"))?.clone();
+        ensure!(labels.get("io.maestro.service").is_some_and(|v|v==id),"foreign container in Compose project");
+        let name=labels.get("io.maestro.container").filter(|v|super::super::id_valid(v)).ok_or_else(||anyhow!("missing native member identity"))?.clone();
+        let fingerprint=labels.get("io.maestro.fingerprint").filter(|v|store::valid_revision(v)).ok_or_else(||anyhow!("invalid native runtime fingerprint"))?.clone();
         let expected_project=project(id);
         ensure!(["com.docker.compose.project","io.podman.compose.project"].iter().any(|key|labels.get(*key)==Some(&expected_project)),"native project identity differs");
         ensure!(["com.docker.compose.service","io.podman.compose.service"].iter().any(|key|labels.get(*key)==Some(&name)),"native Compose member identity differs");
@@ -257,7 +257,7 @@ impl ComposeProvider {
     }
     async fn inventory(&self,id:&str)->Result<BTreeMap<String,Member>>{
         ensure!(super::super::id_valid(id),"invalid Compose service");
-        let by_owner=format!("label=io.server-man.service={id}");
+        let by_owner=format!("label=io.maestro.service={id}");
         let project=project(id);
         let by_project=format!("label=com.docker.compose.project={project}");
         let mut members=parse_inventory(&self.engine_command(&["ps","--all","--filter",&by_owner,"--format","json"],None,5,256*1024,false).await?.stdout,id)?;
@@ -503,10 +503,10 @@ mod tests {
     fn parses_docker_lines_and_podman_arrays_without_claiming_foreign_projects(){
         let project=project("app");
         let fingerprint="a".repeat(64);
-        let labels=format!("io.server-man.service=app,io.server-man.container=web,io.server-man.fingerprint={fingerprint},com.docker.compose.project={project},com.docker.compose.service=web");
+        let labels=format!("io.maestro.service=app,io.maestro.container=web,io.maestro.fingerprint={fingerprint},com.docker.compose.project={project},com.docker.compose.service=web");
         let row=serde_json::json!({"Names":"maestro-app-web","State":"running","Labels":labels});
         assert_eq!(parse_inventory(row.to_string().as_bytes(),"app").unwrap()["web"].state,"running");
-        let row=serde_json::json!({"Names":["maestro-app-web"],"State":"exited","Labels":{"io.server-man.service":"app","io.server-man.container":"web","io.server-man.fingerprint":fingerprint,"io.podman.compose.project":project,"io.podman.compose.service":"web"}});
+        let row=serde_json::json!({"Names":["maestro-app-web"],"State":"exited","Labels":{"io.maestro.service":"app","io.maestro.container":"web","io.maestro.fingerprint":fingerprint,"io.podman.compose.project":project,"io.podman.compose.service":"web"}});
         assert_eq!(parse_inventory(serde_json::json!([row.clone()]).to_string().as_bytes(),"app").unwrap()["web"].state,"exited");
         assert!(parse_inventory(serde_json::json!([row.clone(),row]).to_string().as_bytes(),"app").is_err());
         assert!(parse_inventory(br#"{"Names":"foreign","State":"running","Labels":"com.docker.compose.project=wrong"}"#,"app").is_err());

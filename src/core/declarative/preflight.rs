@@ -1,4 +1,4 @@
-//! Static configuration health translated from Server Man preflight.go,
+//! Static configuration health translated from the reference implementation preflight.go,
 //! mounts.go and ports_preflight.go. No files are created or opened for writes.
 
 use std::{

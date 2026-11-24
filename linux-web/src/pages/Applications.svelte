@@ -81,9 +81,9 @@
       }
     }
     window.addEventListener('keydown', onKey)
-    window.addEventListener('server-man:job-finished', finished)
+    window.addEventListener('maestro:job-finished', finished)
     void load()
-    return () => { stopped = true; controller?.abort(); logController?.abort(); window.removeEventListener('keydown', onKey); window.removeEventListener('server-man:job-finished', finished) }
+    return () => { stopped = true; controller?.abort(); logController?.abort(); window.removeEventListener('keydown', onKey); window.removeEventListener('maestro:job-finished', finished) }
   })
 </script>
 

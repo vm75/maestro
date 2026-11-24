@@ -1,4 +1,4 @@
-//! Server Man publication manifests and reviewed metadata-only conflict recovery.
+//! the reference implementation publication manifests and reviewed metadata-only conflict recovery.
 //! Native definitions and runtime state are never changed by this module.
 use std::{collections::BTreeMap,fs::{self,File,Metadata},io::Read,path::{Path,PathBuf},os::unix::fs::MetadataExt};
 use anyhow::{Result,Context,ensure,anyhow};
@@ -7,7 +7,7 @@ use serde::Serialize;
 use super::{Store,CompositeProvider,ObservedResource,ApplyPhase,store,journal};
 
 pub(super) const CONFLICT_REMEDY:&str="Generated artifact publication conflict; review and reconcile private publication metadata before retry.";
-const SUFFIX:&str=".server-man-artifacts.json";
+const SUFFIX:&str=".maestro-artifacts.json";
 const MAX_FILES:usize=256;
 const MAX_PRESERVED:usize=8;
 type Files=BTreeMap<String,Vec<u8>>;
@@ -53,7 +53,7 @@ impl Target{
 struct PublicationManifest{owner:&'static str,version:u8,files:BTreeMap<String,String>}
 fn canonical(files:&Files)->Result<Vec<u8>>{
     ensure!(files.len()<=MAX_FILES&&files.keys().all(|n|!n.is_empty()&&n!="."&&n!=".."&&!n.contains(['/','\0'])),"invalid artifact file set");
-    Ok(serde_json::to_vec(&PublicationManifest{owner:"server-man",version:1,files:files.iter().map(|(n,b)|(n.clone(),super::revision(b))).collect()})?)
+    Ok(serde_json::to_vec(&PublicationManifest{owner:"maestro",version:1,files:files.iter().map(|(n,b)|(n.clone(),super::revision(b))).collect()})?)
 }
 fn optional<T>(r:Result<T>)->Result<Option<T>>{
     match r{Ok(v)=>Ok(Some(v)),Err(e) if e.downcast_ref::<Errno>()==Some(&Errno::NOENT)=>Ok(None),Err(e)=>Err(e)}
@@ -340,7 +340,7 @@ mod tests{
         let initial=b"version: 1\nservices:\n  guest: {kind: container, engine: docker, backend: compose, containers: {web: {image: alpine}}}\n";
         let plan=store.preview(initial,super::super::MISSING_REVISION).unwrap();
         let saved=store.apply_review(initial,super::super::MISSING_REVISION,&plan.fingerprint,&provider).await.unwrap();
-        let sidecar=config.paths.applications_dir.join("guest.server-man-artifacts.json");
+        let sidecar=config.paths.applications_dir.join("guest.maestro-artifacts.json");
         let original=config.paths.applications_dir.join("guest/compose.yaml");
         let native=fs::read(&original).unwrap();
         assert!(sidecar.is_file());

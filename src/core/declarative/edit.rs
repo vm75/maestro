@@ -193,7 +193,7 @@ fn resolve_storage(config: &mut Config, base_id: &str, path: &str, kind: &str) -
 
 fn resolve_share_storage(config: &mut Config, id: &str, share: &mut Share) -> Result<()> {
     if !share.storage.is_empty() {
-        // Accept a full path echoed by a Server Man client; otherwise retain
+        // Accept a full path echoed by a the reference implementation client; otherwise retain
         // Maestro's existing explicit-reference relative subpath semantics.
         if config.storage.get(&share.storage).is_some_and(|s| s.path == share.path) {
             share.path.clear();

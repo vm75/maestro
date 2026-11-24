@@ -455,7 +455,7 @@ fn cpu_delta(old: &CpuStat, current: &CpuStat) -> Option<(f64, u64)> {
         .zip(counters(old))
         .map(|(current, old)| current.checked_sub(old));
     // Linux iowait can decrease without indicating a counter reset.
-    // Match Server Man parse.go: clamp only that component.
+    // Match the reference implementation parse.go: clamp only that component.
     let idle = deltas.next()??.checked_add(deltas.next()?.unwrap_or(0))?;
     let active = deltas.try_fold(0_u64, |total, delta| total.checked_add(delta?))?;
     let total = idle.checked_add(active)?;

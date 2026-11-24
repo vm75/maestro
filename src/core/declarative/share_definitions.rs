@@ -1,4 +1,4 @@
-//! Direct port of Server Man shares/validate.go, definitions.go and files.go.
+//! Direct port of the reference implementation shares/validate.go, definitions.go and files.go.
 //! Shared typed definitions and exact managed-fragment ownership checks.
 use std::{
     collections::BTreeSet,
@@ -15,8 +15,8 @@ use sha2::{Digest, Sha256};
 use super::native_shares::{Definition, canonical_client};
 
 pub(crate) const MAX_FILE: usize = 1 << 20;
-const HEADER: &str = "# Managed by server-man. Do not edit.\n# server-man-format: 1\n";
-const METADATA: &str = "# server-man-share: ";
+const HEADER: &str = "# Managed by maestro. Do not edit.\n# maestro-format: 1\n";
+const METADATA: &str = "# maestro-share: ";
 
 pub(crate) fn decode(raw: &str) -> Result<Vec<Definition>> {
     use serde::Deserialize;
@@ -172,7 +172,7 @@ pub(crate) fn load(protocol: &str, snapshot: &Snapshot) -> Result<Vec<Definition
         return Ok(Vec::new());
     }
     ensure!(snapshot.data.starts_with(HEADER.as_bytes()),
-        "managed file is not owned by server-man; preserve it and choose an empty unused location");
+        "managed file is not owned by maestro; preserve it and choose an empty unused location");
     let mut definitions = Vec::new();
     let mut names = BTreeSet::new();
     let mut paths = BTreeSet::new();
@@ -187,7 +187,7 @@ pub(crate) fn load(protocol: &str, snapshot: &Snapshot) -> Result<Vec<Definition
         definitions.push(d);
     }
     ensure!(render(protocol, &definitions).is_ok_and(|bytes| bytes == snapshot.data),
-        "managed file was edited outside server-man; changes will not be overwritten");
+        "managed file was edited outside maestro; changes will not be overwritten");
     Ok(definitions)
 }
 
@@ -205,7 +205,7 @@ impl Candidate {
         let metadata = fs::symlink_metadata(directory)?;
         ensure!(metadata.is_dir() && metadata.uid() == owner && metadata.mode() & 0o022 == 0,
             "native share configuration directory is not trusted");
-        let path = directory.join(format!(".server-man-{}", uuid::Uuid::new_v4()));
+        let path = directory.join(format!(".maestro-{}", uuid::Uuid::new_v4()));
         let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC).open(&path)?;
         let candidate = Self(path);
@@ -309,8 +309,8 @@ mod tests {
         let definitions = normalize("samba", decode(r#"[{"name":"Docs","path":"/srv/docs","readOnly":true,"browseable":true,"users":["bob","alice","bob"]}]"#).unwrap(), false).unwrap();
         let data = render("samba", &definitions).unwrap();
         assert_eq!(String::from_utf8_lossy(&data), concat!(
-            "# Managed by server-man. Do not edit.\n# server-man-format: 1\n",
-            "# server-man-share: {\"name\":\"docs\",\"path\":\"/srv/docs\",\"readOnly\":true,\"browseable\":true,\"users\":[\"alice\",\"bob\"]}\n",
+            "# Managed by maestro. Do not edit.\n# maestro-format: 1\n",
+            "# maestro-share: {\"name\":\"docs\",\"path\":\"/srv/docs\",\"readOnly\":true,\"browseable\":true,\"users\":[\"alice\",\"bob\"]}\n",
             "[docs]\n\tpath = /srv/docs\n\tread only = yes\n\tguest ok = no\n\tbrowseable = yes\n\tvalid users = alice bob\n\n"));
         let mut snapshot = Snapshot { data, exists: true, mode: 0o644 };
         assert_eq!(load("samba", &snapshot).unwrap().len(), 1);

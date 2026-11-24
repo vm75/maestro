@@ -116,8 +116,8 @@ impl ShareProvider {
         provider.simulated = simulated;
         provider.helper_paths = !simulated && config.platform == crate::config::Platform::Linux
             && config.linux_authority.as_ref().is_some_and(|authority| authority.settings.samba_config == "/etc/samba/smb.conf")
-            && provider.samba_conf == Path::new("/etc/samba/server-man.conf")
-            && provider.exports_file == Path::new("/etc/exports.d/server-man.exports");
+            && provider.samba_conf == Path::new("/etc/samba/maestro.conf")
+            && provider.exports_file == Path::new("/etc/exports.d/maestro.exports");
         provider.native_enabled = provider.helper_paths && config.system.allow_share_writes;
         provider
     }
@@ -136,7 +136,7 @@ impl ShareProvider {
         Ok(())
     }
 
-    // Direct translation of Server Man internal/declarative/shares.go:
+    // Direct translation of the reference implementation internal/declarative/shares.go:
     // a protocol publishes its entire authoritative definition set.
     fn definitions(&self, protocol: &str, config: &Config, check_paths: bool) -> Result<Vec<Definition>> {
         self.definitions_with_account(protocol, config, check_paths, admin::workload_account)
@@ -345,8 +345,8 @@ mod tests {
 
     #[test]
     fn reference_protocol_sets_resolve_storage_and_default_nfs_options() {
-        let provider = ShareProvider::new("/etc/samba/server-man.conf".into(),
-            "/etc/exports.d/server-man.exports".into(),"/srv/workloads".into());
+        let provider = ShareProvider::new("/etc/samba/maestro.conf".into(),
+            "/etc/exports.d/maestro.exports".into(),"/srv/workloads".into());
         let config = super::super::parse(br#"version: 1
 storage:
   files: {kind: directory, path: volumes/files}

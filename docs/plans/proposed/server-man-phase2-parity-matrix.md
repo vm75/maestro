@@ -357,9 +357,9 @@ historical 55-tool SDK report is not the current frozen registry contract.
 Official-client transport acceptance remains open. No management tool was invoked.
 
 Exact names, descriptions, modules, read/write/destructive flags and input schemas
-are captured in `test-fixtures/phase2/server-man-tools.json`. This replaces
+are captured in `test-fixtures/phase2/maestro-tools.json`. This replaces
 “inspect schema” as the source for tool argument contracts, but does not establish
-behavioral parity. `test-fixtures/phase2/extract-reference-contract.go` reproduces
+behavioral parity. `docs/plans/proposed/upstream-contract-extraction.md` reproduces
 the extraction: copy it into `cmd/maestro-contract/main.go` in a disposable checkout
 of the frozen Server Man commit, then run `go run ./cmd/maestro-contract`. It emits
 both modes; the fixture stores their verified identical tool list once.

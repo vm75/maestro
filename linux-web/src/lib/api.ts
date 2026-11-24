@@ -40,7 +40,7 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   })
   if (!response.ok) {
     const body = await response.json().catch(() => ({ error: response.statusText }))
-    if (response.status === 401) window.dispatchEvent(new Event('server-man:unauthorized'))
+    if (response.status === 401) window.dispatchEvent(new Event('maestro:unauthorized'))
     const message = typeof body.error === 'string' ? body.error : body.error?.message
     throw new ApiError(message || `Request failed (${response.status})`, response.status, body.error?.code)
   }
@@ -53,6 +53,6 @@ export function invokeTool<T>(name: string, arguments_: Record<string, unknown> 
 
 export async function startJob(name: string, arguments_: Record<string, unknown>): Promise<Job> {
   const result = await invokeTool<{ job: Job }>(name, arguments_)
-  window.dispatchEvent(new CustomEvent<Job>('server-man:job-started', { detail: result.job }))
+  window.dispatchEvent(new CustomEvent<Job>('maestro:job-started', { detail: result.job }))
   return result.job
 }

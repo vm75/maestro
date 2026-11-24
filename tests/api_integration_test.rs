@@ -2980,7 +2980,7 @@ async fn linux_mcp_protocol_flow() {
         .find(|t| t["name"] == "managed_directory_browse")
         .unwrap();
     let reference: serde_json::Value = serde_json::from_str(include_str!(
-        "../test-fixtures/phase2/server-man-tools.json"
+        "../test-fixtures/phase2/maestro-tools.json"
     ))
     .unwrap();
     let expected = reference["tools"]

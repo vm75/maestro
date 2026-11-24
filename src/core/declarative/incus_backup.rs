@@ -1,4 +1,4 @@
-//! Portable Incus backup discovery and exports, translated from Server Man's
+//! Portable Incus backup discovery and exports, translated from the reference implementation's
 //! incus_backup, incus_backup_history, incus_disk_reference and incus_export.
 use super::*;
 use crate::core::declarative::{
@@ -518,14 +518,14 @@ services:
       pool: pool
       project: project
 "#).unwrap();
-        let object=NativeObject{backend:"incus".into(),name:"sm-guest".into(),project:"managed".into(),pool:"default".into(),content_type:"block".into()};
+        let object=NativeObject{backend:"incus".into(),name:"maestro-guest".into(),project:"managed".into(),pool:"default".into(),content_type:"block".into()};
         let want=render(&config,"guest").unwrap();
         let index=serde_json::json!({
-            "name":"sm-guest","pool":"default","backend":"dir","type":"virtual-machine",
+            "name":"maestro-guest","pool":"default","backend":"dir","type":"virtual-machine",
             "optimized":false,"optimized_header":false,"snapshots":[],
             "config":{
-                "container":{"name":"sm-guest","type":"virtual-machine","config":want.config,"devices":want.devices,"profiles":[],"stateful":false},
-                "volume":{"name":"sm-guest","type":"virtual-machine","content_type":"block","project":"managed"},
+                "container":{"name":"maestro-guest","type":"virtual-machine","config":want.config,"devices":want.devices,"profiles":[],"stateful":false},
+                "volume":{"name":"maestro-guest","type":"virtual-machine","content_type":"block","project":"managed"},
                 "pool":{"name":"default","driver":"dir"},"dependent_volumes":[]
             }
         });

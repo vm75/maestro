@@ -85,8 +85,8 @@
       await load()
       if (!stopped && service && selectedName === service.name) await inspect(service)
     }
-    window.addEventListener('server-man:job-finished', finished); void load()
-    return () => { stopped = true; listController?.abort(); detailController?.abort(); logController?.abort(); window.removeEventListener('server-man:job-finished', finished) }
+    window.addEventListener('maestro:job-finished', finished); void load()
+    return () => { stopped = true; listController?.abort(); detailController?.abort(); logController?.abort(); window.removeEventListener('maestro:job-finished', finished) }
   })
 </script>
 
