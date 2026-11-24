@@ -211,8 +211,6 @@ impl Candidate {
         Ok(candidate)
     }
 
-    pub(crate) fn path(&self) -> &Path { &self.0 }
-
     pub(crate) fn text(&self) -> &str {
         self.0.to_str().expect("fixed native configuration directory and ASCII candidate name")
     }
