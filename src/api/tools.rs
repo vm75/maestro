@@ -2182,11 +2182,18 @@ pub async fn execute_tool(
             }
             let store=store.clone();let provider=provider.clone();let root=state.config.paths.storage_dir.clone();let config=state.config.clone();
             start_job_value(jobs,"managed_backup_prepare",move |running| async move {
-                let result=async{
+                let signal=running.cancellation();
+                let runtime=tokio::runtime::Handle::current();
+                // Keep synchronous filesystem traversal off the HTTP runtime.
+                let result=tokio::task::spawn_blocking(move ||runtime.block_on(async{
                     crate::core::linux_config::mutation_ready(&config,&store)?;
-                    crate::core::declarative::backup_capture::prepare(&store,&root,&provider,opts).await
-                }.await;
-                match result{Ok(value)=>running.finish(Outcome::Succeeded(value)),Err(error)=>running.finish(Outcome::Failed(error.to_string()))}
+                    crate::core::declarative::backup_capture::prepare_cancellable(&store,&root,&provider,opts,signal).await
+                })).await.unwrap_or_else(|_|Err(anyhow::anyhow!("backup capture worker failed")));
+                match result{
+                    Ok(value)=>running.finish(Outcome::Succeeded(value)),
+                    Err(error) if error.is::<crate::core::declarative::backup_capture::BackupCancelled>()=>running.finish(Outcome::Cancelled),
+                    Err(error)=>running.finish(Outcome::Failed(error.to_string())),
+                }
             }).await
         }
         "managed_backup_recover" | "managed_backup_publish" | "managed_backup_release" => {
@@ -2208,12 +2215,18 @@ pub async fn execute_tool(
             let store=store.clone();let provider=provider.clone();let root=state.config.paths.storage_dir.clone();
             start_job_value(jobs,tool,move |running| async move{
                 use crate::core::declarative::backup_capture as backup;
+                let signal=running.cancellation();
+                if *signal.borrow(){running.finish(Outcome::Cancelled);return;}
                 let result=match tool{
                     "managed_backup_recover"=>backup::recover(&store,&root,&provider,&input.revision,&input.review_token).await,
-                    "managed_backup_publish"=>tokio::task::spawn_blocking(move ||backup::publish(&store,&root,&input.revision,&input.review_token,input.deadline_seconds.unwrap_or(0))).await.unwrap_or_else(|_|Err(anyhow::anyhow!("backup publication worker failed"))),
+                    "managed_backup_publish"=>tokio::task::spawn_blocking(move ||backup::publish_cancellable(&store,&root,&input.revision,&input.review_token,input.deadline_seconds.unwrap_or(0),signal)).await.unwrap_or_else(|_|Err(anyhow::anyhow!("backup publication worker failed"))),
                     _=>backup::release(&store,&input.revision,&input.review_token),
                 };
-                match result{Ok(value)=>running.finish(Outcome::Succeeded(json!(value))),Err(error)=>running.finish(Outcome::Failed(error.to_string()))}
+                match result{
+                    Ok(value)=>running.finish(Outcome::Succeeded(json!(value))),
+                    Err(error) if error.is::<backup::BackupCancelled>()=>running.finish(Outcome::Cancelled),
+                    Err(error)=>running.finish(Outcome::Failed(error.to_string())),
+                }
             }).await
         }
 

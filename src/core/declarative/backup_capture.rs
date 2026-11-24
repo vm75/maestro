@@ -7,10 +7,64 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use chrono::{DateTime,Utc};
 use serde::{Deserialize,Serialize};
+use tokio::sync::watch;
 use sha2::{Digest,Sha256};
 use rustix::fs::{self as unix_fs,Mode,OFlags,RenameFlags};
 use super::{Config,Store,CompositeProvider,backup_inventory::{self,BackupInventory},store,journal};
 
+// Go's nil slices are encoded as JSON null.
+mod go_slice {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    pub fn deserialize<'de,D:Deserializer<'de>,T:Deserialize<'de>>(d:D)->Result<Vec<T>,D::Error>{
+        Ok(Option::<Vec<T>>::deserialize(d)?.unwrap_or_default())
+    }
+    pub fn serialize<S:Serializer,T:Serialize>(v:&[T],s:S)->Result<S::Ok,S::Error>{
+        if v.is_empty(){s.serialize_none()}else{v.serialize(s)}
+    }
+}
+fn nullable_map<'de,D:serde::Deserializer<'de>>(d:D)->std::result::Result<BTreeMap<String,String>,D::Error>{
+    Ok(Option::<BTreeMap<String,String>>::deserialize(d)?.unwrap_or_default())
+}
+// Reject duplicate keys even in arbitrary maps, before typed decoding.
+fn unique_manifest_json(raw:&[u8])->Result<()>{
+    use serde::de::{self,DeserializeSeed,MapAccess,SeqAccess,Visitor};
+    struct Node(usize);
+    impl<'de> DeserializeSeed<'de> for Node{
+        type Value=();
+        fn deserialize<D:serde::Deserializer<'de>>(self,d:D)->std::result::Result<(),D::Error>{
+            if self.0>16{return Err(de::Error::custom("manifest nesting limit exceeded"))}
+            d.deserialize_any(self)
+        }
+    }
+    impl<'de> Visitor<'de> for Node{
+        type Value=();
+        fn expecting(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result{f.write_str("unique-key JSON")}
+        fn visit_bool<E:de::Error>(self,_:bool)->std::result::Result<(),E>{Ok(())}
+        fn visit_i64<E:de::Error>(self,_:i64)->std::result::Result<(),E>{Ok(())}
+        fn visit_u64<E:de::Error>(self,_:u64)->std::result::Result<(),E>{Ok(())}
+        fn visit_f64<E:de::Error>(self,_:f64)->std::result::Result<(),E>{Ok(())}
+        fn visit_str<E:de::Error>(self,_:&str)->std::result::Result<(),E>{Ok(())}
+        fn visit_unit<E:de::Error>(self)->std::result::Result<(),E>{Ok(())}
+        fn visit_seq<A:SeqAccess<'de>>(self,mut a:A)->std::result::Result<(),A::Error>{
+            while a.next_element_seed(Node(self.0+1))?.is_some(){check_cancel().map_err(de::Error::custom)?;}
+            Ok(())
+        }
+        fn visit_map<A:MapAccess<'de>>(self,mut a:A)->std::result::Result<(),A::Error>{
+            let mut keys=BTreeSet::new();
+            while let Some(k)=a.next_key::<String>()?{
+                if !keys.insert(k){return Err(de::Error::custom("duplicate manifest JSON key"))}
+                a.next_value_seed(Node(self.0+1))?;
+            }
+            Ok(())
+        }
+    }
+    let mut d=serde_json::Deserializer::from_slice(raw);
+    let result=Node(0).deserialize(&mut d);
+    check_cancel()?;
+    result?;
+    d.end()?;
+    Ok(())
+}
 const MAX_ENTRIES:usize=50000;
 const MAX_MANIFEST:usize=64*1024*1024;
 const METADATA_RESERVE:u64=72*1024*1024;
@@ -31,14 +85,14 @@ pub struct NativeExport{
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq,Eq)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct ManifestFile{
-    #[serde(rename="type")]kind:String,
-    uid:u32,gid:u32,atime:String,mtime:String,mode:String,
-    source_link_count:u64,source_allocated_bytes:u64,
     #[serde(default,skip_serializing_if="is_zero")]captured_link_count:u64,
+    #[serde(rename="type")]kind:String,
+    uid:u32,gid:u32,atime:String,
     #[serde(default,skip_serializing_if="String::is_empty")]link_target:String,
     #[serde(default,skip_serializing_if="String::is_empty")]hardlink_to:String,
-    #[serde(default,skip_serializing_if="BTreeMap::is_empty")]xattrs:BTreeMap<String,String>,
-    xattr_coverage:String,bundle_path:String,size_bytes:u64,sha256:String,
+    source_link_count:u64,source_allocated_bytes:u64,
+    #[serde(default,deserialize_with="nullable_map",skip_serializing_if="BTreeMap::is_empty")]xattrs:BTreeMap<String,String>,
+    xattr_coverage:String,bundle_path:String,size_bytes:u64,sha256:String,mode:String,mtime:String,
 }
 fn is_zero(v:&u64)->bool{*v==0}
 #[derive(Serialize,Deserialize)]
@@ -46,12 +100,14 @@ fn is_zero(v:&u64)->bool{*v==0}
 struct Manifest{
     source_root:String,principal:Principal,verification_required:Vec<String>,version:u8,stage:String,
     revision:String,created_at:DateTime<Utc>,server_man_version:String,files:Vec<ManifestFile>,
-    native_exports:Vec<NativeExport>,running_workloads_at_backup:Vec<String>,resumed_workloads:Vec<String>,
-    #[serde(default,skip_serializing_if="Vec::is_empty")]failed_resume:Vec<String>,
+    #[serde(with="go_slice")]native_exports:Vec<NativeExport>,
+    #[serde(with="go_slice")]running_workloads_at_backup:Vec<String>,
+    #[serde(with="go_slice")]resumed_workloads:Vec<String>,
+    #[serde(default,with="go_slice",skip_serializing_if="Vec::is_empty")]failed_resume:Vec<String>,
 }
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-struct Principal{uid:u32,gid:u32,groups:Vec<u32>,#[serde(default)]uid_map:String,#[serde(default)]gid_map:String}
+struct Principal{uid:u32,gid:u32,#[serde(with="go_slice")]groups:Vec<u32>,#[serde(default)]uid_map:String,#[serde(default)]gid_map:String}
 fn principal()->Result<Principal>{
     let count=unsafe{libc::getgroups(0,std::ptr::null_mut())};
     ensure!((0..=1024).contains(&count),"workload principal groups cannot be established");
@@ -68,9 +124,13 @@ fn principal()->Result<Principal>{
 }
 #[derive(Debug,Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
+struct DestinationIdentity{device:u64,inode:u64}
+#[derive(Debug,Clone,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Artifact{
     pub stage:String,pub staging_path:String,pub device:u64,pub inode:u64,
     pub parent_device:u64,pub parent_inode:u64,
+    #[serde(default,skip_serializing_if="Option::is_none")]reviewed_destination:Option<DestinationIdentity>,
     #[serde(default,skip_serializing_if="String::is_empty")]pub manifest_checksum:String,
 }
 #[derive(Debug,Clone,Serialize,Deserialize)]
@@ -197,7 +257,25 @@ fn mount(file:&File)->Result<String>{
 fn private(meta:&Metadata,directory:bool)->bool{
     meta.uid()==unsafe{libc::geteuid()}&&meta.mode()&0o077==0&&(if directory{meta.is_dir()}else{meta.is_file()&&meta.nlink()==1})
 }
-fn check_time(end:Instant)->Result<()>{ensure!(Instant::now()<end,"backup deadline exceeded");Ok(())}
+#[derive(Debug)]
+pub struct BackupCancelled;
+impl std::fmt::Display for BackupCancelled{
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result{f.write_str("backup cancelled")}
+}
+impl std::error::Error for BackupCancelled{}
+tokio::task_local!{static BACKUP_CANCEL:watch::Receiver<bool>;}
+fn check_cancel()->Result<()>{
+    if BACKUP_CANCEL.try_with(|s|*s.borrow()).unwrap_or(false){return Err(BackupCancelled.into())}
+    Ok(())
+}
+fn check_time(end:Instant)->Result<()>{check_cancel()?;ensure!(Instant::now()<end,"backup deadline exceeded");Ok(())}
+async fn cancelled(){
+    let Ok(mut s)=BACKUP_CANCEL.try_with(Clone::clone) else{return std::future::pending::<()>().await};
+    if s.wait_for(|v|*v).await.is_err(){std::future::pending::<()>().await;}
+}
+async fn interruptible<T,F:std::future::Future<Output=Result<T>>>(future:F)->Result<T>{
+    tokio::select!{biased; _=cancelled()=>Err(BackupCancelled.into()),value=future=>value}
+}
 pub(super) fn hash_file(mut file:&File,end:Instant)->Result<(u64,String)>{
     let before=file.metadata()?;ensure!(before.is_file(),"backup payload is not regular");
     let mut h=Sha256::new();let mut count=0u64;let mut buffer=vec![0;128*1024];
@@ -469,7 +547,30 @@ impl<'a> Collector<'a>{
         Ok(self.files)
     }
 }
-struct Publication{parent:File,root:File,artifact:Artifact,destination:String}
+fn empty_destination(parent:&File,leaf:&str)->Result<File>{
+    let f=open_at(parent,leaf,true)?;
+    let m=f.metadata()?;
+    ensure!(private(&m,true)&&mount(&f)?==mount(parent)?,"existing destination must be a private real directory on the parent mount");
+    ensure!(fs::read_dir(fd_path(&f))?.next().transpose()?.is_none(),"existing destination is not empty");
+    let current=open_at(parent,leaf,true)?.metadata()?;
+    ensure!((m.dev(),m.ino())==(current.dev(),current.ino()),"destination changed during review");
+    Ok(f)
+}
+fn destination_matches(parent:&File,leaf:&str,expected:Option<&DestinationIdentity>)->Result<Option<File>>{
+    match expected{
+        Some(identity)=>{
+            let f=empty_destination(parent,leaf)?;
+            let m=f.metadata()?;
+            ensure!((m.dev(),m.ino())==(identity.device,identity.inode),"reviewed destination identity changed");
+            Ok(Some(f))
+        },
+        None=>{
+            ensure!(matches!(unix_fs::statat(parent,leaf,unix_fs::AtFlags::SYMLINK_NOFOLLOW),Err(rustix::io::Errno::NOENT)),"destination appeared after review");
+            Ok(None)
+        }
+    }
+}
+struct Publication{parent:File,root:File,artifact:Artifact,destination:String,_reviewed:Option<File>}
 impl Publication{
     fn new(destination:&str,source_root:&Path)->Result<Self>{
         ensure!(clean_absolute(destination),"destination must be an absolute cleaned path");
@@ -478,15 +579,20 @@ impl Publication{
         let parent=open_absolute(parent_path,true)?;
         ensure!(parent.metadata()?.uid()==unsafe{libc::geteuid()}&&parent.metadata()?.mode()&0o022==0,"capture parent must be owned and not writable by other users");
         let leaf=path.file_name().and_then(|n|n.to_str()).context("invalid destination")?;
-        match unix_fs::statat(&parent,leaf,unix_fs::AtFlags::SYMLINK_NOFOLLOW){
-            Err(rustix::io::Errno::NOENT)=>{},_=>return Err(anyhow!("destination must be absent; existing directories are not replaced")),
-        }
+        let reviewed=match unix_fs::statat(&parent,leaf,unix_fs::AtFlags::SYMLINK_NOFOLLOW){
+            Err(rustix::io::Errno::NOENT)=>None,
+            Ok(_)=>Some(empty_destination(&parent,leaf)?),
+            Err(e)=>return Err(e.into()),
+        };
+        let reviewed_destination=reviewed.as_ref().map(|f|->Result<DestinationIdentity>{
+            let m=f.metadata()?;Ok(DestinationIdentity{device:m.dev(),inode:m.ino()})
+        }).transpose()?;
         let stage=format!(".staging-backup-{}",uuid::Uuid::new_v4().simple());
         unix_fs::mkdirat(&parent,stage.as_str(),Mode::from_bits_truncate(0o700))?;
         parent.sync_all()?;
         let root=open_at(&parent,&stage,true)?;
         let meta=root.metadata()?;let p=parent.metadata()?;
-        Ok(Self{parent,root,artifact:Artifact{stage:"building".into(),staging_path:parent_path.join(stage).to_string_lossy().into_owned(),device:meta.dev(),inode:meta.ino(),parent_device:p.dev(),parent_inode:p.ino(),manifest_checksum:String::new()},destination:destination.into()})
+        Ok(Self{parent,root,artifact:Artifact{stage:"building".into(),staging_path:parent_path.join(stage).to_string_lossy().into_owned(),device:meta.dev(),inode:meta.ino(),parent_device:p.dev(),parent_inode:p.ino(),manifest_checksum:String::new(),reviewed_destination},destination:destination.into(),_reviewed:reviewed})
     }
     fn check(&self)->Result<()>{
         let parent=open_absolute(Path::new(&self.destination).parent().unwrap(),true)?;
@@ -497,11 +603,19 @@ impl Publication{
         ensure!(private(&m,true)&&(m.dev(),m.ino())==(self.artifact.device,self.artifact.inode),"capture staging identity changed");
         Ok(())
     }
-    fn rename(&self)->Result<()>{
+    fn rename(&self,end:Instant)->Result<()>{
         self.check()?;
         let stage=Path::new(&self.artifact.staging_path).file_name().unwrap();
         let dest=Path::new(&self.destination).file_name().unwrap();
-        unix_fs::renameat_with(&self.parent,stage,&self.parent,dest,RenameFlags::NOREPLACE)?;
+        let _reviewed=destination_matches(&self.parent,dest.to_str().context("invalid destination leaf")?,self.artifact.reviewed_destination.as_ref())?;
+        check_time(end)?;
+        // Atomic directory rename refuses nonempty destinations. Never unlink
+        // the reviewed empty directory before publication.
+        if self.artifact.reviewed_destination.is_some(){
+            unix_fs::renameat(&self.parent,stage,&self.parent,dest)?;
+        }else{
+            unix_fs::renameat_with(&self.parent,stage,&self.parent,dest,RenameFlags::NOREPLACE)?;
+        }
         self.parent.sync_all()?;
         let opened=open_absolute(Path::new(&self.destination),true)?;let m=opened.metadata()?;
         ensure!((m.dev(),m.ino())==(self.artifact.device,self.artifact.inode),"published capture identity changed");Ok(())
@@ -677,6 +791,7 @@ fn validate_file_metadata(files:&[ManifestFile])->Result<()>{
 }
 fn expected_paths(m:&Manifest)->Result<BTreeMap<String,(String,u64,String)>>{
     ensure!(m.version==1&&m.stage=="captured"&&store::valid_revision(&m.revision)&&clean_absolute(&m.source_root)
+        &&m.created_at.timestamp()>-62135596800
         &&!m.files.is_empty()&&m.files.len()<=MAX_ENTRIES&&m.native_exports.len()<=2048,"invalid capture manifest");
     validate_file_metadata(&m.files)?;
     let mut expected=BTreeMap::new();
@@ -788,6 +903,8 @@ fn verify_bundle(root:&File,checksum:&str,revision:&str,source_root:&Path,storag
     ensure!(store::valid_revision(checksum),"reviewed manifest checksum required");
     let raw=read_small(root,"manifest.json",MAX_MANIFEST)?;
     ensure!(super::revision(&raw)==checksum,"backup manifest changed since review");
+    unique_manifest_json(&raw)?;
+    check_time(end)?;
     let manifest:Manifest=serde_json::from_slice(&raw)?;
     ensure!(manifest.revision==revision&&Path::new(&manifest.source_root)==source_root,"capture revision or source root differs");
     let mut expected=expected_paths(&manifest)?;
@@ -842,8 +959,12 @@ fn verify_bundle(root:&File,checksum:&str,revision:&str,source_root:&Path,storag
     Ok(manifest)
 }
 
+pub async fn prepare_cancellable(store:&Store,storage_root:&Path,provider:&CompositeProvider,opts:PrepareOptions,signal:watch::Receiver<bool>)->Result<serde_json::Value>{
+    BACKUP_CANCEL.scope(signal,prepare(store,storage_root,provider,opts)).await
+}
 pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider,opts:PrepareOptions)->Result<serde_json::Value>{
     let end=Instant::now()+deadline(opts.deadline_seconds)?;
+    check_time(end)?;
     ensure!(store::valid_revision(&opts.revision),"a reviewed configuration revision is required");
     ensure!(clean_absolute(&opts.destination),"destination must be an absolute cleaned path");
     let dir=store::LockedDirectory::try_acquire(store.directory()?)?;
@@ -852,7 +973,9 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
     ensure!(snapshot.revision==opts.revision,"configuration revision changed");
     let config=snapshot.config()?;
     ensure!(!config.shares.values().any(|s|s.enabled),"published shares require verified client quiescence");
-    let inv=tokio::time::timeout(end.saturating_duration_since(Instant::now()),inventory(store,storage_root,provider)).await??;
+    let inv=interruptible(async{
+        Ok(tokio::time::timeout(end.saturating_duration_since(Instant::now()),inventory(store,storage_root,provider)).await??)
+    }).await?;
     ensure!(inv.revision==snapshot.revision&&inv.issues.iter().all(|i|i.severity=="warning"),"backup inventory has unresolved input or native dependency issues");
     for input in &inv.inputs{
         ensure!(matches!(input.strategy,"bundle_copy"|"native_export"),"unsupported external/native backup input");
@@ -862,24 +985,25 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
         }else if input.strategy=="native_export"{
             let object=input.native.as_ref().context("unresolved native capture identity")?;
             let id=input.resources[0].strip_prefix("service/").context("invalid native capture resource")?;
-            tokio::time::timeout(end.saturating_duration_since(Instant::now()),async{
+            interruptible(async{tokio::time::timeout(end.saturating_duration_since(Instant::now()),async{
                 match object.backend.as_str(){
                     "libvirt"=>{provider.libvirt.validate_backup(&config,id,object,false).await?;},
                     "incus"=>provider.incus.validate_backup(&config,input,false).await?,
                     _=>return Err(anyhow!("native export unsupported")),
                 }Ok(())
-            }).await??;
+            }).await??;Ok(())}).await?;
         }
     }
     let source_path=store.path();let source_root=source_path.parent().context("configuration root unavailable")?;
     let mut running=Vec::new();
     for id in config.service_order()?{
-        if tokio::time::timeout(end.saturating_duration_since(Instant::now()),service_state(provider,&config,id)).await??=="running"{running.push(id.to_owned());}
+        if interruptible(async{Ok(tokio::time::timeout(end.saturating_duration_since(Instant::now()),service_state(provider,&config,id)).await??)}).await?=="running"{running.push(id.to_owned());}
     }
     ensure!(opts.quiesce||running.is_empty(),"running workloads must be quiesced");
     let required=inv.inputs.iter().filter_map(|i|i.allocated_bytes.or(i.logical_bytes)).try_fold(METADATA_RESERVE,|a,b|a.checked_add(b).context("capture capacity estimate overflow"))?;
     let parent=Path::new(&opts.destination).parent().context("destination parent unavailable")?;
     ensure!(available_bytes(&open_absolute(parent,true)?)? >= required,"insufficient disk space at destination");
+    check_time(end)?;
     let publication=Publication::new(&opts.destination,source_root)?;
     let mut j=Recovery{version:1,revision:snapshot.revision.clone(),destination:opts.destination.clone(),stage:"capturing".into(),updated_at:Utc::now(),
         services:running.iter().map(|id|(id.clone(),"untouched".into())).collect(),artifact:publication.artifact.clone()};
@@ -919,14 +1043,23 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
         };
         // Timeout never drops the outer cleanup/recovery step. Persisted
         // stop intent handles commands which may have changed native state.
-        let capture=tokio::time::timeout(end.saturating_duration_since(Instant::now()),capture).await;
-        let recovery=resume(store,&dir,storage_root,provider,&config,&mut j).await;
-        let (files,exports)=capture.context("backup capture deadline exceeded")??;
-        let (resumed,failed)=recovery?;
+        let capture=interruptible(async{
+            tokio::time::timeout(end.saturating_duration_since(Instant::now()),capture).await.context("backup capture deadline exceeded")?
+        }).await;
+        // Recovery has an independent deadline. Do not drop it on cancellation.
+        let (resumed,failed)=resume(store,&dir,storage_root,provider,&config,&mut j).await?;
+        if capture.is_err()||check_cancel().is_err(){
+            ensure!(failed.is_empty(),"backup interrupted; workload recovery needs explicit attention");
+        }
+        let (files,exports)=capture?;
+        check_time(end)?;
+        let mut running=running;
+        running.sort();
         let manifest=Manifest{source_root:source_root.to_string_lossy().into_owned(),principal:principal()?,
             verification_required:vec!["UID/GID mapping, privileged attribute visibility, inode flags, full durability and native/restore validation require review before this bundle can be marked prepared.".into()],
             version:1,stage:"captured".into(),revision:snapshot.revision.clone(),created_at:Utc::now(),server_man_version:env!("CARGO_PKG_VERSION").into(),
             files,native_exports:exports,running_workloads_at_backup:running,resumed_workloads:resumed.clone(),failed_resume:failed.clone()};
+        expected_paths(&manifest)?;
         let raw=serde_json::to_vec(&manifest)?;
         ensure!(raw.len()<=MAX_MANIFEST,"private manifest exceeds capture limit");
         let checksum=super::revision(&raw);let mut file=create_payload(&publication.root,"manifest.json")?;file.write_all(&raw)?;file.sync_all()?;
@@ -935,7 +1068,7 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
         j.artifact.manifest_checksum=checksum.clone();j.artifact.stage="synced".into();persist(store,&dir,&mut j)?;
         j.artifact.stage="publishing".into();persist(store,&dir,&mut j)?;
         check_revision(store,&dir,&j.revision)?;
-        publication.rename()?;
+        publication.rename(end)?;
         j.artifact.stage="published".into();persist(store,&dir,&mut j)?;
         let total_bytes=manifest.files.iter().filter(|f|f.kind=="file").map(|f|f.size_bytes).chain(manifest.native_exports.iter().map(|n|n.size_bytes)).try_fold(raw.len() as u64,|a,b|a.checked_add(b).context("capture size overflow"))?;
         Ok::<_,anyhow::Error>(serde_json::json!({"stage":"captured","destination":opts.destination,"revision":snapshot.revision,"preparedAt":manifest.created_at,
@@ -956,8 +1089,12 @@ fn available_bytes(file:&File)->Result<u64>{
     ensure!(info.f_flag&libc::ST_RDONLY==0,"capture filesystem is read-only");
     Ok((info.f_bavail as u64).saturating_mul(info.f_frsize as u64))
 }
+pub fn publish_cancellable(store:&Store,storage_root:&Path,revision:&str,token:&str,seconds:u64,signal:watch::Receiver<bool>)->Result<RecoveryStatus>{
+    BACKUP_CANCEL.sync_scope(signal,||publish(store,storage_root,revision,token,seconds))
+}
 pub fn publish(store:&Store,storage_root:&Path,revision:&str,token:&str,seconds:u64)->Result<RecoveryStatus>{
     let end=Instant::now()+deadline(seconds)?;
+    check_time(end)?;
     let dir=store::LockedDirectory::try_acquire(store.directory()?)?;let mut j=reviewed(store,&dir,revision,token)?;
     ensure!(j.revision==revision&&!j.artifact.manifest_checksum.is_empty()&&matches!(j.artifact.stage.as_str(),"synced"|"publishing"|"uncertain"|"published"),"no verified staged capture is available");
     let dest=Path::new(&j.destination);let parent=open_absolute(dest.parent().context("missing capture parent")?,true)?;
@@ -966,17 +1103,29 @@ pub fn publish(store:&Store,storage_root:&Path,revision:&str,token:&str,seconds:
     let staged=Path::new(&j.artifact.staging_path).file_name().unwrap().to_str().unwrap();
     let final_name=dest.file_name().unwrap().to_str().unwrap();
     let (root,rename)=match open_at(&parent,final_name,true){
-        Ok(file)=>(file,false),
-        Err(e) if e.downcast_ref::<rustix::io::Errno>()==Some(&rustix::io::Errno::NOENT)=>(open_at(&parent,staged,true)?,true),
+        Ok(file)=>{
+            let m=file.metadata()?;
+            if (m.dev(),m.ino())==(j.artifact.device,j.artifact.inode){(file,false)}
+            else{
+                ensure!(j.artifact.reviewed_destination.is_some(),"destination identity changed");
+                destination_matches(&parent,final_name,j.artifact.reviewed_destination.as_ref())?;
+                (open_at(&parent,staged,true)?,true)
+            }
+        },
+        Err(e) if e.downcast_ref::<rustix::io::Errno>()==Some(&rustix::io::Errno::NOENT)=>{
+            ensure!(j.artifact.reviewed_destination.is_none(),"reviewed destination disappeared");
+            (open_at(&parent,staged,true)?,true)
+        },
         Err(e)=>return Err(e),
     };
     let m=root.metadata()?;ensure!(private(&m,true)&&(m.dev(),m.ino())==(j.artifact.device,j.artifact.inode),"recorded capture identity changed");
     let source_path=store.path();let source_root=source_path.parent().unwrap();
     verify_bundle(&root,&j.artifact.manifest_checksum,revision,source_root,storage_root,end)?;
+    check_time(end)?;
     j.artifact.stage="publishing".into();persist(store,&dir,&mut j)?;
     if rename{
-        let publication=Publication{parent,root,artifact:j.artifact.clone(),destination:j.destination.clone()};
-        publication.rename()?;
+        let publication=Publication{parent,root,artifact:j.artifact.clone(),destination:j.destination.clone(),_reviewed:None};
+        publication.rename(end)?;
     }else{
         let current=open_absolute(dest,true)?;let m=current.metadata()?;
         ensure!((m.dev(),m.ino())==(j.artifact.device,j.artifact.inode),"published capture identity changed");
@@ -1126,7 +1275,60 @@ mod tests{
         assert!(Path::new(&staged).is_dir());assert!(!dest.exists());
     }
     #[test]
-    fn publication_never_replaces_existing_directory(){
+    fn manifest_rejects_duplicate_nested_keys_and_accepts_nil_slices(){
+        assert!(unique_manifest_json(br#"{"xattrs":{"user.x":"a","user.x":"b"}}"#).is_err());
+        assert!(unique_manifest_json(br#"{"x":1}{}"#).is_err());
+        assert!(unique_manifest_json(br#"{"x":null}"#).is_ok());
+        #[derive(Serialize,Deserialize)]
+        struct Wire{#[serde(with="go_slice")] values:Vec<String>}
+        let nil:Wire=serde_json::from_str(r#"{"values":null}"#).unwrap();
+        assert!(nil.values.is_empty());
+        assert_eq!(serde_json::to_string(&nil).unwrap(),r#"{"values":null}"#);
+        assert!(serde_json::from_str::<Wire>(r#"{"values":[]}"#).unwrap().values.is_empty());
+    }
+    #[tokio::test]
+    async fn capture_replaces_reviewed_private_empty_directory(){
+        let (_tmp,store,storage,dest)=fixture();
+        fs::create_dir(&dest).unwrap();
+        fs::set_permissions(&dest,fs::Permissions::from_mode(0o700)).unwrap();
+        let provider=CompositeProvider::new(&AppConfig::default(),CommandRunner::new(true));
+        let revision=store.read().unwrap().unwrap().revision;
+        let result=prepare(&store,&storage,&provider,PrepareOptions{revision,destination:dest.to_str().unwrap().into(),quiesce:true,deadline_seconds:30}).await.unwrap();
+        assert_eq!(result["stage"],"captured");
+        let manifest:serde_json::Value=serde_json::from_slice(&fs::read(dest.join("manifest.json")).unwrap()).unwrap();
+        assert!(manifest["nativeExports"].is_null());
+        assert!(manifest["runningWorkloadsAtBackup"].is_null());
+        assert!(manifest["resumedWorkloads"].is_null());
+    }
+    #[test]
+    fn reviewed_destination_change_is_not_overwritten(){
+        let (_tmp,store,_storage,dest)=fixture();
+        fs::create_dir(&dest).unwrap();
+        fs::set_permissions(&dest,fs::Permissions::from_mode(0o700)).unwrap();
+        let source=store.path();
+        let publication=Publication::new(dest.to_str().unwrap(),source.parent().unwrap()).unwrap();
+        fs::write(dest.join("keep"),b"keep").unwrap();
+        assert!(publication.rename(Instant::now()+Duration::from_secs(30)).is_err());
+        assert_eq!(fs::read(dest.join("keep")).unwrap(),b"keep");
+        fs::remove_file(dest.join("keep")).unwrap();
+        fs::rename(&dest,dest.with_extension("old")).unwrap();
+        fs::create_dir(&dest).unwrap();
+        fs::set_permissions(&dest,fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(publication.rename(Instant::now()+Duration::from_secs(30)).is_err());
+    }
+    #[tokio::test]
+    async fn cancellation_before_capture_does_not_create_destination_or_journal(){
+        let (_tmp,store,storage,dest)=fixture();
+        let provider=CompositeProvider::new(&AppConfig::default(),CommandRunner::new(true));
+        let revision=store.read().unwrap().unwrap().revision;
+        let (_sender,signal)=watch::channel(true);
+        let error=prepare_cancellable(&store,&storage,&provider,PrepareOptions{revision,destination:dest.to_str().unwrap().into(),quiesce:true,deadline_seconds:30},signal).await.unwrap_err();
+        assert!(error.is::<BackupCancelled>());
+        assert!(!dest.exists());
+        assert!(status(&store).unwrap().journal.is_none());
+    }
+    #[test]
+    fn publication_never_replaces_nonempty_directory(){
         let (_tmp,store,_storage,dest)=fixture();
         let source=store.path();
         fs::create_dir(&dest).unwrap();fs::write(dest.join("keep"),b"keep").unwrap();
