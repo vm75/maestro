@@ -1,12 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
+FEATURES=(--no-default-features --features asuswrt)
+SUFFIX=""
+if [[ "${1:-}" == "--linux-ui" ]]; then
+  shift
+  REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  npm --prefix "$REPO_DIR/linux-web" ci
+  npm --prefix "$REPO_DIR/linux-web" run build
+  FEATURES=(--no-default-features --features linux-ui)
+  SUFFIX="-linux-ui"
+fi
 TARGET="${1:-aarch64-unknown-linux-musl}"
+ARTIFACT="maestro-$TARGET$SUFFIX"
 rustup target add "$TARGET"
-cargo build --release --locked --target "$TARGET"
+cargo build --release --locked --target "$TARGET" "${FEATURES[@]}"
 mkdir -p dist
-cp "target/$TARGET/release/maestro" "dist/maestro-$TARGET"
+cp "target/$TARGET/release/maestro" "dist/$ARTIFACT"
 (
   cd dist
-  sha256sum "maestro-$TARGET" > "maestro-$TARGET.sha256"
+  sha256sum "$ARTIFACT" > "$ARTIFACT.sha256"
 )
-echo "Built dist/maestro-$TARGET"
+echo "Built dist/$ARTIFACT"
+if [[ "$SUFFIX" == "-linux-ui" ]]; then
+  # Build the Linux-only helper alongside the release, never install it here.
+  # It is absent from router artifacts and requires explicit, separate opt-in.
+  HELPER="maestro-admin-$TARGET"
+  test -x "target/$TARGET/release/maestro-admin"
+  cp "target/$TARGET/release/maestro-admin" "dist/$HELPER"
+  (
+    cd dist
+    sha256sum "$HELPER" > "$HELPER.sha256"
+  )
+  echo "Built opt-in helper dist/$HELPER (not installed)"
+  STDIO="maestro-mcp-stdio-$TARGET"
+  test -x "target/$TARGET/release/maestro-mcp-stdio"
+  cp "target/$TARGET/release/maestro-mcp-stdio" "dist/$STDIO"
+  (
+    cd dist
+    sha256sum "$STDIO" > "$STDIO.sha256"
+  )
+  echo "Built Linux MCP stdio artifact dist/$STDIO"
+fi

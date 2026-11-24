@@ -88,8 +88,8 @@ class Templates(unittest.TestCase):
             self.assertIn(f'include ban-shield/{name}.conf;', (ROOT / 'ban-shield/http.conf').read_text())
 
     def test_settings_contain_no_deployment_data(self):
-        import tomllib
-        self.assertEqual(tomllib.loads((ROOT / 'settings/sites.toml').read_text()), {'sites': {}})
+        import yaml
+        self.assertEqual(yaml.safe_load((ROOT / 'settings/sites.yaml').read_text()), {'sites': {}})
         for name in ('allowed_ips.txt', 'free_subdomains.txt', 'domains.conf', 'subdomains.conf',
                      'subfolders.conf', 'access_log_suppress.conf', 'security_trap_allow.conf'):
             entries = [line for line in (ROOT / 'settings' / name).read_text().splitlines()

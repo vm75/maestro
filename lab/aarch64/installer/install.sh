@@ -23,5 +23,5 @@ SYSROOT=/mnt/router-lab ERASE_DISKS=/dev/vda setup-alpine -f /mnt/maestro/lab/aa
 echo 'Router lab: provisioning the installed disk.'
 sh /mnt/maestro/lab/aarch64/installer/provision-installed.sh
 
-echo 'Router lab: installation and provisioning finished. Powering off now. make run-lab on the host.'
+echo 'Router lab: installation and provisioning finished. Powering off now. make run-router on the host.'
 poweroff

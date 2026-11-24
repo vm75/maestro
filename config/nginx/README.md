@@ -38,15 +38,13 @@ the upstream. Configure upstreams in `settings/domains.conf`,
 `settings/subdomains.conf`, and `settings/subfolders.conf` as appropriate.
 
 Maestro installs persistent render inputs under `nginx.inputs_dir` (default
-`/opt/etc/maestro/nginx`). `nginx.toml`, `sites.toml`, upstream map fragments,
+`/opt/etc/maestro/nginx`). `nginx.yaml`, `sites.yaml`, upstream map fragments,
 and administrator-owned log/security exception fragments live there. Final nginx
 files and generated `.conf` includes remain under `nginx.root_dir` (default
 `/opt/etc/nginx`). The `settings/` paths below describe bundle/template names;
 source data files are resolved from `inputs_dir` without that prefix at runtime.
-TOML, text lists, and Jinja templates are not installed into nginx's runtime tree.
-Templates remain embedded in Maestro's binary. See the
-[upgrade procedure](../../docs/migration.md#nginx-input-relocation-in-09) before
-using 0.9 with an existing installation.
+YAML, text lists, and Jinja templates are not installed into nginx's runtime tree.
+Templates remain embedded in Maestro's binary. See the [offline router upgrade procedure](../../docs/installation.md#upgrade-from-maestro-0110) for existing installations.
 
 The bundled TLS snippet already uses `http2 on`, which requires nginx 1.25.1+
 with the HTTP/2 module (see [nginx documentation](https://nginx.org/en/docs/http/ngx_http_v2_module.html#http2)).
@@ -61,7 +59,7 @@ Maestro adds named listener profiles, reusable source rules, deny routes and
 HTTP-01 renewal windows through its Rust renderer. Configure them with the UI;
 the standalone Python template renderer covers the legacy template context.
 See [configuration and operating limits](../../docs/nginx-ingress.md) and the
-synthetic [global](examples/ingress.toml)/[site](examples/ingress-sites.toml) inputs.
+synthetic [global](examples/ingress.yaml)/[site](examples/ingress-sites.yaml) inputs.
 Generated profile defaults, geo policies and TLS policy snippets are owned output.
 Do not copy generated directives into authored objects as an isolation guarantee.
 
@@ -242,26 +240,26 @@ no-cache headers and cannot recurse. Set `spa_fallback=""` on API/admin routes
 that must return their actual upstream 404s. An exact `/` route can use
 `rewrite_to="/index.html"` and `hide_etag=true` for the app shell.
 
-`settings/sites.toml` defaults to an empty `[sites]` table. `examples/sites.toml`
+`settings/sites.yaml` defaults to an empty `sites` table. `examples/sites.yaml`
 contains nine synthetic examples covering the reviewed custom-policy shapes:
 a fallback server, backend authentication, quiet control paths, private admin and
 rate-limited login routes, and production/development SPA/PWA mounts.
 `kind` selects the template; `upstream` records the corresponding map target.
 The remaining fields are render context. Actual per-site values belong in
-`<nginx.inputs_dir>/sites.toml`. Maestro reads this file as the source
+`<nginx.inputs_dir>/sites.yaml`. Maestro reads this file as the source
 of managed site inputs and saves API/UI changes there atomically. Each entry has
 `kind`, `domain`, `server_name`, `upstream`, `enabled`, and policy overrides;
 `name` identifies subdomains and `subfolder` identifies mounts. Deployment keys
 such as `app.example.test` and `example.test/app` can supply the name instead.
 Output paths are derived from site identity; an `output` field is not accepted.
 Managed editors expose settings, and saving regenerates the configuration.
-Generated settings comments are output metadata; managed inputs must be in TOML.
-Shared settings and defaults live only in `<nginx.inputs_dir>/nginx.toml`. The `[global]`
-table holds shared nginx options, `[site_defaults]` holds inherited site policy,
+Generated settings comments are output metadata; managed inputs must be in YAML.
+Shared settings and defaults live only in `<nginx.inputs_dir>/nginx.yaml`. The `global`
+table holds shared nginx options, `site_defaults` holds inherited site policy,
 and root-level `allowed_ips` and `free_subdomains` arrays hold the allowlists.
 API/UI saves update this file atomically with generated runtime output; failed
-validation or reload restores the previous TOML. Allowlist fragments are
-generated from TOML. Relative fallback certificate directories resolve below the nginx root.
+validation or reload restores the previous YAML. Allowlist fragments are
+generated from YAML. Relative fallback certificate directories resolve below the nginx root.
 Runtime options `nginx_daemon`, `nginx_user`,
 and `temp_dir` are validated and rendered by the same policy as listener settings.
 `nginx_daemon` defaults to `true` on Asuswrt-Merlin, Linux, and in test mode.
@@ -281,46 +279,51 @@ matching nginx inheritance in existing configurations.
 
 ## Named request and concurrent-request policies
 
-Define reusable policies in `<nginx.inputs_dir>/nginx.toml`. All four fields are required;
+Define reusable policies in `<nginx.inputs_dir>/nginx.yaml`. All four fields are required;
 unknown fields are rejected. The reserved name `default` always means the
 original Ban Shield policy: `30r/s`, burst 60, immediate processing, 30 concurrent
 requests, using the existing globally shared zones.
 
-```toml
-[limit_policies.assets]
-rate = "100r/s"
-burst = 500
-nodelay = true
-connections = 30
-
-[limit_policies.protected]
-rate = "10r/s"
-burst = 20
-nodelay = true
-connections = 10
+```yaml
+limit_policies:
+  assets:
+    rate: 100r/s
+    burst: 500
+    nodelay: true
+    connections: 30
+  protected:
+    rate: 10r/s
+    burst: 20
+    nodelay: true
+    connections: 10
 ```
 
-In a managed entry in `<nginx.inputs_dir>/sites.toml`:
+In a managed entry in `<nginx.inputs_dir>/sites.yaml`:
 
-```toml
-[sites."app.example.test"]
-kind = "subdomain"
-domain = "example.test"
-name = "app"
-server_name = "app.example.test"
-upstream = "http://127.0.0.1:8080"
-enabled = true
-enable_lanonly = false
-limit_policy = "protected"
-routes = [
-  {path = "/static/", limit_policy = "assets"},
-  {path = "/login", match = "exact", rate_limit = {zone = "wplogin", burst = 3}},
-]
+```yaml
+sites:
+  app.example.test:
+    kind: subdomain
+    domain: example.test
+    name: app
+    server_name: app.example.test
+    upstream: http://127.0.0.1:8080
+    enabled: true
+    enable_lanonly: false
+    limit_policy: protected
+    routes:
+    - path: /static/
+      limit_policy: assets
+    - path: /login
+      match: exact
+      rate_limit:
+        zone: wplogin
+        burst: 3
 ```
 
 Adapt the route path to the application's actual static files. No app, domain,
 or path has special treatment. You can also set `limit_policy` in
-`[site_defaults]`. Omission inherits global site defaults, then the site, then
+`site_defaults`. Omission inherits global site defaults, then the site, then
 the effective parent route; an explicit name replaces **both** base limits.
 Nested children inherit the selected name. Use `limit_policy = "default"` to
 restore the original shared budgets. Empty strings, nulls, unknown names and
@@ -430,7 +433,7 @@ File extensions distinguish render inputs from nginx-ready files:
 | `.conf` | Static nginx configuration or directive fragments | `snippets/proxy-upgrade.conf` |
 | `.jinja` | Jinja defaults modules | `settings/location.jinja` |
 | `.txt` | Plain lists consumed during rendering | `settings/allowed_ips.txt` |
-| `.toml` | Structured per-site render inputs | `settings/sites.toml` |
+| `.yaml` | Structured per-site render inputs | `settings/sites.yaml` |
 
 Render `nginx.conf.jinja`, `resolver.conf.jinja`, and `conf.d/*.conf.jinja` before
 installation. Render the `ssl`, `acme-challenge` and `restrict` runtime snippet
@@ -447,13 +450,13 @@ must enable `builtins`, `multi_template`, **`macros`**, and `serde`. Maestro
 implements only the four Python string methods used by this bundle, avoiding
 the general Python compatibility extension.
 Keep the upstream map settings, `mime.types` and `dhparams.pem` available to nginx.
-`allowed_ips.txt`, `free_subdomains.txt`, `servers.conf`, `sites.toml` and
+`allowed_ips.txt`, `free_subdomains.txt`, `servers.conf`, `sites.yaml` and
 `settings/*.jinja` are render inputs, not standalone nginx includes.
 `servers.conf` defaults to the empty-name fragment `"";` and retains its final
 semicolon for `server_name`.
 
 A renderer should select deployment overrides for data files (`.conf`, `.txt`,
-`.toml`) and otherwise use the shipped defaults. Always load the versioned Jinja
+`.yaml`) and otherwise use the shipped defaults. Always load the versioned Jinja
 policy modules from this bundle; stale copies of `.jinja` modules in a deployment
 directory must not shadow current renderer logic. Runtime map includes receive
 the selected data files when assembling the output tree. Empty network defaults

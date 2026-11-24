@@ -21,6 +21,9 @@ fi
 
 REPO_DIR=$(CDPATH= cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$REPO_DIR"
+OUTPUT_DIR=${MAESTRO_IPK_OUTPUT_DIR:-"$REPO_DIR/dist"}
+mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd)
 [[ -f "$BINARY" ]] || { echo "Missing binary: $BINARY" >&2; exit 1; }
 VERSION=${TAG#v}
 NAME="maestro_${VERSION}-1_${ARCH}.ipk"
@@ -30,13 +33,12 @@ DATA="$TMP/data"
 CONTROL="$TMP/control"
 META="$TMP/meta"
 mkdir -p "$DATA/opt/bin" "$DATA/opt/etc/init.d" "$DATA/opt/libexec/maestro" \
-  "$DATA/opt/share/maestro" "$DATA/opt/var/lib/maestro/dehydrated" "$CONTROL" "$META" dist
+  "$DATA/opt/share/maestro" "$CONTROL" "$META"
 install -m 0755 "$BINARY" "$DATA/opt/bin/maestro"
 install -m 0755 scripts/S99maestro "$DATA/opt/etc/init.d/S99maestro"
 install -m 0755 scripts/setup-merlin.sh "$DATA/opt/libexec/maestro/setup-merlin.sh"
 install -m 0755 scripts/dehydrated-dns01-hook.sh "$DATA/opt/share/maestro/dehydrated-dns01-hook.sh"
-install -m 0755 scripts/dehydrated-dns01-hook.sh "$DATA/opt/var/lib/maestro/dehydrated/dehydrated-dns01-hook.sh"
-install -m 0644 config/maestro.example.toml "$DATA/opt/share/maestro/maestro.example.toml"
+install -m 0644 config/maestro.example.yaml "$DATA/opt/share/maestro/maestro.example.yaml"
 install -m 0644 config/firewall-policy.example.json "$DATA/opt/share/maestro/firewall-policy.example.json"
 cat > "$CONTROL/control" <<EOF
 Package: maestro
@@ -72,11 +74,11 @@ tar -C "$DATA" -czf "$META/data.tar.gz" .
 (
   cd "$META"
   # Entware's IPK indexer expects a gzip tar outer archive (not Debian ar).
-  tar --numeric-owner --owner=0 --group=0 -czf "$REPO_DIR/dist/$NAME" \
+  tar --numeric-owner --owner=0 --group=0 -czf "$OUTPUT_DIR/$NAME" \
     ./debian-binary ./control.tar.gz ./data.tar.gz
 )
 (
-  cd dist
+  cd "$OUTPUT_DIR"
   sha256sum "$NAME" > "$NAME.sha256"
 )
-echo "Packaged dist/$NAME and dist/$NAME.sha256"
+echo "Packaged $OUTPUT_DIR/$NAME and $NAME.sha256"

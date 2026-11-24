@@ -7,15 +7,16 @@ mod ban_attack;
 mod certificate_http;
 mod command;
 mod config;
-mod core;
+mod config_yaml;
+pub mod core;
 mod models;
 mod modules;
 mod nginx_ingress;
 mod nginx_mutation;
 mod nginx_render;
-#[path = "platforms/nginx_upgrade.rs"]
-mod nginx_upgrade;
-mod platforms;
+#[path = "platforms/toolbox.rs"]
+mod toolbox;
+pub mod platforms;
 mod restore;
 mod state;
 mod storage;
@@ -50,13 +51,13 @@ use crate::{
 #[derive(Debug, Parser)]
 #[command(name = "maestro", version, about)]
 struct Cli {
-    #[arg(long, default_value = "/opt/etc/maestro/maestro.toml")]
+    #[arg(long, default_value = "/opt/etc/maestro/maestro.yaml")]
     config: PathBuf,
 
     #[arg(long, global = true)]
     test_mode: bool,
 
-    /// Run native Linux services without Asuswrt integration or command simulation.
+    /// Require a native Linux configuration (never reinterpret router YAML).
     #[arg(long, global = true, conflicts_with = "test_mode")]
     linux_mode: bool,
 
@@ -66,6 +67,13 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Read one runtime configuration scalar for local diagnostic scripts.
+    ConfigValue {
+        key: String,
+    },
+    /// Create a private Linux YAML authority and bootstrap token as its owner.
+    #[cfg(feature = "linux")]
+    InitLinuxConfig,
     Serve,
     CheckConfig,
     /// Install the bundled nginx configuration, backing up a different nginx.conf.
@@ -73,8 +81,6 @@ enum Command {
     /// Download or update the official dehydrated executable.
     #[command(alias = "init-dehydrated")]
     UpdateDehydrated,
-    /// Move current-format nginx inputs into inputs_dir; run while the service is stopped.
-    MigrateNginxInputs,
     RenderUi,
     MountUi,
     UnmountUi,
@@ -100,33 +106,10 @@ enum Command {
         #[arg(long)]
         no_backup: bool,
     },
-    /// Download the newest custom NGINX Entware IPK bundle and optionally install it (router only).
-    #[command(alias = "update-nginx")]
-    UpgradeNginx {
-        /// NGINX release channel: stable (default) or mainline.
-        #[arg(long, value_enum, default_value_t = nginx_upgrade::NginxChannel::Stable)]
-        channel: nginx_upgrade::NginxChannel,
-        /// Target a specific release tag (e.g. nginx-v1.30.7-run44684227015-a1).
-        #[arg(long, conflicts_with = "version")]
-        tag: Option<String>,
-        /// Target a specific NGINX version (e.g. 1.30.7).
-        #[arg(long, conflicts_with = "tag")]
-        version: Option<String>,
-        /// Verify and stage the IPK bundle in /tmp without invoking opkg.
-        #[arg(long)]
-        download_only: bool,
-        /// Skip creating the pre-upgrade backup.
-        #[arg(long)]
-        no_backup: bool,
-        /// Force installation even if already up to date.
-        #[arg(long)]
-        force: bool,
-        /// Check for available updates without downloading or installing.
-        #[arg(long)]
-        check: bool,
-        /// Permit switching from a newer version to an older stable/mainline release.
-        #[arg(long)]
-        allow_downgrade: bool,
+    /// List or install published Toolbox Entware release bundles (router only).
+    Toolbox {
+        #[command(subcommand)]
+        command: toolbox::ToolboxCommand,
     },
 }
 
@@ -144,16 +127,44 @@ fn main() -> Result<()> {
     if let Some(Command::Restore { archive, root }) = &cli.command {
         return restore::run(archive, root, cli.test_mode);
     }
-    let mut config = AppConfig::load(&cli.config)?;
-    if cli.linux_mode {
-        config.platform = Platform::Linux;
+    #[cfg(feature = "linux")]
+    if matches!(cli.command, Some(Command::InitLinuxConfig)) {
+        crate::core::linux_config::initialize(&cli.config)?;
+        println!(
+            "private Linux configuration ready: {}",
+            cli.config.display()
+        );
+        return Ok(());
     }
+    let mut config = if cli.test_mode && !cli.config.exists() {
+        AppConfig::default()
+    } else {
+        AppConfig::load(&cli.config)?
+    };
+    anyhow::ensure!(
+        !cli.linux_mode || config.platform == Platform::Linux,
+        "--linux-mode requires a native Linux YAML authority"
+    );
     if cli.test_mode {
         config.apply_test_mode(&cli.config)?;
     }
     config.validate()?;
+    #[cfg(not(feature = "linux"))]
+    if config.platform == Platform::Linux {
+        anyhow::bail!(
+            "Linux mode requires a Linux-feature build; the router profile excludes Linux management"
+        );
+    }
+    #[cfg(feature = "linux")]
+    if config.platform == Platform::Linux && !config.test_mode && unsafe { libc::geteuid() } == 0 {
+        anyhow::bail!(
+            "Linux Maestro must run as a non-root workload account; privileged host changes require optional maestro-admin"
+        );
+    }
 
     match cli.command.unwrap_or(Command::Serve) {
+        #[cfg(feature = "linux")]
+        Command::InitLinuxConfig => unreachable!("initialization precedes configuration loading"),
         Command::Restore { .. } => unreachable!("restore is handled before configuration loading"),
         Command::Backup { output_dir } => tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -169,42 +180,32 @@ fn main() -> Result<()> {
                 .build()?
                 .block_on(upgrade::run(&config, &cli.config, download_only, no_backup))
         }
-        Command::UpgradeNginx {
-            channel,
-            tag,
-            version,
-            download_only,
-            no_backup,
-            force,
-            check,
-            allow_downgrade,
-        } => {
-            nginx_upgrade::require_router(config.platform, config.test_mode)?;
+        Command::Toolbox { command } => {
+            toolbox::require_router(config.platform, config.test_mode)?;
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?
-                .block_on(nginx_upgrade::run(
-                    &config,
-                    &cli.config,
-                    nginx_upgrade::UpgradeNginxOptions {
-                        channel,
-                        tag,
-                        version,
-                        download_only,
-                        no_backup,
-                        force,
-                        check,
-                        allow_downgrade,
-                    },
-                ))
+                .block_on(toolbox::run(&config, &cli.config, command))
         }
-        Command::CheckConfig => {
-            println!("configuration is valid: {}", cli.config.display());
+        Command::ConfigValue { key } => {
+            let mut value = serde_json::to_value(&config)?;
+            for part in key.split('.') {
+                value = value
+                    .get(part)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("unknown configuration key"))?;
+            }
+            match value {
+                serde_json::Value::String(value) => println!("{value}"),
+                serde_json::Value::Bool(value) => println!("{value}"),
+                serde_json::Value::Number(value) => println!("{value}"),
+                _ => anyhow::bail!("configuration key is not a scalar"),
+            }
             Ok(())
         }
-        Command::MigrateNginxInputs => {
-            let count = nginx_render::migrate_inputs(&config)?;
-            println!("migrated {count} nginx input files; runtime configuration preserved");
+        Command::CheckConfig => {
+            validate_nginx_inputs(&config)?;
+            println!("configuration is valid: {}", cli.config.display());
             Ok(())
         }
         Command::InitNginx => {
@@ -292,9 +293,15 @@ fn main() -> Result<()> {
     }
 }
 
+fn validate_nginx_inputs(config: &AppConfig) -> Result<()> {
+    let global = nginx_render::load_global(config)?;
+    let sites = nginx_sites::load(config)?;
+    crate::nginx_ingress::validate_tree(&global, &sites)?;
+    Ok(())
+}
+
 async fn serve(config: AppConfig) -> Result<()> {
-    nginx_render::require_migrated_input(&config, "nginx.toml")?;
-    nginx_render::require_migrated_input(&config, "sites.toml")?;
+    validate_nginx_inputs(&config)?;
     config.ensure_directories()?;
     let stores = Stores::load(&config).await?;
     let firewall = FirewallManager::new(config.clone(), stores.clone()).await?;
@@ -308,7 +315,7 @@ async fn serve(config: AppConfig) -> Result<()> {
             warn!(%error, "unable to render ASUS UI page; continuing with standalone listener");
         }
     } else if config.test_mode || config.platform == Platform::Asuswrt {
-        // Preserve standalone ASUS rendering in simulated and router modes.
+        // Preserve standalone ASUS rendering in simulated and asuswrt modes.
         render_ui_file(&config)?;
     }
 
@@ -321,8 +328,7 @@ async fn serve(config: AppConfig) -> Result<()> {
     state.start_certificate_renewal_loop();
     crate::certificate_http::start_reconciliation(state.clone());
 
-    let adguard_cfg = crate::api::adguard::get_effective_config(&state).await;
-    if adguard_cfg.enabled {
+    if let Some(adguard_cfg) = crate::api::adguard::enabled_config(&state).await {
         let config_clone = state.config.clone();
         tokio::spawn(async move {
             if let Ok(client) = crate::adguard::AdGuardClient::new(&adguard_cfg) {
@@ -364,9 +370,12 @@ async fn serve(config: AppConfig) -> Result<()> {
     let address = SocketAddr::new(bind_ip, config.server.port);
     let listener = TcpListener::bind(address).await?;
     info!(%address, version = env!("CARGO_PKG_VERSION"), test_mode = config.test_mode, "maestro listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(state))
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal(state))
+    .await?;
 
     Ok(())
 }
@@ -475,7 +484,7 @@ mod cli_tests {
         let cli = Cli::try_parse_from([
             "maestro",
             "--config",
-            "/lab/maestro.toml",
+            "/lab/maestro.yaml",
             "--linux-mode",
             "backup",
             "--output-dir",
@@ -498,110 +507,29 @@ mod cli_tests {
             matches!(cli.command, Some(Command::Restore { archive, root }) if archive == Path::new("/tmp/backup.tar.gz") && root == Path::new("/tmp/recovery"))
         );
 
-        // upgrade-nginx default flags
-        let cli = Cli::try_parse_from(["maestro", "upgrade-nginx"]).unwrap();
+        let cli = Cli::try_parse_from(["maestro", "toolbox", "list"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(Command::UpgradeNginx {
-                channel: nginx_upgrade::NginxChannel::Stable,
-                tag: None,
-                version: None,
-                download_only: false,
-                no_backup: false,
-                force: false,
-                check: false,
-                allow_downgrade: false,
+            Some(Command::Toolbox {
+                command: toolbox::ToolboxCommand::List,
             })
         ));
-
-        // upgrade-nginx with alias update-nginx and mainline channel
         let cli = Cli::try_parse_from([
-            "maestro",
-            "update-nginx",
-            "--channel",
-            "mainline",
-            "--download-only",
-            "--no-backup",
-            "--force",
+            "maestro", "toolbox", "install", "toolbox-nginx-entware-1.30.8-99_aarch64",
+            "--download-only", "--allow-downgrade",
         ])
         .unwrap();
         assert!(matches!(
             cli.command,
-            Some(Command::UpgradeNginx {
-                channel: nginx_upgrade::NginxChannel::Mainline,
-                tag: None,
-                version: None,
-                download_only: true,
-                no_backup: true,
-                force: true,
-                check: false,
-                allow_downgrade: false,
+            Some(Command::Toolbox {
+                command: toolbox::ToolboxCommand::Install {
+                    download_only: true,
+                    no_backup: false,
+                    allow_downgrade: true,
+                    ..
+                },
             })
         ));
-
-        // upgrade-nginx with explicit tag and check
-        let cli = Cli::try_parse_from([
-            "maestro",
-            "upgrade-nginx",
-            "--tag",
-            "nginx-v1.30.7-run44684227015-a1",
-            "--check",
-        ])
-        .unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Command::UpgradeNginx {
-                channel: nginx_upgrade::NginxChannel::Stable,
-                tag: Some(ref t),
-                version: None,
-                download_only: false,
-                no_backup: false,
-                force: false,
-                check: true,
-                allow_downgrade: false,
-            }) if t == "nginx-v1.30.7-run44684227015-a1"
-        ));
-
-        // upgrade-nginx with explicit version
-        let cli = Cli::try_parse_from(["maestro", "upgrade-nginx", "--version", "1.30.7"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Command::UpgradeNginx {
-                channel: nginx_upgrade::NginxChannel::Stable,
-                tag: None,
-                version: Some(ref v),
-                download_only: false,
-                no_backup: false,
-                force: false,
-                check: false,
-                allow_downgrade: false,
-            }) if v == "1.30.7"
-        ));
-        assert!(
-            Cli::try_parse_from([
-                "maestro",
-                "upgrade-nginx",
-                "--tag",
-                "nginx-v1.30.7",
-                "--version",
-                "1.30.7"
-            ])
-            .is_err()
-        );
-        let cli = Cli::try_parse_from([
-            "maestro",
-            "upgrade-nginx",
-            "--channel",
-            "stable",
-            "--allow-downgrade",
-        ])
-        .unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Command::UpgradeNginx {
-                allow_downgrade: true,
-                ..
-            })
-        ));
+        assert!(Cli::try_parse_from(["maestro", "toolbox", "install"]).is_err());
     }
 }

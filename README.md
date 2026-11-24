@@ -40,13 +40,12 @@ compatibility still needs testing on matching hardware and firmware. Legacy MIPS
 support is not promised.
 
 1. Back up your configuration and persistent state. For an existing installation,
-   read the [Maestro migration guide](docs/maestro-migration.md) first; existing nginx configuration
-   must be ported to the current bundle before deployment.
+   follow the [offline router upgrade procedure](docs/installation.md#upgrade-from-maestro-0110) before deployment.
 2. For a new install, download the matching `.ipk` and checksum from
    [GitHub Releases](https://github.com/vm75/maestro/releases), verify the
    checksum, then run `/opt/bin/opkg install /tmp/<package>.ipk` as root.
    The IPK installs Maestro, initializes configuration, and starts the
-   service. Migrating an existing Router Hub IPK requires the separate [rebrand migration](docs/maestro-migration.md); **do not install the new package over the legacy package**.
+   service. Existing Maestro installations must have current YAML inputs before installing.
 
    Alternatively, download the matching tarball and checksum from
    [GitHub Releases](https://github.com/vm75/maestro/releases).
@@ -60,7 +59,7 @@ support is not promised.
    The installer creates a token and Maestro configuration on first install,
    installs startup hooks, and restarts Maestro. Migrating Router Hub data
    requires the explicit one-time procedure before installation.
-4. Review `/opt/etc/maestro/maestro.toml` after either installation method: set your bind address,
+4. Review `/opt/etc/maestro/maestro.yaml` after either installation method: set your bind address,
    allowed origins, ASUS page/menu, API URL, and service paths. The shipped
    values are examples. Restart after changes:
 
@@ -69,7 +68,7 @@ support is not promised.
    ```
 
 5. Open the configured ASUS menu entry, or
-   `http://<router-ip>:3030/#token=<auth-token>` using the token from your TOML.
+   `http://<router-ip>:3030/#token=<auth-token>` using the token from your YAML.
 
 On an existing router install, `/opt/bin/maestro upgrade` checks the latest
 stable GitHub release, verifies its IPK checksum, and attempts `opkg install`.
@@ -77,16 +76,20 @@ It creates a backup first; use `--no-backup` to skip it.
 Use `--download-only` to stage a verified package under `/tmp` and print a
 manual install command. Upgrade is unavailable in Linux and test modes.
 
-Similarly, `/opt/bin/maestro upgrade-nginx` (or `update-nginx`) checks the
-latest custom Entware NGINX IPK release bundle on GitHub, verifies checksums,
-and installs the matching packages (`nginx-ssl`, `nginx-mod-brotli`,
-`nginx-mod-stream`, and `nginx-mod-headers-more`). By default it selects the
-`stable` channel; specify `--channel mainline` to upgrade to mainline releases,
-or pass `--tag <tag>` / `--version <version>`. Use `--check` to inspect available
-updates, or `--download-only` to verify and stage packages under `/tmp`.
-Selecting an older release requires `--allow-downgrade`. Successful router
-upgrades activate the new NGINX master using NGINX's live binary-upgrade signals,
-and preserve prior binary/module files in a private `/tmp` recovery directory.
+Toolbox builds and publishes custom Entware packages separately. On a live
+router, list compatible releases and select an exact release tag:
+
+```sh
+/opt/bin/maestro toolbox list
+/opt/bin/maestro toolbox install toolbox-nginx-entware-1.30.8-99_aarch64
+```
+
+The installer verifies and installs **every IPK** in the selected release,
+including all four matching NGINX packages. Use `--download-only` to stage
+the bundle, or `--allow-downgrade` to permit older versions. See
+[Toolbox installation](docs/installation.md#router-only-toolbox-packages).
+Maestro's own `upgrade` command remains separate.
+
 
 Create a backup separately with `maestro backup`; see
 [backup instructions](docs/installation.md#backups). Use
@@ -101,18 +104,24 @@ builds, installer options, and service control.
 With **Rust 1.85+**, from a checkout:
 
 ```sh
-make run
+make run-simulated
 ```
 
 Open <http://127.0.0.1:3030> and use the fixture test token `maestro-test-token`.
 This uses fixture data, simulates external commands, skips ASUS menu changes,
 and does not send Wake-on-LAN packets.
 
-For testing against real services, follow the [Linux integration guide](docs/linux.md).
+For real Linux services, use `make init-linux` once, then `make run-linux`.
+For the QEMU router environment, use `make init-router` once, then
+`make run-router`. See [development environments](docs/development.md#run-locally)
+for prerequisites and browser access, or run `make help`. `make run` remains
+an alias for `make run-simulated`.
 
 ## Configure and use
 
-Start with the [example TOML](config/maestro.example.toml) for paths,
+Router configuration is YAML; Linux uses a separate native version: 1 YAML authority. Older router TOML must be converted offline before installation.
+
+Start with the [example YAML](config/maestro.example.yaml) for paths,
 authentication, commands, and integration settings. Then use the UI to manage
 services, sites, certificates, saved devices, and firewall policy.
 
@@ -130,13 +139,12 @@ security, nginx settings, and firewall tuning.
 | Guide | Contents |
 | --- | --- |
 | [Installation](docs/installation.md) | Packages, source builds, installer options, service commands |
-| [Configuration](docs/configuration.md) | TOML sections, nginx settings, Ban Shield tuning, operational notes |
-| [Upgrading](docs/maestro-migration.md) | One-time cutover and rollback; no legacy runtime aliases |
-| [Legacy migrations](docs/migration.md) | Historical nginx and storage compatibility |
+| [Configuration](docs/configuration.md) | YAML mappings, nginx settings, Ban Shield tuning, operational notes |
+| [Phase 2 validation](docs/plans/proposed/modular-platform-ui-migration.md) | Remaining acceptance gates and reference parity ledger |
 | [Development](docs/development.md) | Prerequisites, local checks, certificate tests, API overview |
 | [Linux integration](docs/linux.md) | Real-service lab setup and smoke tests |
 | [Architecture](docs/architecture.md) | Components, data flows, persistence, invariants |
-| [CI and releases](docs/releases.md) | Maestro publishing and manual NGINX IPK build/release workflow |
+| [CI and releases](docs/releases.md) | Maestro publishing and external Toolbox packages |
 | [Nginx bundle](config/nginx/README.md) | Site options, route policies, templates, validation |
 | [Changelog](CHANGELOG.md) | Release history |
 

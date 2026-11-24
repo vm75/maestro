@@ -79,14 +79,16 @@ impl Site {
 }
 
 pub fn path(config: &AppConfig) -> PathBuf {
-    config.nginx.inputs_dir.join("sites.toml")
+    config.nginx.inputs_dir.join("sites.yaml")
 }
 
 pub fn load(config: &AppConfig) -> Result<Sites> {
     let path = path(config);
-    nginx_render::require_migrated_input(config, "sites.toml")?;
+    nginx_render::ensure_managed_path(config, &path)?;
     let mut sites: Sites = match fs::read_to_string(&path) {
-        Ok(content) => toml::from_str(&content).context("invalid managed nginx sites.toml")?,
+        Ok(content) => {
+            crate::config_yaml::decode(&content).context("invalid managed nginx sites.yaml")?
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Sites::default(),
         Err(error) => return Err(error.into()),
     };
@@ -161,7 +163,7 @@ pub fn save(
     crate::nginx_ingress::validate_tree(&nginx_render::load_global(config)?, &sites)?;
     nginx_render::FileTransaction::apply(
         config,
-        [(path(config), toml::to_string_pretty(&sites)?)].into(),
+        [(path(config), serde_yaml::to_string(&sites)?)].into(),
     )
 }
 
@@ -240,14 +242,18 @@ mod tests {
         config.nginx.inputs_dir = temp.path().join("maestro/nginx");
         std::fs::create_dir_all(&config.nginx.inputs_dir).unwrap();
 
-        // Write a sites.toml where subdomain does NOT have `name` field
-        let initial_toml = r#"
-[sites."media.example.test"]
-kind = "subdomain"
-domain = "example.test"
-server_name = "media.example.test"
-upstream = "http://127.0.0.1:8081"
-enabled = true
+        // Write a sites.yaml where subdomain does NOT have `name` field
+        let initial_toml = r#"{
+  "sites": {
+    "media.example.test": {
+      "kind": "subdomain",
+      "domain": "example.test",
+      "server_name": "media.example.test",
+      "upstream": "http://127.0.0.1:8081",
+      "enabled": true
+    }
+  }
+}
 "#;
         std::fs::write(path(&config), initial_toml).unwrap();
 
@@ -320,7 +326,7 @@ enabled = true
             let initial = Sites {
                 sites: [("api.example.test".into(), existing.clone())].into(),
             };
-            std::fs::write(path(&config), toml::to_string_pretty(&initial).unwrap()).unwrap();
+            std::fs::write(path(&config), serde_yaml::to_string(&initial).unwrap()).unwrap();
             save(
                 &config,
                 new_site.kind,
@@ -361,11 +367,15 @@ enabled = true
         config.nginx.root_dir = temp.path().into();
         config.nginx.inputs_dir = temp.path().join("maestro/nginx");
         std::fs::create_dir_all(&config.nginx.inputs_dir).unwrap();
-        let original = r#"
-[sites."subdomain/example.test/api"]
-kind = "domain"
-domain = "other.test"
-enabled = true
+        let original = r#"{
+  "sites": {
+    "subdomain/example.test/api": {
+      "kind": "domain",
+      "domain": "other.test",
+      "enabled": true
+    }
+  }
+}
 "#;
         std::fs::write(path(&config), original).unwrap();
         let site = Site {

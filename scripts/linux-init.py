@@ -3,21 +3,32 @@
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import time
-import tomllib
+import yaml
 
 location = Path(__file__).resolve()
 # Installed copies live under data/linux/init.d.
 repo = location.parents[3] if location.parent.name == 'init.d' else location.parents[1]
-config = Path(os.environ.get('MAESTRO_CONFIG', str(repo / 'data/linux/maestro.toml'))).resolve()
+config = Path(os.environ.get('MAESTRO_CONFIG', str(repo / 'data/linux/maestro.yaml'))).resolve()
 with config.open('rb') as stream:
-    cfg = tomllib.load(stream)
+    cfg = yaml.safe_load(stream)
 service = 'nginx' if Path(sys.argv[0]).name.endswith('nginx') else 'maestro'
 action = sys.argv[1] if len(sys.argv) > 1 else 'check'
-nginx = cfg['nginx']
-runtime = Path(cfg['paths']['runtime_dir'])
+if cfg.get('version') == 1:
+    # Unified Linux YAML derives runtime paths from server.state_dir.
+    root = Path(cfg['server']['state_dir'])
+    nginx = {'prefix_path': str(root / 'nginx'), 'config_path': str(root / 'nginx/nginx.conf'),
+             'pid_path': str(root / 'run/nginx.pid')}
+    nginx_command = shutil.which('nginx')
+    if nginx_command is None:
+        raise RuntimeError('nginx is not available on PATH')
+    log_file = root / 'logs/maestro.log'
+    runtime = root / 'run'
+else:
+    raise RuntimeError('Native Linux version: 1 YAML required')
 pidfile = Path(nginx['pid_path']) if service == 'nginx' else runtime / 'maestro-init.pid'
 
 
@@ -49,7 +60,7 @@ def process_id():
 
 
 def run_nginx(*args):
-    command = [cfg['commands']['nginx']]
+    command = [nginx_command]
     if nginx.get('prefix_path'):
         command += ['-p', nginx['prefix_path']]
     return subprocess.call(command + ['-c', nginx['config_path'], *args])
@@ -85,7 +96,8 @@ try:
             if not binary.exists():
                 binary = repo / 'target/debug/maestro'
             runtime.mkdir(parents=True, exist_ok=True)
-            with Path(cfg['paths']['log_file']).open('ab') as log:
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            with log_file.open('ab') as log:
                 child = subprocess.Popen([str(binary), '--config', str(config), '--linux-mode', 'serve'],
                                          cwd=repo, stdin=subprocess.DEVNULL, stdout=log,
                                          stderr=log, start_new_session=True)

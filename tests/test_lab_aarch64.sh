@@ -13,6 +13,12 @@ sh -n lab/aarch64/installer/install.sh
 sh -n lab/aarch64/installer/provision-installed.sh
 sh -n scripts/setup-merlin.sh
 sh -n lab/aarch64/provision.sh
+# Provisioning must not call a removed CLI command or implicitly select a bundle.
+if grep -Eq '^[[:space:]]*/opt/bin/maestro[[:space:]]+(upgrade-nginx|update-nginx|toolbox[[:space:]]+install)([[:space:]]|$)' lab/aarch64/provision.sh; then
+    echo "Provisioning unexpectedly invokes an obsolete or unselected NGINX upgrade" >&2
+    exit 1
+fi
+grep -F '/opt/bin/maestro toolbox list' lab/aarch64/provision.sh >/dev/null
 sh -n lab/aarch64/configure-share.sh
 sh -n lab/aarch64/configure-shell.sh
 sh -n lab/aarch64/files/login-banner.sh
@@ -84,7 +90,12 @@ LOGREAD="lab/aarch64/files/logread"
 echo "Mock logread passed."
 
 echo "=== 6. Testing firewall-policy.json fixture ==="
-jq -e '.enabled == false and .rules == []' lab/aarch64/files/firewall-policy.json >/dev/null
+python3 - <<'PYJSON'
+import json
+from pathlib import Path
+policy = json.loads(Path("lab/aarch64/files/firewall-policy.json").read_text())
+assert policy["enabled"] is False and policy["rules"] == []
+PYJSON
 echo "Firewall policy JSON fixture passed."
 
 echo "=== 7. Testing QEMU project share ==="
@@ -251,7 +262,7 @@ AUTH_TOKEN="0123456789abcdef0123456789abcdef"
 sed -e "s|__AUTH_TOKEN__|$AUTH_TOKEN|" \
     -e "s|__OPENSSL_BIN__|/usr/bin/openssl|" \
     -e "s|__IP_BIN__|/sbin/ip|" \
-    lab/aarch64/files/maestro.toml.template > "$TMP/maestro.toml"
+    lab/aarch64/files/maestro.yaml.template > "$TMP/maestro.yaml"
 
 # Run check-config subcommand using target/release/maestro or target/debug/maestro
 MAESTRO=""
@@ -266,14 +277,14 @@ if [[ -n "$MAESTRO" ]]; then
     # Create test directories needed for validation
     mkdir -p "$TMP/certs" "$TMP/nginx" "$TMP/www" "$TMP/var/wwwext"
     cp lab/aarch64/files/menuTree.js "$TMP/www/menuTree.js"
-    sed -i "s|/www/require/modules/menuTree.js|$TMP/www/menuTree.js|" "$TMP/maestro.toml"
-    sed -i "s|/tmp/var/wwwext/user20.asp|$TMP/var/wwwext/user20.asp|" "$TMP/maestro.toml"
+    sed -i "s|/www/require/modules/menuTree.js|$TMP/www/menuTree.js|" "$TMP/maestro.yaml"
+    sed -i "s|/tmp/var/wwwext/user20.asp|$TMP/var/wwwext/user20.asp|" "$TMP/maestro.yaml"
 
-    "$MAESTRO" --config "$TMP/maestro.toml" check-config >/dev/null
+    "$MAESTRO" --config "$TMP/maestro.yaml" check-config >/dev/null
     echo "Configuration template check-config passed."
 
     echo "=== 9. Testing ASUS UI mounting and rendering with lab fixtures ==="
-    "$MAESTRO" --config "$TMP/maestro.toml" mount-ui >/dev/null
+    "$MAESTRO" --config "$TMP/maestro.yaml" mount-ui >/dev/null
     test -f "$TMP/var/wwwext/user20.asp"
     grep -F "user20.asp" "$TMP/www/menuTree.js" >/dev/null
     grep -F "$AUTH_TOKEN" "$TMP/var/wwwext/user20.asp" >/dev/null

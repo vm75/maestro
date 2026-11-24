@@ -16,43 +16,48 @@ if (( missing )); then
     exit 2
 fi
 # Check Python requirements before creating any lab files.
-python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ required"; import jinja2' || {
+python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ required"; import jinja2, yaml' || {
     echo 'Activate a Python 3.11+ environment with requirements.txt installed.' >&2
     exit 2
 }
-nginx_bin=$(command -v nginx)
-dehydrated_bin=$(command -v dehydrated || true)
-if [[ -z "$dehydrated_bin" ]]; then
-    dehydrated_bin="$lab/certs/dehydrated"
-    mkdir -p "$lab/certs"
-    if curl -fsSL "https://raw.githubusercontent.com/dehydrated-io/dehydrated/master/dehydrated" -o "$dehydrated_bin" 2>/dev/null; then
-        chmod 0700 "$dehydrated_bin"
-        echo "Downloaded latest dehydrated to $dehydrated_bin."
-    else
-        echo "Dehydrated is not installed. Use Certificates > Update dehydrated after setup."
-    fi
-fi
-if [[ ! -e "$lab/certs/dehydrated-dns01-hook.sh" && -f "$repo_root/scripts/dehydrated-dns01-hook.sh" ]]; then
-    install -m 0755 "$repo_root/scripts/dehydrated-dns01-hook.sh" "$lab/certs/dehydrated-dns01-hook.sh"
-fi
 api_port=3030
 nginx_port=8080
 nginx_tls_port=8443
 umask 077
-mkdir -p "$lab"/{state,run,logs/nginx,nginx/conf.d,nginx/domains-available,nginx/domains-enabled,nginx/snippets,init.d,wireguard,certs}
+mkdir -p "$lab"/{run,logs/nginx,nginx/conf.d,nginx/domains-available,nginx/domains-enabled,nginx/snippets,init.d,wireguard,certificates}
 mkdir -p "$lab/tmp" "$lab/nginx/logs"
 
-if [[ ! -e "$lab/state/firewall-policy.json" && ! -L "$lab/state/firewall-policy.json" ]]; then
-    printf '%s\n' '{"enabled":false,"observe_only":false,"rules":[],"allowlist":[]}' > "$lab/state/firewall-policy.json"
+# Use the same private executable path as the Linux runtime adapter.
+if [[ ! -e "$lab/dehydrated" ]]; then
+    if command -v dehydrated >/dev/null 2>&1; then
+        install -m 0700 "$(command -v dehydrated)" "$lab/dehydrated"
+    else
+        temporary=$(mktemp "$lab/.dehydrated.XXXXXX")
+        if curl -fsSL "https://raw.githubusercontent.com/dehydrated-io/dehydrated/master/dehydrated" -o "$temporary" &&
+            head -n 1 "$temporary" | grep -q '^#!' &&
+            grep -q dehydrated "$temporary"; then
+            chmod 0700 "$temporary"
+            mv -f "$temporary" "$lab/dehydrated"
+        else
+            rm -f "$temporary"
+            echo "Dehydrated is not installed. Use Certificates > Update dehydrated after setup."
+        fi
+    fi
+fi
+if [[ ! -e "$lab/dehydrated-dns01-hook.sh" && -f "$repo_root/scripts/dehydrated-dns01-hook.sh" ]]; then
+    install -m 0755 "$repo_root/scripts/dehydrated-dns01-hook.sh" "$lab/dehydrated-dns01-hook.sh"
+fi
+if [[ ! -e "$lab/firewall-policy.json" && ! -L "$lab/firewall-policy.json" ]]; then
+    printf '%s\n' '{"enabled":false,"observe_only":false,"rules":[],"allowlist":[]}' > "$lab/firewall-policy.json"
 fi
 
 if [[ ! -e "$lab/nginx/nginx.conf" && ! -L "$lab/nginx/nginx.conf" ]]; then
     python3 "$repo_root/scripts/render-nginx-config.py" \
         "$repo_root/config/nginx" "$lab/nginx" \
-        --inputs-dir "$lab/maestro/nginx" \
+        --inputs-dir "$lab/nginx-inputs" \
         --var-dir "$lab/var" --pid-path "$lab/run/nginx.pid" \
-        --error-log-path "$lab/var/log/nginx/error.log" \
-        --acme-directory "$lab/certs/acme-challenge" \
+        --error-log-path "$lab/logs/nginx/error.log" \
+        --acme-directory "$lab/certificates/acme-challenge" \
         --http-port "$nginx_port" --https-port "$nginx_tls_port"
     openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=localhost \
         -keyout "$lab/nginx/certs/default/privkey.pem" \
@@ -62,7 +67,7 @@ server {
     server_name 127.0.0.1;
     listen $nginx_port;
     location ^~ /.well-known/acme-challenge/ {
-        alias $lab/certs/acme-challenge/;
+        alias $lab/certificates/acme-challenge/;
         default_type text/plain;
     }
     location / { return 200 'maestro linux nginx'; }
@@ -70,75 +75,18 @@ server {
 EOF
 fi
 
-if [[ ! -e "$lab/maestro.toml" && ! -L "$lab/maestro.toml" ]]; then
+if [[ ! -e "$lab/maestro.yaml" && ! -L "$lab/maestro.yaml" ]]; then
     token=$(openssl rand -hex 24)
-cat > "$lab/maestro.toml" <<EOF
-platform = "linux"
-test_mode = false
-
-[server]
-bind = "127.0.0.1"
-port = $api_port
-auth_token = "$token"
-allowed_origins = ["http://127.0.0.1:$api_port"]
-daemonize = false
-
-[paths]
-data_dir = "$lab/state"
-runtime_dir = "$lab/run"
-log_file = "$lab/logs/maestro.log"
-hosts_add = "$lab/hosts.add"
-dnsmasq_conf_add = "$lab/dnsmasq.conf.add"
-wireguard_conf = "$lab/wireguard/wglab.conf"
-proc_stat = "/proc/stat"
-proc_meminfo = "/proc/meminfo"
-proc_net_dev = "/proc/net/dev"
-proc_uptime = "/proc/uptime"
-proc_loadavg = "/proc/loadavg"
-
-[commands]
-nginx = "$nginx_bin"
-dehydrated = "$dehydrated_bin"
-openssl = "$(command -v openssl)"
-ip = "/usr/sbin/ip"
-ping = "/bin/ping"
-
-[asus_ui]
-enabled = false
-rendered_page = "$lab/maestro.asp"
-
-[services]
-init_dir = "$repo_root/data/linux/init.d"
-log_dirs = ["$lab/logs"]
-
-[nginx]
-inputs_dir = "$lab/maestro/nginx"
-root_dir = "$lab/nginx"
-config_path = "$lab/nginx/nginx.conf"
-prefix_path = "$lab/nginx"
-pid_path = "$lab/run/nginx.pid"
-domains_available_dir = "$lab/nginx/domains-available"
-domains_enabled_dir = "$lab/nginx/domains-enabled"
-domain_upstream_map_path = "$lab/nginx/conf.d/02_domain_upstream_map.conf"
-subdomain_upstream_map_path = "$lab/nginx/conf.d/03_subdomain_upstream_map.conf"
-subfolder_upstream_map_path = "$lab/nginx/conf.d/04_subfolder_upstream_map.conf"
-http_forwarder_path = "$lab/nginx/conf.d/05-http-to-https.conf"
-log_dir = "$lab/var/log/nginx"
-
-[certificates]
-certs_dir = "$lab/certs"
-dns01_hook = "$lab/certs/dehydrated-dns01-hook.sh"
-
-[firewall]
-log_dirs = ["$lab/var/log/nginx"]
-
-[adguard]
-enabled = false
-lan_ip = "127.0.0.1"
-
-[system]
-wan_interface = "lo"
+    printf '%s\n' "$token" > "$lab/token"
+    chmod 0600 "$lab/token"
+    cat > "$lab/maestro.yaml" <<EOF
+version: 1
+server:
+  listen: "127.0.0.1:$api_port"
+  token_file: "$lab/token"
+  state_dir: "$lab"
 EOF
+    chmod 0600 "$lab/maestro.yaml"
 
 fi
 
@@ -149,9 +97,10 @@ for name in S80nginx S99maestro; do
     fi
 done
 
-printf 'Linux lab ready: %s\n' "$lab"
-printf 'Auth token is stored in %s/maestro.toml\n' "$lab"
-printf 'Start from the repository root:\n  cargo run -- --config data/linux/maestro.toml --linux-mode serve\n'
+printf 'Linux development environment ready: %s\n' "$lab"
+printf 'Unified Linux config: %s/maestro.yaml\n' "$lab"
+printf 'API token is stored in the private file %s/token\n' "$lab"
+printf 'Start from the repository root:\n  make run-linux\n'
 echo 'New configs use http://127.0.0.1:3030 and nginx port 8080. Existing files are preserved.'
 echo 'Optional feature tools: ip, ping, wg, wg-quick, dehydrated, ipset, iptables, ip6tables.'
 echo 'Configure their paths before testing those features; firewall enforcement requires an isolated VM or network namespace.'

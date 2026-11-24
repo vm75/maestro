@@ -193,7 +193,7 @@ for dir in /opt/etc/maestro /opt/var/lib/maestro; do
     fi
 done
 
-if [ ! -f /opt/etc/maestro/maestro.toml ]; then
+if [ ! -f /opt/etc/maestro/maestro.yaml ]; then
     OPENSSL_BIN=$(command -v openssl || echo "/usr/bin/openssl")
     IP_BIN=$(command -v ip || echo "/sbin/ip")
     AUTH_TOKEN=$(openssl rand -hex 24)
@@ -201,11 +201,11 @@ if [ ! -f /opt/etc/maestro/maestro.toml ]; then
     sed -e "s|__AUTH_TOKEN__|$AUTH_TOKEN|" \
         -e "s|__OPENSSL_BIN__|$OPENSSL_BIN|" \
         -e "s|__IP_BIN__|$IP_BIN|" \
-        "$FILES_DIR/maestro.toml.template" > /opt/etc/maestro/maestro.toml
-    chmod 0600 /opt/etc/maestro/maestro.toml
+        "$FILES_DIR/maestro.yaml.template" > /opt/etc/maestro/maestro.yaml
+    chmod 0600 /opt/etc/maestro/maestro.yaml
     printf 'auth_token=%s\n' "$AUTH_TOKEN" > /opt/etc/maestro/auth-token.txt
     chmod 0600 /opt/etc/maestro/auth-token.txt
-    echo "Generated /opt/etc/maestro/maestro.toml"
+    echo "Generated /opt/etc/maestro/maestro.yaml"
 fi
 
 echo "=== Step 7: Install Maestro IPK ==="
@@ -229,8 +229,10 @@ if [ -n "$IPK_FILE" ] && [ -f "$IPK_FILE" ]; then
     echo "Installing IPK..."
     /opt/bin/opkg install "$IPK_FILE"
     echo "Maestro package installation complete."
-    echo "Upgrading nginx..."
-    /opt/bin/maestro upgrade-nginx
+    # Keep the Entware NGINX installed in Step 5. Custom Toolbox bundles
+    # require an explicit release selection on the booted guest.
+    echo "To install a custom Entware bundle after boot, run: /opt/bin/maestro toolbox list"
+    echo "Then run: /opt/bin/maestro toolbox install RELEASE_TAG"
 else
     if [ "$LAB_OFFLINE" = 1 ]; then
         echo 'Error: No Maestro IPK found; build it with make ipk before initializing the lab.' >&2

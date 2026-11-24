@@ -14,6 +14,22 @@ pub struct CommandRunner {
     test_mode: bool,
 }
 
+#[cfg(feature = "linux")]
+pub struct CapturedOutput {
+    pub stdout: Vec<u8>,
+    pub truncated: bool,
+    pub status: std::process::ExitStatus,
+    pub had_stderr: bool,
+}
+
+#[cfg(feature = "linux")]
+impl CapturedOutput {
+    fn require_success(self) -> Result<Self> {
+        anyhow::ensure!(self.status.success(), "command exited unsuccessfully");
+        Ok(self)
+    }
+}
+
 #[cfg(unix)]
 struct ProcessGroupGuard(Option<u32>);
 
@@ -36,6 +52,11 @@ impl Drop for ProcessGroupGuard {
 impl CommandRunner {
     pub fn new(test_mode: bool) -> Self {
         Self { test_mode }
+    }
+
+    #[cfg(feature = "linux")]
+    pub fn is_test_mode(&self) -> bool {
+        self.test_mode
     }
 
     pub async fn run<I, S>(
@@ -88,6 +109,281 @@ impl CommandRunner {
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
             simulated: false,
         })
+    }
+
+    /// Capture only bounded output from a command that must complete within the deadline.
+    #[cfg(feature = "linux")]
+    pub async fn capture_bounded(
+        &self,
+        program: &Path,
+        args: &[&str],
+        deadline: Duration,
+        limit: usize,
+    ) -> Result<Vec<u8>> {
+        self.capture(program, args, deadline, limit, false, &[])
+            .await
+            .and_then(CapturedOutput::require_success)
+            .map(|output| output.stdout)
+    }
+
+    /// Retain the most recent bytes while continuing to drain the child pipe.
+    #[cfg(feature = "linux")]
+    pub async fn capture_tail(
+        &self,
+        program: &Path,
+        args: &[&str],
+        deadline: Duration,
+        limit: usize,
+    ) -> Result<(Vec<u8>, bool)> {
+        self.capture(program, args, deadline, limit, true, &[])
+            .await
+            .and_then(CapturedOutput::require_success)
+            .map(|output| (output.stdout, output.truncated))
+    }
+
+    #[cfg(feature = "linux")]
+    pub async fn capture_status(
+        &self,
+        program: &Path,
+        args: &[&str],
+        deadline: Duration,
+        limit: usize,
+    ) -> Result<CapturedOutput> {
+        self.capture(program, args, deadline, limit, false, &[])
+            .await
+    }
+
+    #[cfg(feature = "linux")]
+    pub async fn capture_package_job(
+        &self,
+        program: &Path,
+        args: &[&str],
+        environment: &[(&str, &str)],
+    ) -> Result<CapturedOutput> {
+        self.capture(
+            program,
+            args,
+            Duration::from_secs(20 * 60),
+            128 * 1024,
+            true,
+            environment,
+        )
+        .await
+    }
+
+    #[cfg(feature = "linux")]
+    async fn capture(
+        &self,
+        program: &Path,
+        args: &[&str],
+        deadline: Duration,
+        limit: usize,
+        tail: bool,
+        environment: &[(&str, &str)],
+    ) -> Result<CapturedOutput> {
+        self.capture_scoped(program, args, deadline, limit, tail, environment, None, &[])
+            .await
+    }
+
+    /// Fixed working directory and environment for local native adapters.
+    /// A zero tail limit drains without retaining potentially private output.
+    #[cfg(feature = "linux")]
+    #[allow(clippy::too_many_arguments)] // Keep native execution constraints explicit.
+    pub(crate) async fn capture_scoped(
+        &self,
+        program: &Path,
+        args: &[&str],
+        deadline: Duration,
+        limit: usize,
+        tail: bool,
+        environment: &[(&str, &str)],
+        directory: Option<&Path>,
+        remove_environment: &[&str],
+    ) -> Result<CapturedOutput> {
+        self.capture_scoped_input(
+            program,
+            args,
+            deadline,
+            limit,
+            tail,
+            environment,
+            directory,
+            remove_environment,
+            None,
+        )
+        .await
+    }
+
+    /// Native definition payloads are sent on stdin, never in argv or logs.
+    #[cfg(feature = "linux")]
+    #[allow(clippy::too_many_arguments)] // Adds stdin to the same scoped execution contract.
+    pub(crate) async fn capture_scoped_input(
+        &self,
+        program: &Path,
+        args: &[&str],
+        deadline: Duration,
+        limit: usize,
+        tail: bool,
+        environment: &[(&str, &str)],
+        directory: Option<&Path>,
+        remove_environment: &[&str],
+        input: Option<&[u8]>,
+    ) -> Result<CapturedOutput> {
+        use std::collections::VecDeque;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        if self.test_mode {
+            bail!("command capture is unavailable in simulation");
+        }
+        let mut command = Command::new(program);
+        for key in remove_environment {
+            command.env_remove(key);
+        }
+        if let Some(directory) = directory {
+            command.current_dir(directory);
+        }
+        command
+            .args(args)
+            .env("LC_ALL", "C")
+            .envs(environment.iter().copied())
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        #[cfg(unix)]
+        if !environment.is_empty()
+            || directory.is_some()
+            || !remove_environment.is_empty()
+            || input.is_some()
+        {
+            command.process_group(0);
+        }
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("failed to start {}", program.display()))?;
+        #[cfg(unix)]
+        let mut group_guard = ProcessGroupGuard(
+            if environment.is_empty()
+                && directory.is_none()
+                && remove_environment.is_empty()
+                && input.is_none()
+            {
+                None
+            } else {
+                child.id()
+            },
+        );
+        let stdin = child.stdin.take();
+        let mut stdout = child.stdout.take().context("missing command stdout")?;
+        let mut stderr = child.stderr.take().context("missing command stderr")?;
+        let result = timeout(deadline, async {
+            let read_stderr = async {
+                let mut first = [0];
+                let has_error = stderr.read(&mut first).await? != 0;
+                tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await?;
+                Ok::<_, anyhow::Error>(has_error)
+            };
+            let read_stdout = async {
+                let mut bytes = VecDeque::new();
+                let mut chunk = [0; 8192];
+                let mut truncated = false;
+                loop {
+                    let count = stdout.read(&mut chunk).await?;
+                    if count == 0 {
+                        break;
+                    }
+                    let overflow = (bytes.len() + count).saturating_sub(limit);
+                    if overflow > 0 {
+                        if !tail {
+                            bail!("command output exceeds {limit} bytes");
+                        }
+                        let discard = overflow.min(bytes.len());
+                        bytes.drain(..discard);
+                        bytes.extend(&chunk[overflow - discard..count]);
+                        truncated = true;
+                    } else {
+                        bytes.extend(&chunk[..count]);
+                    }
+                }
+                Ok::<_, anyhow::Error>((bytes.into(), truncated))
+            };
+            let write_stdin = async {
+                if let Some(data) = input {
+                    let mut pipe = stdin.context("missing command stdin")?;
+                    pipe.write_all(data).await?;
+                    pipe.shutdown().await?;
+                }
+                Ok::<(), anyhow::Error>(())
+            };
+            let ((stdout, truncated), had_stderr, ()) =
+                tokio::try_join!(read_stdout, read_stderr, write_stdin)?;
+            Ok(CapturedOutput {
+                stdout,
+                truncated,
+                had_stderr,
+                status: child.wait().await?,
+            })
+        })
+        .await
+        .with_context(|| format!("command timed out: {}", program.display()))?;
+        #[cfg(unix)]
+        if result.is_ok() {
+            group_guard.0 = None;
+        }
+        result
+    }
+
+    /// Stream binary export stdout into an already exclusively opened file.
+    /// No native stderr or private output is returned to the caller.
+    #[cfg(feature = "linux")]
+    pub(crate) async fn stream_backup(
+        &self,
+        program: &Path,
+        args: &[&str],
+        destination: std::fs::File,
+        deadline: Duration,
+        max_bytes: u64,
+    ) -> Result<u64> {
+        use tokio::io::AsyncReadExt;
+        anyhow::ensure!(
+            !self.test_mode && program.is_absolute(),
+            "native export unavailable"
+        );
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .env("LC_ALL", "C")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        command.process_group(0);
+        let mut child = command.spawn()?;
+        let mut group = ProcessGroupGuard(child.id());
+        let mut stdout = child
+            .stdout
+            .take()
+            .context("missing export stdout")?
+            .take(max_bytes.saturating_add(1));
+        let mut file = tokio::fs::File::from_std(destination);
+        let result = timeout(deadline, async {
+            let bytes = tokio::io::copy(&mut stdout, &mut file).await?;
+            anyhow::ensure!(
+                bytes <= max_bytes,
+                "native export exceeded available capture budget"
+            );
+            anyhow::ensure!(child.wait().await?.success(), "native export failed");
+            file.sync_all().await?;
+            Ok::<_, anyhow::Error>(bytes)
+        })
+        .await
+        .context("native export timed out")??;
+        group.0 = None;
+        Ok(result)
     }
 
     /// Run a command and all its hook subprocesses in a dedicated Unix process

@@ -11,22 +11,22 @@ guide or an aspirational redesign.
 
 ## System context
 
-An administrator uses either the standalone page served by Axum or the same UI
-rendered into a writable Asuswrt `user<n>.asp` extension page. At startup,
+Axum serves the standalone management UI. On Asuswrt, the router UI can also
+be rendered into a writable `user<n>.asp` extension page. At startup,
 Maestro replaces a configured ASUS menu while retaining its index for the
 firmware-provided icon. The service talks to
 configured
 router programs and files: Entware init scripts, nginx, dehydrated/OpenSSL,
 ipset/iptables, NVRAM, and optionally an AdGuard Home HTTP API.
 
-Maestro owns `MAESTRO_INPUT`/`MAESTRO_FORWARD` firewall chains and rules tagged `maestro:ban-attack`. The one-time Router Hub migration must retire old firewall objects before starting Maestro.
+Maestro owns `MAESTRO_INPUT`/`MAESTRO_FORWARD` firewall chains and rules tagged `maestro:ban-attack`.
 
 ## Components
 
 | Component | Responsibility | Important dependencies |
 | --- | --- | --- |
 | `src/main.rs` | CLI, configuration loading, startup, shutdown, listener, Linux platform selection, background task startup, and init-script signal handling | `config`, `state`, `api` |
-| `src/config.rs` | TOML schema, platform selection, defaults, validation, test-mode path overrides | filesystem paths and command paths |
+| `src/config.rs` | YAML schema, platform selection, defaults, validation, test-mode path overrides | filesystem paths and command paths |
 | `src/api/` | Stable Axum routes, authentication and responses; additive `/api/modules` discovery | `AppState`, `core::modules` registry, domain modules |
 | `src/state.rs` | Shared runtime state, dehydrated configuration, renewal loop, and tool updater | `storage`, `firewall`, dehydrated/OpenSSL through `CommandRunner`, GitHub HTTPS download |
 | `src/storage.rs` | Load/save JSON stores with atomic replacement, dehydrated certificate discovery, and policy fallback | configured data paths |
@@ -34,8 +34,8 @@ Maestro owns `MAESTRO_INPUT`/`MAESTRO_FORWARD` firewall chains and rules tagged 
 | `src/backup.rs` | Private CLI tar.gz backups, configured input selection, platform-specific destination, atomic publication without replacement | `config`, `CommandRunner`, configured tar |
 | `src/restore.rs` | Configuration-independent CLI recovery, complete archive staging and validation, descriptor-relative writes without following symlink parents, atomic file replacement | tar/gzip readers, rustix filesystem descriptors |
 | `src/platforms/upgrade.rs` (crate-root `upgrade`) | Router-only release verification, mandatory pre-install backup unless skipped, Entware process replacement | GitHub HTTPS, `backup`, opkg |
-| `src/platforms/nginx_upgrade.rs` (crate-root `nginx_upgrade`) | Router-only custom NGINX release verification, channel selection, mandatory backup, multi-IPK installation, post-test & service restart | GitHub HTTPS, `backup`, opkg, nginx config test, init script |
-| `src/nginx_render.rs` | Embedded Jinja policies, validated shared/site settings, shared-tree rendering and rollback | nginx settings TOML and rendered runtime files |
+| `src/platforms/toolbox.rs` (crate-root `toolbox`) | Router-only Toolbox release discovery, verified multi-IPK installation, backup and NGINX-specific activation/recovery | GitHub HTTPS, `backup`, opkg, nginx configuration test |
+| `src/nginx_render.rs` | Embedded Jinja policies, validated shared/site settings, shared-tree rendering and rollback | nginx settings YAML and rendered runtime files |
 | `src/nginx_ingress.rs` | Typed listener/source rules, validation, inherited access resolution, geo/default-server output and preview | `nginx_render`, `nginx_sites` |
 | `src/nginx_mutation.rs` | Object mutation snapshot and rollback of inputs, generated outputs, modes and enabled links | `nginx`, `nginx_render` |
 | `src/certificate_http.rs` | Serialized HTTP-01 session transitions, challenge readiness, scoped WAN lease and startup recovery | `state`, `nginx_ingress`, `CommandRunner` |
@@ -58,7 +58,8 @@ Domain sources for AdGuard, NGINX objects/sites, firewall and WOL live under
 `src/modules/`. The crate-root aliases remain in place for existing callers.
 `src/core/system_usage.rs` contains the common proc-based sampler. The
 `src/platforms/service_manager.rs` contract currently selects the existing
-init-script adapter on both ASUS and Linux; native systemd belongs to Phase 2.
+init-script adapter on both ASUS and Linux. The Linux tool API also exposes
+a native systemd inventory.
 ASUS menu/ASP rendering and router-only upgrade implementations live under
 `src/platforms/`. Rendering, certificate lifecycle, and Ban Shield background
 task startup remain in their existing compatibility locations with the same
@@ -78,6 +79,152 @@ See [Phase 1 compatibility and validation](phase1-compatibility.md) for
 rollback and the M1 stop gate. Phase 1 is not considered hardware validated
 until those checks have passed.
 
+## Linux browser shell and tool API
+
+The default Cargo profile is `asuswrt`. Build the Linux backend with
+`--no-default-features --features linux` or select `linux-ui` to include the
+embedded Svelte shell. The Linux tool API, session store, job manager,
+systemd, monitoring, package managers and workload coordinator are compiled
+only with `linux`. Shared REST routes and the existing compatibility UI
+remain available to both builds.
+
+Authenticated Linux workload operations are always enabled. Protected package
+and share operations depend on native readiness and the optional helper's
+root-owned grants; workload YAML adds no write-enable gate. Unknown settings, including retired write gates, are rejected.
+Router routes retain bearer-token authentication without administrator creation.
+
+A Linux build with the `linux-ui` feature embeds the static Svelte shell and
+serves its assets under `/linux-assets/` on the Linux platform. The Overview
+and Services pages load on demand. Services queries system and user systemd
+inventories through bounded native calls and displays partial-result warnings. The
+[Linux build guide](linux.md#svelte-shell-build) describes the build commands.
+
+The Overview resource widget reads a shared Linux sampler that takes a
+snapshot every three seconds and retains 60 history points. A failed CPU or
+memory read preserves the last valid sample and reports an error separately
+from the rest of the dashboard. Process activity reads numeric PID stat
+files only, with a cap on scanned processes. It computes CPU usage across
+samples only when a PID's start time matches. The sampler also reads whole-device
+I/O counters, local filesystem capacity, and Linux thermal zones.
+
+Linux status and tool routes accept bearer tokens or an expiring browser
+session. The session API issues an HttpOnly, SameSite=Strict cookie and keeps
+hashed session IDs in a private atomic file with an in-memory cache. Unified-YAML
+installations support bootstrap-token administrator setup and password login.
+Credentials use fixed PBKDF2-SHA256 parameters in the same YAML authority;
+setup changes the durable session scope and invalidates bootstrap cookies.
+Login attempts are bounded by peer address, and password work has a concurrency
+limit. Host and Origin validation applies to the
+session and tool routes. Browser authentication accepts loopback HTTP and exact
+configured HTTP/HTTPS origins, allowing LAN bootstrap before managed nginx and
+certificates are available. Cookies carry Secure on HTTPS origins only.
+Existing REST management routes use bearer authentication.
+
+The tool bridge exposes job history, details, and cancellation. The job store
+keeps up to 64 entries in memory and retains the latest 128 KiB of each job's
+output. A management operation holds an exclusive lock in the configured state
+directory through cleanup. Start and completion events go to the owner-only
+`management-audit.jsonl` file. Job details and output are process-local.
+
+The declarative workload foundation stores authored YAML and content-addressed
+history in an owner-only directory. History retains eight revisions by recency,
+refreshes reused bases, and reports safe validity/error metadata. Selected YAML authorities use separate `<filename>.history` directories. Directory scans and file reads are
+bounded, and unexpected files are retained rather than pruned. Linux startup accepts a private YAML authority
+whose server settings are checked separately from repairable workload definitions.
+HTTP and stdio MCP use that same selected file. Configuration plans compare effective
+server settings against the running settings and live administrator credentials.
+Server settings must be saved separately from native resource changes. Saving
+them reports a restart requirement and blocks further managed mutations until
+startup loads the new settings. Native resource publication in `next_start`
+mode remains unavailable. Administrator bootstrap writes
+credentials under the same authority lock, even when workload definitions need repair.
+It uses YAML parser source spans to edit credential fields while preserving
+comments, line endings and unrelated resource text.
+Recovery journals record
+that filename and reject recovery through a different authority. Older journals
+without a filename retain the `workloads.yaml` identity. The composite apply coordinator rechecks the reviewed
+fingerprint and runs provider preflight before mutation across supported backends:
+user Podman Quadlet units, rootless/root Podman Compose, Docker Compose, Incus VMs/containers,
+and KVM/libvirt domains. It also coordinates storage directory/disk provisioning and
+declarative Samba/NFS file share configurations. It writes the candidate
+and a prepared journal, then publishes the desired YAML before native changes.
+Failures retain that desired state and the recovery journal. Versioned recovery
+also supports older journals that published YAML after native changes. An incomplete journal blocks subsequent saves and
+applies until recovery. Resume verifies native state and skips changes already
+applied. Unknown or drifted state keeps the journal pending. Native adapters
+must verify ownership before mutation.
+Quadlet application inventory also reads bounded local Podman metadata rather
+than treating loaded systemd `ExecStart` as proof of the running revision. The
+reader uses a fixed service-label filter, validates member identities, native
+names and fingerprint labels, and rejects duplicates, unexpected members and
+oversized results. Missing filtered members receive an exact native-name absence
+check so a stopped foreign object cannot be replaced on Start. Queries force
+local Podman mode, have bounded deadlines, and return only configured member
+names/states and revision-match flags. Loaded unit activity must match the same
+individual members; swapped/mixed identities do not establish running state.
+Owned running containers with a different configured-definition fingerprint are
+reported as requiring restart; Start refuses that state, while Stop/Restart still
+require verified ownership. Unknown or foreign runtime state hides lifecycle
+controls. Boot-only/runtime fingerprint separation remains incomplete.
+The Applications inventory pairs runtime member states with configured container
+port mappings. Container lifecycle jobs and bounded log reads resolve their target
+from the saved service definition and verify provider ownership. Compose scopes
+the operation to a named service, and Quadlet scopes it to a generated user unit.
+Image pulls fetch the configured image reference without restarting the workload.
+Boot policy is stored on the managed service.
+Revert can supersede a published pending transition after verifying that removed
+resources absent from both current and target are already absent natively. An
+unchanged target resource from the earlier transition must already match its
+published definition; otherwise recovery must resolve it first. Changed resources
+are observed against the new before/after definitions, and matching target state
+is skipped. Version 3 journals alternate between two bounded candidate files so
+preparing a replacement cannot destroy the prior candidate. The prepared journal
+retains its predecessor until the replacement YAML is committed. Recovery before
+that commit restores the prior journal; recovery after commit reconciles the
+replacement. Nested or unpublished prepared supersession is refused.
+Version 4 journals record `now` or `next_start`; older journals default to `now`.
+Preflight, publication and recovery inspection use that persisted mode. Providers
+must explicitly support next-start operations; the default denies them before
+intent or YAML publication. Managed directory publication uses the same durable
+ownership markers in either mode. Rootless Quadlet next-start updates publish
+owned files and reload the user manager without start/stop/restart commands.
+Active unchanged units may retain their current processes while loading new unit
+definitions for a later start; active removals and transitional states remain
+gated. Unified Linux configuration selects the private `containers/systemd/maestro`
+directory under `XDG_CONFIG_HOME` or `~/.config`; it does not create that directory
+while loading settings. This path must be explicitly prepared before publication.
+Version 5 journals also retain the resource whose native publication or verification
+failed. Messages exposed by status are fixed diagnostics rather than persisted
+native output. Every journal publication records its UTC update time. Recovery
+clears failure only when advancing a verified transition, and older journal
+versions retain their original YAML publication ordering after a retry failure.
+`managed_apply_status` reads completed as well as pending progress without native
+commands. `managed_apply_retry` uses the recorded mode and refuses to replay any
+interrupted removal: native inspection must already confirm the removal is done.
+The explicit legacy fingerprint-based resume path retains its earlier behavior.
+Retrying an already complete journal is an idempotent metadata read.
+Version 6 adds terminal `aborted` intent. Automatic retry checks the authoritative
+revision before reading a prepared candidate or invoking providers. If YAML still
+matches the recorded base, it restores a superseded journal or marks standalone
+intent aborted without publishing it. This also handles an installation with no
+YAML yet and a damaged unused candidate. If desired YAML was committed, retry
+uses the recorded mode and native-state checks normally; an unrelated current
+revision leaves the journal untouched. Aborted intent does not block later saves
+or appear as pending. Explicit legacy fingerprint resume retains its reviewed
+publication behavior.
+Authoritative and backend directory locks use an explicit unlock guard, so a
+file descriptor temporarily inherited by a child process cannot retain the lock
+after the owning publication finishes. The guard releases on both success and
+error while descriptor closure remains a fallback.
+The typed container model validates bounded health commands, duration values and
+healthy dependency requirements before publication. Compose rendering retains
+these fields and escapes literal dollar signs for the native Compose parser.
+
+The tool bridge also exposes a JSON-RPC 2.0 MCP interface at `POST /api/mcp` supporting
+protocol negotiation (`initialize`), tool enumeration (`tools/list`), and execution
+(`tools/call`) sharing the same argument-validation and capability policies as the REST
+tools endpoint.
+
 ## Dependency direction
 
 API handlers operate on `AppState` and call domain modules. Domain modules own
@@ -90,7 +237,7 @@ configuration is deliberately emitted in its shell-sourceable format, with
 shell-quoted paths and validated hook variable names; installed hooks remain
 administrator-trusted programs.
 
-The native Linux platform (`platform = "linux"`, `test_mode = false`)
+The native Linux platform (private native `version: 1` YAML)
 uses the same command runner and application services as production, but
 does not mount the ASUS menu, write an ASP page at standalone startup, or
 query NVRAM for AdGuard LAN IP discovery. It requires real Linux command paths,
@@ -121,7 +268,7 @@ created. An identical main configuration is left unchanged.
 
 ## Data and control flow
 
-At startup, `main` loads and validates TOML, applies test-mode overrides when
+At startup, `main` loads and validates YAML, applies test-mode overrides when
 requested, loads JSON stores and imports matching dehydrated `.cfg`/`.txt`
 certificate pairs plus otherwise-unmanaged certificates deployed below the
 nginx root, initializes the firewall manager, renders the UI, starts
@@ -179,9 +326,9 @@ failure restores the previous in-memory policy and attempts to restore the
 previous engine configuration. `FirewallPolicy` may also contain a persisted
 `tuning` override for thresholds, retention, reputation-aware re-promotion, and
 ban durations. The Firewall tab writes that override through the same atomic
-policy-update path; when it is absent, the application `[firewall]` TOML values
+policy-update path; when it is absent, the application `firewall` YAML values
 remain authoritative. Prefixes, backend commands, and bounded capacities stay
-TOML-only.
+YAML-only.
 The `BanRule.attempts` field remains accepted for API compatibility but is not
 used by the engine; `weight` is the effective rule contribution.
 
@@ -263,7 +410,7 @@ The production backend manages IPv4 and IPv6 `hash:net` ipsets and owned
 Maestro-owned parent hooks; administrator or other-tool rules are not removed. The
 application path currently supplies a 65,536-entry ipset capacity; the lower
 level engine type accepts a configurable capacity, but there is not yet an
-application `[firewall]` setting for it.
+application `firewall` setting for it.
 
 Reconciliation verifies or creates compatible sets and owned chains, updates
 `nomatch` allowlist exceptions, and restores the desired entries by building
@@ -311,9 +458,7 @@ at `/opt/etc/maestro/firewall-policy.json`. The Linux platform only
 loads and saves `data_dir/firewall-policy.json` to avoid touching host
 or router data.
 
-The engine reads only version-1 `ban-attack-state.json`. Older ban documents
-must be migrated by running 0.7.2 before upgrading; see the
-[migration guide](migration.md). A malformed state file or unsupported
+The engine reads only version-1 `ban-attack-state.json`. A malformed state file or unsupported
 schema is logged and leaves the worker running in `degraded` state.
 Engine writes do not serialize historical mirror fields.
 Engine writes are dirty-state writes: ordinary matches wait for the configured
@@ -349,17 +494,17 @@ restarts dnsmasq through the configured service command and arguments.
   ancestors, and nginx managed trees are rejected where applicable.
 - Nginx enablement is represented by the expected relative symlink hierarchy.
   Failed validation or lifecycle actions restore the prior enabled state.
-- Managed nginx inputs live in `<nginx.inputs_dir>/sites.toml`; validated policy overrides,
+- Managed nginx inputs live in `<nginx.inputs_dir>/sites.yaml`; validated policy overrides,
   aliases, upstreams, and enablement are saved with a rollback guard across site
   validation and reload. Generated comments are output metadata, not imported
   settings. Global defaults and
-  shared parameters live only in `<nginx.inputs_dir>/nginx.toml`, using `[global]`,
-  `[site_defaults]`, `[limit_policies.<name>]`, and root-level allowlist arrays.
+  shared parameters live only in `<nginx.inputs_dir>/nginx.yaml`, using `global`,
+  `site_defaults`, `[limit_policies.<name>]`, and root-level allowlist arrays.
   Named policies generate separate per-IP request and connection zones. Managed
   locations resolve site/parent policy names and emit both limit directive families
   explicitly, with legacy supplemental request limits retained. Different names
   provide independent accounting; reusing a name shares accounting across sites.
-  Text allowlist fragments are generated from TOML. Runtime user,
+  Text allowlist fragments are generated from YAML. Runtime user,
   daemon mode and temporary parent are saved inputs rather than edits to generated
   nginx text. The effective UID determines whether a worker-user directive is
   emitted: non-root omits it; root uses the configured user or `nobody`. Temporary
@@ -370,10 +515,7 @@ restarts dnsmasq through the configured service command and arguments.
   render-data fragments are read there. `nginx.root_dir` holds final nginx files,
   including generated `settings/*.conf` runtime includes. A rollback guard spans
   both roots during settings saves, validation, and reload. Test mode overrides
-  both paths. `migrate-nginx-inputs` relocates current-format legacy inputs while
-  Maestro is stopped: destinations must be absent or byte-identical, validation
-  failures restore both trees, and legacy `.conf` files remain usable runtime
-  includes. Legacy TOML and text inputs are removed only within that transaction.
+  both paths. Offline preparation of an existing router is documented in [installation](installation.md#upgrade-from-maestro-0110).
 - Versioned Jinja policies are embedded in the binary. Deployment data fragments
   cannot shadow policy modules. No template/root-file editor or legacy
   configuration conversion is exposed by the service.
@@ -390,7 +532,7 @@ restarts dnsmasq through the configured service command and arguments.
 - The WOL view polls `/api/wol/status` only while that tab is active. The
   endpoint matches configured MAC addresses against `ip neigh` output and
   checks each resolved IP with a bounded ping.
-- The UI remains a single self-contained HTML/ASP asset and must work without
+- The router UI remains a single self-contained HTML/ASP asset and must work without
   a frontend package manager or third-party CDN.
 - Maestro service (`S99maestro`) cannot be disabled via API request, init
   script, or UI action to ensure management engine availability.
@@ -424,7 +566,7 @@ test mode is active.
 
 Add API behavior in the matching `src/api/<area>.rs` module, domain semantics
 in its owning module, and configuration in `src/config.rs` with a conservative
-default, example TOML entry, and test-mode override for router paths. Add
+default, example YAML entry, and test-mode override for router paths. Add
 integration coverage in `tests/` when behavior crosses the HTTP or command
 boundaries.
 
@@ -439,3 +581,6 @@ and backend reconciliation. The broader integration suite covers
 authentication, dashboard, services, nginx, WOL, firewall, and AdGuard API
 flows; unit tests cover path safety, storage atomicity, command simulation,
 UI rendering, matching, aggregation, and log rotation.
+
+
+Configuration is YAML only. The root `version` field selects the native Linux schema; other documents use the router schema and cannot select Linux. Missing configuration fails startup except for explicitly requested simulation. Bounded YAML readers reject aliases, anchors, explicit tags, duplicate mapping keys and multiple documents. Unknown configuration fields fail validation.

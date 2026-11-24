@@ -1,0 +1,252 @@
+{
+  "cases": [
+    {
+      "value": "",
+      "valid": true
+    },
+    {
+      "value": "0",
+      "valid": false
+    },
+    {
+      "value": "+",
+      "valid": false
+    },
+    {
+      "value": "-1s",
+      "valid": false
+    },
+    {
+      "value": "tomorrow",
+      "valid": false
+    },
+    {
+      "value": "1d",
+      "valid": false
+    },
+    {
+      "value": "1..2s",
+      "valid": false
+    },
+    {
+      "value": ".s",
+      "valid": false
+    },
+    {
+      "value": "1s ",
+      "valid": false
+    },
+    {
+      "value": "1s-2s",
+      "valid": false
+    },
+    {
+      "value": "1h30m",
+      "valid": true
+    },
+    {
+      "value": "1.s",
+      "valid": true
+    },
+    {
+      "value": "1µs",
+      "valid": true
+    },
+    {
+      "value": "1μs",
+      "valid": true
+    },
+    {
+      "value": "9223372036854775807ns",
+      "valid": true
+    },
+    {
+      "value": "9223372036854775808ns",
+      "valid": false
+    },
+    {
+      "value": "2562047h47m16.854775807s",
+      "valid": true
+    },
+    {
+      "value": "2562047h47m16.854775808s",
+      "valid": false
+    },
+    {
+      "value": "99999999999999999999999999999999999999999h",
+      "valid": false
+    },
+    {
+      "value": "0ns",
+      "valid": false
+    },
+    {
+      "value": "0us",
+      "valid": false
+    },
+    {
+      "value": "0µs",
+      "valid": false
+    },
+    {
+      "value": "0ms",
+      "valid": false
+    },
+    {
+      "value": "0s",
+      "valid": false
+    },
+    {
+      "value": "0m",
+      "valid": false
+    },
+    {
+      "value": "0h",
+      "valid": false
+    },
+    {
+      "value": "1ns",
+      "valid": true
+    },
+    {
+      "value": "1us",
+      "valid": true
+    },
+    {
+      "value": "1µs",
+      "valid": true
+    },
+    {
+      "value": "1ms",
+      "valid": true
+    },
+    {
+      "value": "1s",
+      "valid": true
+    },
+    {
+      "value": "1m",
+      "valid": true
+    },
+    {
+      "value": "1h",
+      "valid": true
+    },
+    {
+      "value": "+.5ns",
+      "valid": false
+    },
+    {
+      "value": "+.5us",
+      "valid": true
+    },
+    {
+      "value": "+.5µs",
+      "valid": true
+    },
+    {
+      "value": "+.5ms",
+      "valid": true
+    },
+    {
+      "value": "+.5s",
+      "valid": true
+    },
+    {
+      "value": "+.5m",
+      "valid": true
+    },
+    {
+      "value": "+.5h",
+      "valid": true
+    },
+    {
+      "value": "0.000000001ns",
+      "valid": false
+    },
+    {
+      "value": "0.000000001us",
+      "valid": false
+    },
+    {
+      "value": "0.000000001µs",
+      "valid": false
+    },
+    {
+      "value": "0.000000001ms",
+      "valid": false
+    },
+    {
+      "value": "0.000000001s",
+      "valid": true
+    },
+    {
+      "value": "0.000000001m",
+      "valid": true
+    },
+    {
+      "value": "0.000000001h",
+      "valid": true
+    },
+    {
+      "value": "0.0000000001ns",
+      "valid": false
+    },
+    {
+      "value": "0.0000000001us",
+      "valid": false
+    },
+    {
+      "value": "0.0000000001µs",
+      "valid": false
+    },
+    {
+      "value": "0.0000000001ms",
+      "valid": false
+    },
+    {
+      "value": "0.0000000001s",
+      "valid": false
+    },
+    {
+      "value": "0.0000000001m",
+      "valid": true
+    },
+    {
+      "value": "0.0000000001h",
+      "valid": true
+    },
+    {
+      "value": "1.2345678901234567890123456789ns",
+      "valid": true
+    },
+    {
+      "value": "1.2345678901234567890123456789us",
+      "valid": true
+    },
+    {
+      "value": "1.2345678901234567890123456789µs",
+      "valid": true
+    },
+    {
+      "value": "1.2345678901234567890123456789ms",
+      "valid": true
+    },
+    {
+      "value": "1.2345678901234567890123456789s",
+      "valid": true
+    },
+    {
+      "value": "1.2345678901234567890123456789m",
+      "valid": true
+    },
+    {
+      "value": "1.2345678901234567890123456789h",
+      "valid": true
+    }
+  ],
+  "method": "standalone copy of the frozen reference predicate; Go standard-library evaluation",
+  "reference": "c1a9f32f5898146ae7ac339043b910b8e2a2c438",
+  "source": "internal/declarative/container_options.go:containerDuration",
+  "toolchain": "go1.27.4-X:nodwarf5"
+}

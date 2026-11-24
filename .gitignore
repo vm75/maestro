@@ -1,6 +1,7 @@
 /target
 /dist/
 /data/
+/.dev-tools/
 /.env
 /.env.*
 !/.env.example

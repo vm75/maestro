@@ -1,31 +1,50 @@
 [package]
 name = "maestro"
-version = "0.11.0"
+version = "0.12.0"
 edition = "2024"
 description = "Modular host management for Asuswrt-Merlin and Linux"
 license = "MIT"
 rust-version = "1.85"
 
+[features]
+default = ["asuswrt"]
+asuswrt = []
+linux = ["dep:parking_lot", "dep:quick-xml", "dep:ring"]
+linux-ui = ["linux"]
+
+[[bin]]
+name = "maestro-admin"
+path = "src/bin/maestro-admin.rs"
+required-features = ["linux"]
+
+[[bin]]
+name = "maestro-mcp-stdio"
+path = "src/bin/maestro-mcp-stdio.rs"
+required-features = ["linux"]
+
 [dependencies]
 anyhow = "1"
-axum = { version = "0.8", features = ["macros", "ws"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "tracing"] }
 chrono = { version = "0.4", features = ["serde", "clock"] }
 clap = { version = "4", features = ["derive"] }
 futures-util = "0.3"
 ipnet = { version = "2", features = ["serde"] }
 libc = "0.2"
-parking_lot = "0.12"
+parking_lot = { version = "0.12", optional = true }
 minijinja = { version = "3.0.5", default-features = false, features = ["builtins", "macros", "multi_template", "serde", "std_collections"] }
+quick-xml = { version = "0.39.4", optional = true }
 regex = "1"
+ring = { version = "0.17", optional = true }
 regex-automata = { version = "0.4", features = ["hybrid", "syntax", "perf-literal"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9.34"
+unsafe-libyaml = "0.2.11"
 sha2 = "0.10"
 subtle = "2"
-tokio = { version = "1", features = ["full"] }
-toml = "0.9"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tower-http = { version = "0.6", features = ["cors", "limit", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

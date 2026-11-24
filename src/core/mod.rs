@@ -1,2 +1,10 @@
+#[cfg(feature = "linux")]
+pub mod declarative;
+#[cfg(feature = "linux")]
+pub mod jobs;
+#[cfg(feature = "linux")]
+pub mod linux_config;
 pub mod modules;
+#[cfg(feature = "linux")]
+pub mod monitor;
 pub mod system_usage;

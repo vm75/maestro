@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import threading
 import time
-import tomllib
+import yaml
 import unittest
 
 from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader, StrictUndefined
@@ -69,7 +69,7 @@ def fixture(empty_filter=False, limits=False):
     with tempfile.TemporaryDirectory(prefix='maestro-policies-') as tmp, ThreadingHTTPServer(('127.0.0.1', 0), Backend) as backend:
         dest = Path(tmp)
         upstream = f'http://127.0.0.1:{backend.server_port}'
-        sites = tomllib.loads((ROOT / 'examples/sites.toml').read_text())['sites']
+        sites = yaml.safe_load((ROOT / 'examples/sites.yaml').read_text())['sites']
         hostnames = [HA_HOST, 'policy.example.test', 'custom.example.test']
         for site in sites.values():
             hostnames.extend(site.get('server_name', '').split())

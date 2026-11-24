@@ -1,9 +1,23 @@
 pub mod adguard;
 pub mod certificates;
 pub mod firewall;
+#[cfg(feature = "linux")]
+mod linux_session_store;
+#[cfg(feature = "linux")]
+mod linux_shared;
+#[cfg(feature = "linux-ui")]
+mod linux_ui;
+#[cfg(feature = "linux")]
+pub mod mcp;
 pub mod nginx;
 pub mod services;
+#[cfg(feature = "linux")]
+mod sessions;
 pub mod system;
+#[cfg(feature = "linux")]
+mod terminal;
+#[cfg(feature = "linux")]
+pub mod tools;
 pub mod wireguard;
 pub mod wol;
 
@@ -38,6 +52,12 @@ pub fn app(state: AppState) -> anyhow::Result<Router> {
         state.clone(),
         require_auth,
     ));
+    #[cfg(feature = "linux")]
+    let api = if state.config.platform == crate::config::Platform::Linux {
+        api.merge(tools::router(state.clone())?)
+    } else {
+        api
+    };
 
     let cors = if state
         .config
@@ -58,7 +78,14 @@ pub fn app(state: AppState) -> anyhow::Result<Router> {
             .allow_methods(Any)
     };
 
-    Ok(Router::new()
+    let app = Router::new();
+    #[cfg(feature = "linux-ui")]
+    let app = if state.config.platform == crate::config::Platform::Linux {
+        app.route("/linux-assets/{name}", get(linux_ui::asset))
+    } else {
+        app
+    };
+    Ok(app
         .route("/", get(index))
         .route("/favicon.ico", get(logo_svg))
         .route("/favicon.svg", get(logo_svg))
@@ -188,6 +215,10 @@ pub fn router() -> Router<AppState> {
 }
 
 pub async fn index(State(state): State<AppState>) -> Response {
+    #[cfg(feature = "linux-ui")]
+    if state.config.platform == crate::config::Platform::Linux {
+        return linux_ui::index();
+    }
     Html(asus_ui::render_ui(&state.config)).into_response()
 }
 

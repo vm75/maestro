@@ -24,7 +24,7 @@ pub async fn require_auth(State(state): State<AppState>, request: Request, next:
     }
 }
 
-fn bearer_token(request: &Request) -> Option<String> {
+pub(crate) fn bearer_token(request: &Request) -> Option<String> {
     request
         .headers()
         .get(header::AUTHORIZATION)

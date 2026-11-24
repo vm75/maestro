@@ -1,4 +1,4 @@
-# AArch64 Maestro Lab
+# QEMU router development environment
 
 This lab boots an AArch64 Alpine Linux guest in QEMU, provisions simulated Asuswrt firmware interfaces and Entware, installs the standard Maestro AArch64 musl IPK, and exercises the live router web interface and WireGuard toggling.
 
@@ -42,20 +42,21 @@ sudo dnf install qemu-system-aarch64 qemu-img edk2-aarch64
 Prepare the media and boot the installer:
 
 ```sh
-make ipk
-make init-lab
+make init-router
 ```
 
-Build the IPK first so `init-lab` can verify its checksum and support for deferred
-service startup before creating the disk. Rebuild older IPKs with `make ipk`.
+`make init-router` builds the IPK before preparing the guest, verifying its
+checksum and support for deferred service startup before creating the disk.
+To use an already-built IPK without rebuilding, use the legacy `make init-lab`
+command. Rebuild older IPKs with `make ipk`.
 
 `lab/aarch64/init.sh` downloads the latest stable Alpine AArch64 **Standard**
 ISO and its SHA-256 checksum into ignored `data/lab/`. It reuses the newest
 cached Standard AArch64 ISO when preparing a new disk without checking for updates, and
 verifies its checksum before booting. Failed downloads are not retained as ISOs.
 It creates `data/lab/router-lab.qcow2` as a 4 GB disk only when missing, then
-boots the installer. If the disk already exists, `init-lab` exits immediately
-without downloading media or starting QEMU. Use `run-lab` to boot an existing
+boots the installer. If the disk already exists, `init.sh` exits immediately
+without downloading media or starting QEMU. Use `run-router` to boot an existing
 disk, including after installation.
 
 For installer boots, `init.sh` also creates a temporary Alpine configuration
@@ -71,7 +72,7 @@ QEMU exports only the `maestro` 9p mount tag at `/mnt/maestro`. Reprovision old 
 
 ## 3. Install Alpine Linux in the Guest
 
-`make init-lab` automatically loads `9pnet_virtio`, mounts the repository at
+`make init-router` automatically loads `9pnet_virtio`, mounts the repository at
 `/mnt/maestro`, and runs `setup-alpine` with the supplied answer file before
 the login prompt. Erasure of the newly created `/dev/vda` is automatically
 confirmed using Alpine's `ERASE_DISKS` option.
@@ -97,16 +98,16 @@ DNS, temporary runtime filesystems and the project share, and runs provisioning
 against the installed disk. It then unmounts those filesystems and powers off.
 Provisioning failures leave the console available for inspection rather than
 reporting success or powering off. Services are enabled during setup and start
-when `make run-lab` boots the installed guest.
+when `make run-router` boots the installed guest.
 The automatic installer hook is removed before installation so it does not run
-on installed-system boots. `make run-lab` attaches neither the ISO nor the overlay.
+on installed-system boots. `make run-router` attaches neither the ISO nor the overlay.
 
 ## 4. Boot the Installed Guest
 
 Run QEMU with only the disk:
 
 ```sh
-make run-lab
+make run-router
 ```
 
 Network port forwards:
@@ -131,8 +132,8 @@ make ipk
 
 ## 6. Provision an Existing Guest Manually
 
-New guests are provisioned automatically during `make init-lab`. To rerun
-provisioning on an existing guest, boot it with `make run-lab`. Installer and
+New guests are provisioned automatically during `make init-router`. To rerun
+provisioning on an existing guest, boot it with `make run-router`. Installer and
 normal disk boots export the project through QEMU 9p as a read-only share.
 Run these commands as root inside the VM (omit the mount commands if already mounted):
 
@@ -167,8 +168,20 @@ The provisioning script:
 4. Installs the `/bin/nvram` mock, `/usr/local/libexec/router-lab/service` mock, and syslog fallback.
 5. Installs `wireguard-tools` and `wg-quick`, configures `/opt/etc/wireguard/wgs1.conf`, and sets up short-name links.
 6. Launches BusyBox httpd with Basic Auth on port 8080, adds a stunnel TLS listener on 8443, and seeds `/www/require/modules/menuTree.js` and `/www/state.js`.
-7. Seeds `/opt/etc/maestro/firewall-policy.json` (disabled) and generates `/opt/etc/maestro/maestro.toml`.
+7. Seeds `/opt/etc/maestro/firewall-policy.json` (disabled) and generates `/opt/etc/maestro/maestro.yaml`.
 8. Validates the SHA-256 checksum and installs `maestro_*_aarch64-3.10.ipk` via Entware `opkg`.
+
+Provisioning uses the NGINX package installed from the standard Entware feed in
+Step 5. It does not automatically install or upgrade custom Toolbox packages.
+To install a custom NGINX bundle, boot the guest and run:
+
+```sh
+/opt/bin/maestro toolbox list
+/opt/bin/maestro toolbox install toolbox-nginx-entware-1.30.8-99_aarch64
+```
+
+Choose the exact release tag from the list; Maestro verifies and installs all
+IPKs in that release.
 
 During ISO installation, provisioning runs with `LAB_OFFLINE=1`: OpenRC service
 starts and kernel interface probes are deferred, and the package setup hook uses

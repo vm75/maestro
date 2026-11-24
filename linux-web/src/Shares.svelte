@@ -1,0 +1,309 @@
+<script lang="ts">
+  import { onMount } from 'svelte'
+  import { invokeTool, type Discovery, type Status } from './lib/api'
+
+  let { status: _status, discovery, nativeOnly = false }: { status: Status; discovery: Discovery; nativeOnly?: boolean } = $props()
+
+  interface Share {
+    id: string
+    protocol: string
+    path: string
+    enabled: boolean
+    readOnly: boolean
+    users: string[]
+    clients: string[]
+  }
+
+  interface NativeBackend { protocol: string; available: boolean; canManage: boolean; setupRequired: boolean; reason: string; notice: string; managedFile: string }
+  interface NativeShare { name: string; path: string; protocol: string; runtime: string; configured: boolean; ownership: string; connections?: number }
+  interface SharesStatusResponse { backends: NativeBackend[]; shares: NativeShare[]; warnings: string[] }
+
+  let shares = $state<Share[]>([])
+  let sharesStatus = $state<SharesStatusResponse | null>(null)
+  let loading = $state(true)
+  let error = $state('')
+  let password = $state('')
+  let passwordAgain = $state('')
+  let passwordPending = $state(false)
+  let passwordError = $state('')
+  let passwordMessage = $state('')
+  const sambaCapability = $derived(discovery.permissions?.sambaPassword)
+
+  async function loadData() {
+    loading = true
+    error = ''
+    try {
+      const [sharesRes, statusRes] = await Promise.all([
+        nativeOnly ? Promise.resolve({ shares: [] as Share[] }) : invokeTool<{ shares: Share[] }>('managed_shares', {}),
+        invokeTool<SharesStatusResponse>('shares_list', {}),
+      ])
+      shares = sharesRes.shares
+      sharesStatus = statusRes
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Could not load shares data'
+    } finally {
+      loading = false
+    }
+  }
+
+  async function changeSambaPassword(event: SubmitEvent) {
+    event.preventDefault()
+    if (passwordPending || sambaCapability?.status !== 'ready') return
+    passwordError = ''
+    passwordMessage = ''
+    if (!password || password !== passwordAgain) {
+      passwordError = 'Passwords must be non-empty and match.'
+      return
+    }
+    if (!window.confirm('Change the trusted workload account Samba password?')) return
+    passwordPending = true
+    try {
+      await invokeTool('shares_samba_password', { password, confirm: true })
+      passwordMessage = 'Samba password updated for the authorized workload account.'
+    } catch (failure) {
+      passwordError = failure instanceof Error ? failure.message : 'Could not update Samba password.'
+    } finally {
+      password = ''
+      passwordAgain = ''
+      passwordPending = false
+    }
+  }
+
+  onMount(() => {
+    void loadData()
+  })
+</script>
+
+<div class="shares-container">
+  <!-- Service Health & Status -->
+  <section class="panel" aria-labelledby="status-heading">
+    <h2 id="status-heading">Services Status</h2>
+    {#if sharesStatus}
+      <div class="services-status-grid">
+        {#each sharesStatus.backends as backend (backend.protocol)}
+          <article class="service-card">
+            <div class="service-header">
+              <h3>{backend.protocol.toUpperCase()}</h3>
+              <span class="status-badge" class:configured={backend.available}>{backend.available ? 'Utility available' : 'Unavailable'}</span>
+            </div>
+            <p class="service-meta">Fragment: <code>{backend.managedFile}</code></p>
+            {#if backend.setupRequired}<p>Host setup is required.</p>{/if}
+            <p>{backend.reason}</p><p class="service-meta">{backend.notice}</p>
+          </article>
+        {/each}
+      </div>
+    {:else if loading}
+      <p role="status">Checking services status…</p>
+    {/if}
+    {#if sharesStatus}
+      {#each sharesStatus.warnings as warning}<p role="status">{warning}</p>{/each}
+      <h3>Observed native shares</h3>
+      <p>Native publication ownership has not been verified. Configured and runtime state are observations only.</p>
+      {#each sharesStatus.shares as native}
+        <article class="service-card">
+          <strong>{native.protocol.toUpperCase()} · {native.name}</strong>
+          {#if native.path}<p><code>{native.path}</code></p>{/if}
+          {#if !native.configured && native.runtime === 'connected'}<p>Active Samba connection reported by the host, without a matching current configuration entry. This may be an automatic home share or a session retaining earlier settings; it is not a Maestro share definition.</p>{/if}
+          <p>{native.configured ? 'Configured on host' : 'No matching host configuration entry'} · {native.runtime.replaceAll('_', ' ')}{native.connections === undefined ? '' : ' · ' + native.connections + ' connections'}</p>
+        </article>
+      {:else}
+        <p>No native shares were observed with the current permissions.</p>
+      {/each}
+    {/if}
+  </section>
+
+  <section class="panel" aria-labelledby="password-heading">
+    <h2 id="password-heading">Samba account password</h2>
+    <p>This changes only the trusted Linux workload account's Samba password. Account selection is not accepted by the API, and passwords are not saved in Maestro job history.</p>
+    {#if sambaCapability?.status !== 'ready'}
+      <p role="status">{sambaCapability?.reason ?? 'Samba password capability is unavailable.'} Review optional helper installation and both administrator policies.</p>
+    {/if}
+    <form class="password-form" onsubmit={changeSambaPassword}>
+      <label for="samba-password">New Samba password</label>
+      <input id="samba-password" type="password" autocomplete="new-password" bind:value={password}
+        required maxlength="256" disabled={passwordPending || sambaCapability?.status !== 'ready'}>
+      <label for="samba-password-again">Confirm new Samba password</label>
+      <input id="samba-password-again" type="password" autocomplete="new-password" bind:value={passwordAgain}
+        required maxlength="256" disabled={passwordPending || sambaCapability?.status !== 'ready'}>
+      <button type="submit" disabled={passwordPending || sambaCapability?.status !== 'ready'}>
+        {passwordPending ? 'Changing…' : 'Change Samba password'}
+      </button>
+    </form>
+    {#if passwordError}<p role="alert">{passwordError}</p>{/if}
+    {#if passwordMessage}<p role="status">{passwordMessage}</p>{/if}
+  </section>
+
+  <!-- Network Shares List -->
+  {#if !nativeOnly}
+<section class="panel" aria-labelledby="shares-heading">
+    <div class="panel-header">
+      <h2 id="shares-heading">Configured Shares</h2>
+      <a href="#applications" class="edit-link">Edit in Workloads YAML</a>
+    </div>
+
+    {#if error}
+      <p role="alert" class="error-msg">{error}</p>
+    {/if}
+
+    {#if loading}
+      <p role="status">Loading shares…</p>
+    {:else if shares.length === 0}
+      <p class="empty-state">
+        No network shares configured yet. Define shares under the <code>shares:</code> section of your declarative workloads YAML.
+      </p>
+    {:else}
+      <div class="shares-grid">
+        {#each shares as share (share.id)}
+          <article class="share-card">
+            <div class="share-header">
+              <h3>{share.id}</h3>
+              <div class="badges">
+                <span class="protocol-badge protocol-{share.protocol}">{share.protocol.toUpperCase()}</span>
+                <span class="perm-badge">{share.readOnly ? 'Read-Only' : 'Read/Write'}</span>
+              </div>
+            </div>
+            <p class="share-path"><code>{share.path || share.id}</code></p>
+            <div class="share-details">
+              {#if share.protocol === 'samba'}
+                <p>Users: <strong>{share.users.length ? share.users.join(', ') : 'Any / Guest'}</strong></p>
+              {:else}
+                <p>Clients: <strong>{share.clients.length ? share.clients.join(', ') : 'All'}</strong></p>
+              {/if}
+              <p>Enabled: <strong>{share.enabled ? 'Yes' : 'No'}</strong></p>
+            </div>
+          </article>
+        {/each}
+      </div>
+    {/if}
+  </section>
+{/if}
+</div>
+
+<style>
+  .shares-container {
+    display: grid;
+    gap: 1.5rem;
+  }
+  .password-form { display: grid; grid-template-columns: minmax(0, 23rem); gap: .65rem; }
+  .password-form input { background: var(--panel); color: var(--text); font: inherit; padding: .6rem; border: 1px solid var(--border); border-radius: 6px; }
+  .password-form button { justify-self: start; }
+  .panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+  .edit-link {
+    font-size: 0.9rem;
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .edit-link:hover {
+    text-decoration: underline;
+  }
+  .services-status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 1rem;
+  }
+  .service-card {
+    padding: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+  }
+  .service-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+  }
+  .service-header h3 {
+    margin: 0;
+    font-size: 1.05rem;
+  }
+  .status-badge {
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    background: #3b2828;
+    color: #ff9b9b;
+  }
+  .status-badge.configured {
+    background: #1c3b2b;
+    color: #79f7a7;
+  }
+  .service-meta {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .shares-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+    gap: 1rem;
+  }
+  .share-card {
+    padding: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .share-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .share-header h3 {
+    margin: 0;
+    font-size: 1.1rem;
+  }
+  .badges {
+    display: flex;
+    gap: 0.4rem;
+  }
+  .protocol-badge {
+    padding: 0.15rem 0.45rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .protocol-samba {
+    background: #1b354f;
+    color: #7bbaff;
+  }
+  .protocol-nfs {
+    background: #3b2848;
+    color: #e2aaff;
+  }
+  .perm-badge {
+    padding: 0.15rem 0.45rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+  }
+  .share-path {
+    margin: 0;
+    font-size: 0.9rem;
+  }
+  .share-details {
+    font-size: 0.85rem;
+    color: var(--muted);
+    display: grid;
+    gap: 0.25rem;
+  }
+  .share-details p {
+    margin: 0;
+  }
+  .error-msg {
+    color: #ff6b6b;
+  }
+  .empty-state {
+    color: var(--muted);
+    font-size: 0.95rem;
+  }
+</style>

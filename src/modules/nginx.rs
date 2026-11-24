@@ -524,7 +524,7 @@ pub fn sync_site_upstream(
     let mut replacements = std::collections::BTreeMap::new();
     if kind != NginxObjectKind::Subfolder {
         // During a staged cutover both vhosts can own the same map entry.
-        // The prospective sites.toml already reflects the edit or deletion.
+        // The prospective sites.yaml already reflects the edit or deletion.
         for (key, site) in crate::nginx_sites::load(config)?.sites {
             if site.kind != kind || (site.domain == domain && site.object_name(&key)? == name) {
                 continue;

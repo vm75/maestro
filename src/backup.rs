@@ -197,7 +197,7 @@ mod tests {
     fn fixture(base: &Path) -> (AppConfig, PathBuf) {
         let config_dir = base.join("config with spaces");
         fs::create_dir_all(&config_dir).unwrap();
-        let config_path = config_dir.join("maestro.toml");
+        let config_path = config_dir.join("maestro.yaml");
         fs::write(&config_path, "secret-token").unwrap();
         let mut config = AppConfig {
             platform: Platform::Linux,
@@ -232,12 +232,12 @@ mod tests {
     #[test]
     fn platform_destinations_and_test_override() {
         let mut config = AppConfig::default();
-        let path = Path::new("/lab/config/maestro.toml");
+        let path = Path::new("/lab/config/maestro.yaml");
         assert_eq!(output_directory(&config, path), Path::new("/tmp"));
         config.platform = Platform::Linux;
         assert_eq!(output_directory(&config, path), Path::new("/lab/config"));
         assert_eq!(
-            output_directory(&config, Path::new("maestro.toml")),
+            output_directory(&config, Path::new("maestro.yaml")),
             Path::new(".")
         );
         config.platform = Platform::Asuswrt;

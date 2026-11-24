@@ -2,16 +2,16 @@
 
 ## Project overview
 
-Maestro is a Rust service for administrators of Asuswrt-Merlin routers. It
+Maestro is a modular Rust service for Asuswrt-Merlin routers and native Linux hosts. It
 serves a standalone or mounted web UI and a protected Axum API for Entware
 services, nginx configuration, certificates, Wake-on-LAN, firewall bans, and
-optional AdGuard Home integration. Router-sensitive state is kept in TOML and
-atomic JSON files. Managed nginx site inputs live in `<nginx.inputs_dir>/sites.toml`;
+optional AdGuard Home integration. Router-sensitive state is kept in YAML and
+atomic JSON files. Managed nginx site inputs live in `<nginx.inputs_dir>/sites.yaml`;
 custom nginx objects remain authored configuration files.
 
 ## Repository map
 
-- `src/main.rs`, `src/config.rs`, `src/state.rs`, `src/platforms/{upgrade,nginx_upgrade}.rs` — startup, configuration, runtime state, and router-only upgrade commands.
+- `src/main.rs`, `src/config.rs`, `src/state.rs`, `src/platforms/{upgrade,toolbox}.rs` — startup, configuration, runtime state, and router-only upgrade commands.
 - `src/api/` — authenticated HTTP API handlers and route map.
 - `src/modules/{nginx,nginx_sites}.rs`, `src/nginx_render.rs` — nginx filesystem workflows, Jinja rendering, and settings.
 - `src/modules/firewall.rs`, `src/ban_attack/` — firewall management and log-driven bans.
@@ -36,18 +36,39 @@ python3 scripts/build-web-ui.py --check
 node scripts/test-web-ui.mjs
 ```
 
-Useful repository shortcuts are `make check`, `make test`, `make run`,
-`make fmt`, `make clippy`, `make test-nginx`, `make test-lab`, and `make release`.
-`make test-nginx` needs Python 3.11+, Jinja2, nginx, and OpenSSL and uses temporary
-files and loopback servers. `make run` starts x64 test mode
-with `test-fixtures/etc/maestro/maestro.toml`; it does not execute router commands or send
+Useful repository shortcuts are `make check`, `make test`, `make help`,
+`make fmt`, `make clippy`, `make test-nginx`, `make test-router`, and `make release`.
+`make test-nginx` needs Python 3.11+, Jinja2, PyYAML, nginx, and OpenSSL and uses temporary
+files and loopback servers. `make run-simulated` (`make run`) starts x64 test mode
+with `test-fixtures/etc/maestro/maestro.yaml`; it does not execute router commands or send
 Wake-on-LAN packets.
 
-For **real Linux integration** use `platform = "linux"` (or
-`--linux-mode`) with `test_mode = false`. `make test-linux` runs a
+For native Linux development with the Svelte UI, use `make init-linux` once
+and `make run-linux` as non-root. For the AArch64 QEMU router guest, use
+`make init-router` (builds the IPK and runs installation) then `make run-router`.
+Run one environment at a time because their ports overlap. `make test-router`
+checks guest scripts with mocked QEMU, without booting a guest. Legacy
+`init-lab` (requires a prebuilt IPK), `run-lab`, and `test-lab` remain available.
+
+`make init-linux` uses `scripts/linux-dev.sh` to install Arch/Debian-family
+dependencies through sudo, preferring existing mise for Rust/Node and uv for
+isolated Python dependencies. Its fallback uses rustup, distro Python and a
+checksum-verified local Node archive when needed. `.dev-tools/` is ignored.
+Verify the bootstrap without installation using
+`python3 -m unittest discover -s tests -p 'test_linux_dev.py' -v`.
+
+For **real Linux integration** use the native `version: 1` YAML authority. `--linux-mode` asserts that the selected file is native Linux YAML. `make test-linux` runs a
 temporary unprivileged real-nginx smoke test; it does not exercise live
 firewall enforcement, DNS providers, or router firmware. Keep real firewall
 tests in isolated network namespaces/VMs and always use lab-only paths.
+
+`make test-quadlet` validates rendered definitions with the installed native
+Quadlet generator without starting units (`MAESTRO_QUADLET_GENERATOR` overrides
+its path). `make test-podman` requires a non-root account, rootless Podman and a
+C compiler with static libc and Rust/Cargo. It builds an offline scratch image,
+checks engine lifecycle/fingerprint labels and runs the native metadata-reader
+ownership tests using only fresh verified temporary storage/runtime roots, no pulls and no networking. It cleans up that private lab; it does not
+configure user units. These checks do not establish complete provider acceptance.
 
 For a release artifact, use `./scripts/build-release.sh <rust-target>`.
 Use `make ipk` to build and package the AArch64 musl Entware IPK and checksum
@@ -70,11 +91,11 @@ of AArch64 musl archives/IPKs with SHA-256 checksums. Manual tags remain support
 Do not commit `dist/` output or retag published versions; never deploy to
 production routers automatically.
 
-The standalone Entware NGINX builder has a **manual-only** GitHub Actions
-workflow (`.github/workflows/build-nginx.yml`). Its uniquely tagged
-`nginx-v*` GitHub Releases must always be created with `--latest=false`;
-stable Maestro releases remain Latest for the router-only upgrade command.
-Do not introduce automatic NGINX build triggers or router deployment.
+Entware tool builds are maintained in [vm75/toolbox](https://github.com/vm75/toolbox).
+On a live router, `maestro toolbox list` lists compatible releases and
+`maestro toolbox install TAG` verifies and installs every IPK in the selected
+release. Do not build NGINX in Maestro, automatically select Toolbox releases,
+or deploy to routers automatically.
 
 ## Engineering constraints
 
@@ -88,7 +109,22 @@ Do not introduce automatic NGINX build triggers or router deployment.
 - Preserve atomic JSON and nginx writes, path/symlink protections, token authentication, and bounded log reads.
 - Do not claim router compatibility without an actual matching architecture and firmware test.
 - Keep the self-contained UI offline-capable; do not add a frontend package manager or CDN dependency. Edit `web/src/`, then regenerate `web/index.html` with `python3 scripts/build-web-ui.py`.
-- Phase 1 was merged as v0.10.5. Phase 1.5 rebrands the application to Maestro on `refactor/rebrand-maestro`. Preserve legacy installed configuration, state, NGINX inputs and firewall identities. Keep the existing Go `vm75/server-man` as a Phase 2 reference; do not port its features in Phase 1.5.
+- Phase 1 and the Maestro rebrand were accepted. Preserve validated router behavior; Linux is a fresh deployment with no legacy configuration compatibility.
+
+## Phase 2 source-guided port
+
+The user has directed a corrective port-first pass on `feature/linux-phase2`. Server Man at `c1a9f32f5898146ae7ac339043b910b8e2a2c438` is the working implementation baseline, not just a specification. The goal is the fastest safe route to feature parity inside Maestro's existing modular architecture.
+
+- Maestro is one modular application, not two platform-specific products. Shared feature modules include system monitoring, NGINX, certificates/ACME and Ban Shield; reuse their domain logic on both targets, with platform-specific execution adapters only where necessary. Router services and ASUS UI/Entware integration are router-specific. AdGuard and WireGuard are router-targeted for now and may become shared later; do not expand their Linux integration during this port. Preserve existing validated compatibility rather than indiscriminately disabling it. The direct Server Man port is Linux-targeted, reusing existing shared features rather than introducing duplicate implementations. Module targets, dependencies, capabilities and permissions govern routes, tasks and UI contributions; Cargo platform profiles govern build inclusion. Keep the router lightweight.
+- Translate complete Go packages and their tests with the same types, algorithms, control flow, validation, native commands, result/error contracts and recovery. Preserve compatible file/function structure; adapt at integration boundaries. Do not create replacement designs, protocols or model layers just for Rust idioms.
+- Keep existing Phase 2 code only where it reduces work toward parity. The user authorizes undoing or replacing divergent Phase 2 implementations, including entire modules or Linux UI pages. Use ordinary corrective commits, not history rewrites; leave accepted Phase 1/1.5 router code, user changes and unrelated work intact.
+- Preserve the original Server Man helper operation names, JSON request/response contract, fatal stderr/exit semantics and tests. Do not introduce helper protocol versions, alternate operation names or a probe-only wire extension as part of the target design. Keep existing privilege safeguards effective until an equivalent safe integration is implemented.
+- Reuse Server Man's Svelte page/component tree, scripts, styles and fixtures wherever possible. Make the Rust API match the pinned reference rather than rewriting pages to fit partial Rust API shapes. Keep the Maestro navigation/module-discovery seam, router UI and upgraded Linux frontend dependencies.
+- Use one reference-compatible implementation for the Linux daemon and one-shot helper where they share operations; do not duplicate backend logic. Reuse equivalent Maestro command/job/auth/platform facilities through thin adapters.
+- Complete coherent implementation batches, port tests alongside source, and incorporate the operator's local compile/test feedback. No operator pause after each minor commit. Record actual blockers and evidence in the existing parity ledger; do not create more planning layers.
+- Retain non-root Linux, optional helper installation, action-specific permission gating, single authoritative Linux YAML without migration or legacy compatibility, and router build isolation. Defer optional enhancements and extra hardening not needed for safe parity, except the operator-directed old Maestro runtime feature additions explicitly included in Phase 2. Do not port the old Arch installer. Do not claim native parity from source changes alone.
+
+The remaining acceptance contract in `docs/plans/proposed/modular-platform-ui-migration.md` governs Phase 2. The parity ledger records historical evidence; do not treat implementation history as current instructions.
 
 ## Documentation routing
 

@@ -823,7 +823,7 @@ pub async fn put_settings(
     }
     files.insert(
         nginx_sites::path(&state.config),
-        toml::to_string_pretty(&sites).map_err(ApiError::internal)?,
+        serde_yaml::to_string(&sites).map_err(ApiError::internal)?,
     );
     let mut transaction = nginx_render::FileTransaction::apply(&state.config, files)?;
     let result = nginx_test(&state).await?;
@@ -1019,8 +1019,7 @@ async fn change_enabled(
         }
     }
 
-    let adguard_cfg = super::adguard::get_effective_config(state).await;
-    if adguard_cfg.enabled {
+    if let Some(adguard_cfg) = super::adguard::enabled_config(state).await {
         if let Ok(client) = crate::adguard::AdGuardClient::new(&adguard_cfg) {
             let full_domain = match kind {
                 NginxObjectKind::Domain => domain.to_string(),

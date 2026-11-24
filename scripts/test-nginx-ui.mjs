@@ -31,13 +31,12 @@ const quote=JSON.stringify;
 const nginx=join(lab,'nginx');
 const paths={data_dir:join(lab,'state'),runtime_dir:join(lab,'run'),log_file:join(lab,'hub.log'),hosts_add:join(lab,'hosts.add'),dnsmasq_conf_add:join(lab,'dnsmasq.add'),wireguard_conf:join(lab,'wg.conf')};
 const nginxPaths={root_dir:nginx,inputs_dir:join(lab,'inputs'),config_path:join(nginx,'nginx.conf'),pid_path:join(lab,'run/nginx.pid'),domains_available_dir:join(nginx,'domains-available'),domains_enabled_dir:join(nginx,'domains-enabled'),domain_upstream_map_path:join(nginx,'conf.d/02_domain_upstream_map.conf'),subdomain_upstream_map_path:join(nginx,'conf.d/03_subdomain_upstream_map.conf'),subfolder_upstream_map_path:join(nginx,'conf.d/04_subfolder_upstream_map.conf'),http_forwarder_path:join(nginx,'conf.d/05-http-to-https.conf'),log_dir:join(lab,'logs/nginx')};
-const table=(name,values) => `[${name}]\n`+Object.entries(values).map(([key,value])=>`${key} = ${quote(value)}\n`).join('');
-const config='test_mode = true\n'+table('server',{bind:'127.0.0.1',port,auth_token:token})+table('paths',paths)+table('nginx',nginxPaths)+table('certificates',{certs_dir:join(lab,'certs')})+table('services',{init_dir:join(lab,'init.d'),log_dirs:[join(lab,'logs')]})+table('asus_ui',{enabled:false})+table('firewall',{log_dirs:[join(lab,'logs/nginx')]});
+const config=JSON.stringify({test_mode:true, platform:'asuswrt', server:{bind:'127.0.0.1',port,auth_token:token},paths,nginx:nginxPaths,certificates:{certs_dir:join(lab,'certs')},services:{init_dir:join(lab,'init.d'),log_dirs:[join(lab,'logs')]},asus_ui:{enabled:false},firewall:{log_dirs:[join(lab,'logs/nginx')]}},null,2);
 
 try {
   await mkdir(nginx,{recursive:true}); await writeFile(join(nginx,'nginx.conf'),'events {} http {}\n');
-  await writeFile(join(lab,'maestro.toml'),config);
-  hub=spawn(binary,['--config',join(lab,'maestro.toml'),'serve'],{stdio:['ignore','ignore','pipe']});
+  await writeFile(join(lab,'maestro.yaml'),config);
+  hub=spawn(binary,['--config',join(lab,'maestro.yaml'),'serve'],{stdio:['ignore','ignore','pipe']});
   let hubErrors=''; hub.stderr.on('data',data => hubErrors+=data.toString());
   await waitFor(async()=>{if(hub.exitCode !== null) throw new Error(hubErrors); return (await fetch(base+'/healthz')).ok;},'test API startup');
   assert.equal((await api('/runtime')).test_mode,true);

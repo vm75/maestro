@@ -2,40 +2,268 @@
 
 [← Back to README](../README.md)
 
-For testing the production execution path on a development Linux machine,
-use `platform = "linux"` and `test_mode = false` in a **separate**
-configuration. Alternatively, pass `--linux-mode` to select the Linux
-platform from the CLI. Do **not** pass `--test-mode`: that flag simulates
-external commands. Simulated test mode and the Linux platform cannot be
-combined.
-
-The native Linux platform runs the normal command runner and HTTP API,
-reads real Linux `/proc` metrics, and uses the configured service paths. It
-skips ASUS menu installation, standalone startup does not emit an ASUS ASP
-page, and AdGuard LAN IP discovery does not call router NVRAM. Set a real
-`[adguard].lan_ip` if AdGuard Home is enabled. All native Linux paths and
-executables must be configured for the development host. Use
-`[server].daemonize = false` for local interactive runs.
+Native Linux runs as an unprivileged workload account. Select a private
+`version: 1` YAML authority with `--config`; `--linux-mode` optionally
+asserts that selection. Router YAML is not accepted for Linux. Do not use
+`--test-mode` for real integration. There is no Linux migration or fallback
+configuration layout. Use the optional privileged helper only for explicitly
+granted host operations.
 
 To prepare a persistent local setup, run:
 
 ```sh
 ./scripts/setup-linux.sh
-cargo run -- --config data/linux/maestro.toml --linux-mode serve
+cargo run --bin maestro --no-default-features --features linux -- --config data/linux/maestro.yaml --linux-mode serve
 ```
 
-The setup script checks for required tools and creates `data/linux/maestro.toml`,
-`data/linux/nginx/nginx.conf`, and isolated state, log, and runtime directories.
-It preserves existing files on subsequent runs. New configs bind the API to
-`127.0.0.1:3030`, use nginx port `8080`, generate a random API token in the TOML
-file, and disable firewall enforcement and AdGuard integration. Nginx uses local
-temporary directories so it can run without root. Start nginx through the UI;
-the setup script does not start services or install packages.
+The setup script checks for required tools and creates a unified Linux
+`version: 1` configuration at `data/linux/maestro.yaml`, a private bearer token
+at `data/linux/token`, `data/linux/nginx/nginx.conf`, and isolated state, log,
+and runtime directories. It preserves existing files on subsequent runs. New
+configs bind the API to `127.0.0.1:3030`, allow workload-owned writes, leave
+privileged operations disabled until explicitly configured, use nginx port
+`8080`, and disable firewall enforcement and AdGuard integration. Nginx uses
+local temporary directories so it can run without root. Start nginx through the
+UI; the setup script does not start services or install packages.
 
-The built-in **unprivileged** smoke test requires `cargo`, `nginx`,
-`openssl`, `curl`, and `python3` (with Jinja2 available in `PATH` or the activated `uv` virtual environment). It creates an isolated temporary
-configuration and nginx prefix under `/tmp`, runs the real maestro binary, verifies
-authentication and system metrics, and exercises real nginx validation,
+For development with the Svelte UI on Arch or Debian 12+ and compatible
+derivatives, use `make init-linux` once, then `make run-linux`, as your non-root
+account. Initialization uses `sudo` for distro build tools, nginx, OpenSSL,
+network tools and other system dependencies, then runs the setup script above
+and installs npm dependencies. Pacman uses the existing package database; keep
+Arch updated through your normal system upgrade procedure. Installing nginx
+may start the distribution's nginx service; the development instance uses its
+own tree and ports.
+
+Setup prefers existing mise for Rust (`rust@stable`) and Node (`node@22`), and
+uv for a Python 3.11 environment with `requirements.txt` under `.dev-tools/python`.
+Without mise it reuses compatible Rust or installs stable through rustup, and
+uses compatible Node/npm or an official, checksum-verified Node 22 binary under
+`.dev-tools/node` (x86_64/AArch64). Without uv it installs distro Python, Jinja2
+and PyYAML and requires Python 3.11+. The wrapper selects these tools for both
+init and run without changing your global tool defaults or requiring activation.
+No privileged Maestro helper is installed by `make init-linux`. For explicit\nreviewed development helper installation/removal, see\n[the optional helper targets](development.md#optional-privileged-helper-for-development).\nEach run builds the UI and starts
+the Linux-feature server as your account. See the
+[development environments](development.md#run-locally) for the equivalent
+simulated-router and QEMU-router commands.
+
+## Svelte shell build
+
+Build the Linux shell and embed its static assets in a Linux release binary:
+
+```sh
+./scripts/build-release.sh --linux-ui x86_64-unknown-linux-gnu
+```
+
+This build uses Node.js 20.19+ or 22.12+ with npm and produces a
+`maestro-x86_64-unknown-linux-gnu-linux-ui` binary and checksum in `dist/`.
+The release build also produces a separately checksummed `maestro-admin-<target>`
+helper binary; it is **not installed** by building or starting Maestro.
+The helper, package/share verbs and two-mode installer remain in-progress and
+must not be deployed on unrelated production hosts.
+
+For development, run `npm --prefix linux-web ci`,
+`npm --prefix linux-web run build`, and add `--no-default-features --features linux-ui` to
+`cargo run`. Start the binary with a Linux configuration and open its root URL.
+Sign in with the configured access token. Browser sign-in accepts loopback HTTP
+and exact HTTP or HTTPS origins listed in `server.allowed_origins`. For LAN
+access, add the full origin (for example,
+`http://192.168.192.70:3030`) and restart Maestro. HTTP sessions use cookies
+without the Secure attribute; use HTTPS when transport encryption is required.
+For HTTPS, the reverse proxy must preserve the public Host header.
+
+If Maestro will manage nginx and certificates, bootstrap over LAN HTTP first.
+Keep the existing server settings (including the token) and set:
+
+```yaml
+server:
+  bind: "0.0.0.0"
+  port: 3030
+  allowed_origins:
+    - "http://192.168.192.70:3030"
+```
+
+Replace the example address with the host's LAN address and restrict port 3030
+to the LAN. Restart Maestro, open that exact origin and complete sign-in/setup.
+After configuring nginx and certificates, add the public HTTPS origin to the
+list and restart before switching to it. If nginx runs on the same machine,
+you can then bind Maestro to loopback to restrict direct access.
+
+## Non-root Linux mode and optional privileged helper (Phase 2 WIP)
+
+**The main Linux server must run as a non-root workload account.** A production
+Linux `serve` invocation started as UID 0 is rejected; this check does not
+apply to the ASUSWRT/router executable or isolated simulation mode. The
+installer and guest validation for these rules are not yet complete.
+
+The separate, Linux-only `maestro-admin` is a root-owned one-shot program,
+invoked exclusively via fixed `sudo -n -u root -- /usr/local/libexec/maestro-admin`
+without helper command-line arguments. Management operations use Server Man's
+one-shot JSON operation/arguments envelope on stdin. No private wire probe or
+protocol version is accepted. The helper does not listen on a socket and has
+no general command execution verb. Discovery checks the exact sudo authorization
+without executing the helper, and reads the same nonsecret root-owned grants
+that the helper independently enforces on every request.
+The root-owned policy file is fixed at
+`/etc/maestro/admin-policy.json`, with the following **illustrative** shape:
+
+```json
+{
+  "version": 1,
+  "workload_uid": 1001,
+  "system_units": ["example.service"],
+  "package_writes": false,
+  "samba_password": false,
+  "share_writes": false
+}
+```
+
+Replace `1001` with the actual numeric UID of the chosen non-root workload
+account. Both this file and its parent directories must be root-owned. The
+policy contains only authorization grants (no secrets) and the installer
+sets mode 0640 with the selected workload account's group, so the daemon
+can read its permissions but cannot modify them. The helper independently
+rejects group-write, other-user access, symlinks, unsafe parents, invalid
+contents and mismatched workload UIDs. Existing 0600 policies remain
+readable by the helper but disable daemon discovery until the reviewed
+helper installation is repeated; the installer preserves the grant contents.
+The helper executable must be a root-owned executable
+regular file under root-owned, nonwritable parent directories. An appropriate
+restricted sudoers line for a **reviewed** account is:
+
+```text
+<workload-account> ALL=(root) NOPASSWD: NOSETENV: /usr/local/libexec/maestro-admin ""
+```
+
+The default `package_writes: false` denies package mutations in the
+root-owned policy. Package operations require
+an authorized helper supporting the reference request/response contract and a supported native manager.
+Native package and dependency operations use fixed root-owned executables,
+validate 1–32 repository names, disallow URLs/flags/versions/repository
+overrides and do not execute a shell. Package refresh and installation may
+change the host substantially: review native package-manager state first.
+Do not approve this policy on production hosts until native acceptance.
+
+The placeholder must be replaced and the rule reviewed with `visudo`. Do not
+copy a blanket sudo rule, add `SETENV`, install a setuid helper or run the
+main Maestro process as root. **These contracts describe the current development
+boundary, not a production-supported installation procedure.** An explicit
+reviewed installer with default no-helper, helper opt-in/removal, policy
+validation, upgrades and full disposable-guest acceptance remains required.
+
+Without the helper, monitoring, readable system/user service inventory and
+journal, cached package status, user-owned config/storage, user systemd and
+rootless/independently authorized workload backends continue subject to normal
+account permissions. The protected systemd actions are unavailable with a
+machine-readable explanation; the Services page continues to show read-only
+inventory and can manage explicitly authorized *user* units. The
+`system_capabilities` tool (via HTTP or MCP) and `GET /api/tools` expose
+helper readiness and write denials.
+
+## Systemd service actions
+
+Configure exact units under `services`:
+
+```yaml
+services:
+  systemd_system_write_units:
+  - example.service
+  systemd_user_write_units: []
+```
+
+Both allowlists default to empty; neither is a grant of root privilege.
+User-scope actions invoke the non-root user's systemd manager directly.
+System-scope protected actions require **both** Maestro's allowlist and the
+root-owned helper's allowlist, an authorized noninteractive sudo rule and fresh
+helper checks. The helper validates the exact unit, canonical systemd identity
+and fixed start/stop/restart/reload/enable/disable verb before invoking systemctl.
+Generated Maestro application units and Maestro's own service are reserved.
+Enabling/disabling a unit changes its boot policy without starting/stopping it.
+Service details and bounded journals are read without unnecessary elevation.
+
+## Package status, upgrades and dependency installation
+
+Cached APT, DNF, Pacman and Zypper updates remain available under ordinary
+permissions without a helper. The Linux-only helper now contains fixed verbs
+for metadata refresh, regular native upgrades, named repository package
+installation, and predefined Podman/Docker/Incus/libvirt/Samba/NFS dependencies.
+The HTTP and MCP tool schemas enforce explicit `confirm=true` for destructive
+operations; the helper independently validates them, and execution is denied
+unless the installed helper and private root-owned policy permit the action.
+
+Linux workload operations are always enabled for the authenticated administrator.
+Protected host operations require the optional `maestro-admin` to be installed and authorized.
+The Updates page reports why protected actions are disabled, while cached
+status remains visible. Named and dependency installation are serialized
+management jobs, subject to native package locks, repository signatures and
+transaction interruption. On Arch, named package installation includes a full
+native upgrade to avoid partial upgrades.
+
+**Implementation is not native-accepted:** the helper protocol, Linux release
+artifact and two-mode deployment remain unverified on disposable guests. No
+package transaction has been validated on a host in this increment. Treat
+these newly implemented verbs as development-only until acceptance.
+
+## Durable browser session state
+
+Linux sessions now use 256-bit random bearer cookie values and persist only
+their SHA-256 digests and bounded expiry times in
+`<server.state_dir>/linux-auth/browser-sessions.json`, under an owner-only
+directory. A token rotation invalidates previously persisted sessions.
+Logout persists revocation; malformed, symlinked or unsafe session state
+fails closed. Native Linux YAML supports first-run administrator setup and password login.
+Setup records the password hash in the authoritative YAML; the token file
+remains available for authorized API clients. Router mode continues to use its API token without administrator creation.
+Native/browser authentication acceptance remains open.
+
+## Workload writes and recovery
+
+Workload apply, revert, recovery and lifecycle actions are enabled automatically
+for the authenticated Linux administrator. Unknown server fields, including retired write gates, are rejected. Host operations require explicit helper grants. Native apply
+currently accepts reviewed managed-directory provisioning and supported
+Quadlet changes. Plan and revert previews list resources the configured
+provider cannot apply. Removing a storage definition removes its ownership
+marker and preserves the directory contents.
+
+`managed_apply_status` reads durable progress, including completed operations,
+per-resource failure and the journal update time, without running native commands.
+It remains readable with management writes disabled. `managed_apply_retry`
+requires management writes and `confirm: true`; it verifies native state and uses
+the recorded apply mode. It never automatically repeats an interrupted removal.
+Inspect that resource explicitly and resolve its native state before retrying.
+If interruption occurred after preparing intent but before saving its YAML,
+automatic retry discards that uncommitted intent and reports `aborted`. It leaves
+configuration and native resources unchanged. A prepared revert instead restores
+the earlier pending operation when its replacement YAML was never saved. Retry
+of a committed desired revision still inspects native state before doing work.
+The Applications recovery panel displays this progress, starts safe retries, and
+explains when uncommitted intent was discarded.
+Native command output is not stored in the durable failure message.
+
+Native Linux YAML selects `${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd/maestro`
+for rootless Quadlet files. Prepare that directory as the workload account with
+owner-only permissions; startup reads settings without creating it. Legacy YAML
+can set `paths.quadlet_dir` to an existing owner-only directory in the rootless
+user manager's Quadlet search path. Maestro verifies generated files and
+loaded units before changing state or reading journals. The Applications
+inventory reports verified systemd state, including mixed member states.
+Failed or timed-out inspections leave the state unknown. Lifecycle controls
+also require verified units for workload dependencies.
+Configuration readiness reports actual rootless Podman and user-manager access
+failures. Quadlet lifecycle actions verify generated files, loaded unit ownership,
+and runtime state; boot enablement separately checks startup policy and lingering.
+
+For an interrupted apply, inspect the journal with `workloads_pending` and
+submit the reviewed plan fingerprint to `workloads_resume`. The coordinator
+verifies native state before continuing and keeps ambiguous changes pending.
+
+## Native integration smoke test
+
+The built-in **unprivileged** smoke test requires `nginx`, `openssl`, `curl`,
+and Python 3.11+ with Jinja2 installed. It uses Cargo to build the `linux`
+profile unless you supply a prebuilt binary. The test creates an isolated
+temporary configuration and nginx prefix under `/tmp`, verifies Linux tool
+discovery, authentication and system metrics, and exercises nginx validation,
 startup, reload, shutdown, and managed-site creation, updates, regeneration,
 HTTPS requests with self-signed certificates, and deletion:
 
@@ -43,6 +271,8 @@ HTTPS requests with self-signed certificates, and deletion:
 make test-linux
 # Or retain the temporary directory and logs after execution:
 MAESTRO_KEEP_LINUX_LAB=1 make test-linux
+# Or test an existing Linux release binary:
+MAESTRO_LINUX_SMOKE_BIN=./target/release/maestro make test-linux
 ```
 
 The smoke test neither uses mocks nor touches the host's nginx configuration.
@@ -67,14 +297,14 @@ separate `[services].init_dir`.
 The Linux platform does **not** emulate firmware behaviors such as NVRAM,
 ASUS menu injection, JFFS startup hooks, or router-specific service actions.
 Those still need router validation. Linux keeps its firewall policy within
-`[paths].data_dir` instead of reading or mirroring the router's
+`paths.data_dir` instead of reading or mirroring the router's
 `/opt/etc/maestro/firewall-policy.json`.
 
 ## Service adapters and nginx setup
 
 Linux setup installs executable `S80nginx` and `S99maestro` adapters in
 `data/linux/init.d`. These use the normal Services discovery and actions. They require
-Python 3.11 or newer and default to `data/linux/maestro.toml`; set
+Python 3.11 or newer and default to `data/linux/maestro.yaml`; set
 `MAESTRO_CONFIG` to select another configuration. For an existing
 Maestro setup, set `[services].init_dir` to the absolute path of
 `data/linux/init.d` and rerun `./scripts/setup-linux.sh`. Existing Maestro
@@ -97,8 +327,228 @@ an explicit `[commands].dehydrated` path and restart Maestro.
 Linux setup requires Python Jinja2 (available via `requirements.txt` in the virtual environment), nginx, and openssl. For a new lab it renders
 only the current Jinja bundle, generates a temporary fallback TLS certificate,
 and records its loopback listeners and runtime paths in
-`maestro/nginx/nginx.toml`. HTTP uses port 8080 and HTTPS uses port 8443.
-Existing lab configurations are preserved. Before upgrading an existing lab,
-set `nginx.inputs_dir` to its `maestro/nginx` directory and follow the
-[input relocation procedure](migration.md#nginx-input-relocation-in-09).
+`nginx-inputs/nginx.yaml`. HTTP uses port 8080 and HTTPS uses port 8443.
+New labs use the native YAML schema and the state directory's `nginx-inputs/`, `nginx/`, `certificates/` and `logs/` paths. Old experimental labs are not supported; back up and initialize a fresh lab.
 The smoke test uses a separate temporary directory under `/tmp`.
+
+## Declarative Applications and File Sharing
+
+The Applications page provides a unified view of Quadlet, Podman Compose,
+Docker Compose, Incus VM, and Libvirt/KVM workloads. Workloads are authored in
+authoritative declarative YAML (`version: 1`).
+
+Maestro enforces:
+- Strict referential integrity (guest network bindings, volume mounts, dependencies, and storage references).
+- Deterministic change plan review with unique plan fingerprints.
+- Transactional apply with recovery journaling and rollback support.
+- Full revision history and revert capabilities.
+
+### Podman Quadlet
+
+Quadlet applications use `kind: container`, `engine: podman`, and
+`backend: quadlet`. Container options preserve user namespaces and UID/GID
+maps, devices, capabilities, explicit privilege settings, temporary filesystems,
+pull policy, and container logging limits. Private `env_files` reference
+`secrets` paths relative to the authoritative YAML directory; managed storage
+paths remain relative to the storage directory.
+
+Within an application, `network_mode: service:<member>` shares that member's
+network namespace. A `depends_on: {<member>: healthy}` dependency waits for
+the upstream Podman healthcheck through Quadlet's startup notification.
+`stop_grace_period` currently accepts positive whole seconds, such as `20s`.
+Entrypoint overrides, TTY, and shared-memory size overrides remain unsupported
+by the Quadlet renderer. The native generator smoke test covers rendering;
+live service lifecycle and boot persistence require separate validation.
+
+### Podman and Docker Compose
+
+Both Compose engines now use the native reference adapter in source. Maestro
+generates a private, explicit project definition and a separate linked user
+systemd oneshot boot launcher under the applications directory. The launcher
+does not supervise containers; Compose uses `restart: no`. Use the managed
+service enable/disable action for startup policy, and start/stop/restart for
+execution. Saving a definition does not start a stopped application;
+`next_start` updates the saved definition and boot policy without recreating
+containers. Immediate apply reconciles only previously running members.
+Removing a service or member requires stopped containers and never passes
+volume deletion options. Exact generated-file ownership and native project
+identity are checked before changes.
+
+Rootless Podman uses the local engine and the podman-compose provider.
+Docker uses the local system socket (access to this socket is a powerful
+host privilege; grant it only to a trusted workload account). Docker automatic
+startup requires the native docker.socket unit to be persistently enabled;
+Podman automatic startup requires its packaged user network-wait unit.
+The daemon remains non-root; neither provider routes ordinary commands
+through the privileged helper. Explicit advanced container options are typed
+and validated; short bind options require preexisting storage.
+
+These are source-level implementations. Build/fixture and disposable Linux
+acceptance, remaining provider-specific readiness, combined log fidelity
+and interrupted artifact-transition recovery are not yet established.
+
+### Libvirt/KVM
+
+The native Libvirt provider uses only an explicit local `qemu:///system` or
+`qemu:///session` connection. It checks the configured daemon's KVM domain
+capabilities rather than assuming the workload account can open /dev/kvm.
+Install the native `virsh` client and `virt-xml-validate`; the workload
+account needs appropriate access to the chosen daemon and guest storage.
+
+The pinned Server Man guest profile is x86_64, BIOS, KVM, Q35 by default,
+host-model CPU, headless VGA and a serial console. Disks reference declared
+raw/qcow2 file storage and interfaces reference an explicit network or bridge.
+Existing VM UUID and MAC values are retained by typed edits; new guests
+currently require explicit UUID and MAC in reviewed YAML. The reference's
+automatic identity preparation needs integration with its reviewed candidate
+editor. UEFI and direct initial-image provisioning are not part of this
+profile; prepare the disk through the storage workflow first.
+
+Saving defines a persistent guest and sets autostart without starting it.
+A running hardware change requires Save for next start or a shutdown before
+immediate apply. Restart requests graceful shutdown, waits for shutoff and
+starts the saved definition. Removal requires a stopped owned guest; no
+force-stop, storage deletion, NVRAM deletion or TPM deletion is requested.
+The provider compares ownership namespace, UUID, name, managed hardware,
+fingerprints, generated artifacts and native autostart before mutation and
+during recovery inspection. Unknown/intermediate recovery state remains
+blocked pending the reviewed artifact recovery workflow.
+
+Libvirt source implementation and fake-daemon regression tests are present;
+build/fixture execution and native guest acceptance remain pending.
+Basic stopped-guest XML and declared standalone-disk collection is now part of the Linux backup capture workflow below.
+
+### Incus virtual machines
+
+The Incus adapter uses the explicit local daemon, project, storage pool and
+network/bridge bindings. The reference VM profile uses UEFI and Secure Boot,
+a locally available image alias or fingerprint, persistent UUID/MAC identity,
+explicit devices, no implicit profiles, and pool-managed root storage (20 GiB
+by default). QEMU SPICE availability is checked with option help only,
+without starting a guest. The workload account requires access to the local
+Incus daemon; this access is security-sensitive and must be explicitly granted.
+
+Saving defines a stopped VM. Boot autostart is separate from execution.
+Unlike Libvirt, Incus v1 requires the VM to be stopped before hardware or
+native description changes, including Save for next start. A running VM
+receives only boot policy and definition fingerprint updates. Existing
+native volatile settings are retained; the adapter tracks the runtime
+revision loaded by the guest. Graceful stop and restart use a bounded
+shutdown request without force. Logs are bounded and scoped to the managed
+instance. Initial image changes, root shrink, and project/pool moves are
+rejected rather than silently reprovisioning or relocating data.
+
+Removing an existing Incus instance is deliberately unavailable until an
+explicit data-preserving export workflow is implemented. If creation failed
+and no instance exists, only its verified generated definition may be removed.
+New guest identities still need explicit UUID/MAC until reviewed-candidate
+identity preparation is completed. Native provider compilation, fixture execution and disposable guest
+acceptance remain pending. Basic stopped-instance export is implemented in
+source; custom volumes/snapshot coverage and intermediate artifact recovery
+remain pending.
+
+The File Sharing page summarizes configured Samba and NFS network shares and
+their underlying service configurations. Network shares are declared directly
+within the declarative YAML model (`shares:`) and bound to managed storage
+directories.
+
+## Linux backup capture and recovery
+
+The reference backup inventory and confirmed capture/recovery tools now have
+source implementations. Capture is revision-pinned and private, and produces
+a checksummed **captured**, not prepared or restorable, bundle. It can gracefully
+stop fully running managed workloads in reverse dependency order and resume
+only workloads whose stop was attempted, in dependency order. The durable
+`<config>.backup.json` journal records stop intent, observed progress, staging
+identity, manifest checksum and publication stage. An incomplete journal blocks
+normal management. Startup does not automatically resume guests.
+
+The initial native collectors support standalone declared raw/QCOW2 Libvirt
+disks and private inactive domain XML (no managed-save, snapshots/checkpoints,
+NVRAM, TPM or external/backing-chain state), and portable stopped Incus root
+instance exports from the verified local non-clustered daemon with an explicit
+project/pool and verified archive index. Custom volumes, snapshot history and
+unsupported native devices remain capture blockers. Incus instances are not
+deleted by capture or by configuration removal.
+
+The initial filesystem collector supports regular files and directories with
+no symlinks, multiply linked files, visible xattrs/ACLs or nested mount
+boundaries; these cases require the remaining reference filesystem port.
+It records source metadata and preserves zero-filled regions as holes, but
+does not claim full metadata or restore equivalence. The capture destination
+must be absent, with a real workload-owned non-group/world-writable parent,
+outside the configuration and system roots. Publication uses no-replace
+rename and sync. Failed/uncertain stages are retained rather than automatically
+deleted. Verification checks exact tree contents, hashes, revision, native
+object identity and required configuration coverage.
+
+Use `managed_backup_recovery_status` to obtain the current review token.
+`managed_backup_recover` resumes only recorded workloads against the pinned
+revision, `managed_backup_publish` verifies and finishes the recorded
+publication, and `managed_backup_release` acknowledges the recovery blocker
+without starting workloads or publishing/deleting data. The current job
+boundary is non-cancellable during native capture; the capture deadline and
+explicit recovery remain available. Full reference custom-volume/snapshot
+discovery, filesystem metadata, existing empty-directory publication,
+generated-artifact sidecar review/reconciliation, exact manifest parity
+and native fault acceptance remain outstanding. No restore tool is added.
+
+## Model Context Protocol (MCP) and Agent Integration
+
+Maestro currently exposes an initial JSON-RPC 2.0 MCP interface at `POST /api/mcp` for
+autonomous coding agents and external tools:
+- `initialize`: returns server capabilities and version.
+- `tools/list`: dynamically enumerates available management tools and their input schemas.
+- `tools/call`: executes tools with the same argument validation, session authorization, Host/Origin restrictions, and write policies.
+
+**Phase 2 parity caveat:** the current HTTP MCP adapter is not yet a complete
+Streamable HTTP transport and there is no stdio MCP binary. Protocol negotiation,
+structured MCP results and official SDK contract parity remain mandatory before
+claiming reference compatibility. Native workloads, safe share mutations,
+backup capture/recovery and the production Linux installer are also incomplete.
+See [Phase 2 parity matrix](plans/proposed/server-man-phase2-parity-matrix.md).
+
+### Systemd service privilege-boundary caveat
+
+The service is always installed under its existing non-root workload
+account. The optional, explicitly authorized `sudo -n` helper relies on
+setuid privilege transition: a systemd service configured with
+`NoNewPrivileges=yes` or an empty `CapabilityBoundingSet` would prevent
+the authorized helper from performing root operations. The current
+installation unit therefore leaves setuid elevation available **only through
+the narrow sudoers command allowlist**; the main process receives no ambient
+root capabilities. Avoid blanket sudo, `SETENV`, or additional allowlisted
+programs. This boundary requires a disposable-guest security review in both
+helper-free and helper-enabled deployments before production use.
+
+## Release acceptance
+
+The implementation includes native Linux providers and the optional helper.
+Source implementation is not evidence of complete native acceptance. The
+[remaining Phase 2 gates](plans/proposed/modular-platform-ui-migration.md)
+and [reference parity ledger](plans/proposed/server-man-phase2-parity-matrix.md)
+track verification. Do not treat historic implementation status as a current
+feature limitation without checking the source and tests.
+
+### Native generator and offline engine checks
+
+Run `make test-quadlet` to validate Maestro-rendered definitions with the local
+Quadlet generator. Run `make test-podman` as the non-root workload account to test
+rootless engine lifecycle and fingerprint-label inspection using an offline,
+private temporary lab. See [development checks](development.md#checks) for
+prerequisites, isolation and cleanup. These targets start no user systemd units.
+The engine smoke uses a locally compiled scratch payload and disables registry
+pulls, remote connections and networking.
+
+Successful generation and engine execution provide host-specific evidence.
+The Podman lab also exercises Maestro's bounded native metadata reader for a
+running owned-but-stale container and a stopped foreign name collision. Quadlet
+application inventory now reports configured member states and a restart notice
+when running fingerprints differ from saved definitions. Unknown identities,
+unexpected members and native-name collisions block lifecycle actions. Start
+requires current running fingerprints; use an explicitly confirmed Restart for
+owned stale containers.
+
+End-to-end Maestro publication/lifecycle in a real user manager, boot policy,
+metadata-only/runtime fingerprint separation, interrupted recovery and both native
+installer/helper modes remain acceptance requirements.

@@ -6,6 +6,12 @@
 
 - Rust 1.85 or newer.
 - A Unix-like environment with the standard Rust tooling.
+- For debugging in VS Code, install the CodeLLDB extension (`vadimcn.vscode-lldb`):
+
+  ```sh
+  code --install-extension vadimcn.vscode-lldb
+  ```
+
 - Python 3.11 or newer (for Linux lab setup scripts and nginx template validation). You can use `uv` to set up a virtual environment and install dependencies:
 
   ```sh
@@ -16,16 +22,87 @@
 
 ## Run locally
 
+Use `make help` to list the three development environments:
+
+| Environment | First-time setup | Start | Browser access |
+| --- | --- | --- | --- |
+| Simulated router | None beyond Rust | `make run-simulated` | <http://127.0.0.1:3030>, token `maestro-test-token` |
+| Native Linux | `make init-linux` | `make run-linux` | <http://127.0.0.1:3030>, token from `data/linux/token` |
+| QEMU router | `make init-router` | `make run-router` | <http://127.0.0.1:8080/user20.asp>; see the [guest guide](../lab/aarch64/README.md) for credentials |
+
+Run one environment at a time: they share API port 3030, and Linux nginx uses
+the QEMU HTTP/HTTPS forwarding ports. Stop the foreground server with Ctrl+C;
+exit QEMU with Ctrl+A then X. Configuration and state are separate for each
+environment.
+
+Simulated router mode uses fixtures, simulates external commands, skips ASUS
+menu changes, and does not send Wake-on-LAN packets. `make run` remains an alias.
+
+Native Linux mode executes real operations as a non-root account. On Arch and
+Debian 12+ (including compatible derivatives), `make init-linux` installs system
+dependencies with `sudo` and prepares local configuration and frontend
+dependencies. Arch uses the existing pacman database; update the system normally
+before setup if it is out of date. Package managers may start the distribution's
+nginx service; Maestro's development nginx uses separate configuration and ports.
+
+When installed, mise manages Rust and Node; uv manages Python 3.11 and its
+dependencies in `.dev-tools/python`. Otherwise setup reuses compatible Rust or
+installs stable with rustup, uses distro Python/Jinja2/PyYAML, and reuses compatible
+Node/npm or downloads an official Node 22 archive with SHA-256 verification into
+`.dev-tools/node`. Toolchains and npm run as your account. Global tool defaults
+and existing Maestro configuration are preserved. Both init and run select the
+same tools without requiring shell activation. Each run rebuilds the Svelte UI
+before compiling and starting Maestro. `make test-nginx` and `make test-linux`
+also reuse `.dev-tools/python` when present; set `PYTHON=/path/to/python3` to
+select another environment with `requirements.txt` installed. See the
+[Linux integration guide](linux.md).
+
+### Optional privileged helper for development
+
+On a disposable Linux development host, stop the foreground Maestro process and run:
+
 ```sh
-make run
+make init-linux-helper
 ```
 
-Open <http://127.0.0.1:3030> with the fixture test token `maestro-test-token`.
-Fixture-backed test mode simulates external commands, skips ASUS menu changes,
-and does not send Wake-on-LAN packets.
+This builds only `maestro-admin` as your normal account, then uses sudo to
+review and install the root-owned executable and exact no-argument sudoers
+rule. On first installation the proposed policy enables package writes,
+Samba password changes, share publication and the distribution's Samba/NFS
+setup units; review the displayed grants before approving. Existing root-owned
+policy contents for the same workload UID are preserved. No packages,
+Samba/NFS shares or systemd service installation are performed by this target.
 
-For real services, see the [Linux integration guide](linux.md).
-For validating AArch64 packaging, Entware service startup, ASUS UI integration, and kernel WireGuard in an emulated guest, see the [AArch64 Router Lab guide](../lab/aarch64/README.md).
+Linux user operations are enabled automatically. Protected host operations become
+available when the optional helper is installed and its root-owned policy grants
+the action. Retired write gates are rejected as unknown configuration fields.
+Restart with `make run-linux`
+and check Agent access > Capabilities. Before saving an enabled file share,
+open File shares and run **Set up server** for Samba or NFS. Samba setup adds
+the managed include to `smb.conf`; the managed fragment is published when
+share definitions are applied. Use `sudoedit /etc/maestro/admin-policy.json`
+to narrow or change the reviewed grants.
+
+```sh
+make remove-linux-helper
+```
+
+This removes the exact sudoers rule and helper executable after confirmation;
+it preserves the policy, configuration and native services/shares. Restart
+Maestro to test helper-free behavior. These targets affect fixed host paths
+and must not be used on a production host or concurrently with the production
+installer. Normal `make init-linux` remains helper-free.
+
+QEMU router mode runs the real AArch64 router binary with Entware and mocked
+ASUS firmware interfaces in an Alpine guest. Setup builds the release IPK,
+downloads guest media and runs the guest installer; it requires the AArch64
+cross-compilation toolchain and [QEMU prerequisites](../lab/aarch64/README.md).
+After installation powers off, use `make run-router` for subsequent boots.
+This environment exercises packaging, service startup, ASUS UI integration and
+kernel WireGuard; it does not establish actual Asuswrt firmware compatibility.
+`make init-lab` and `make run-lab` remain available; the former requires an
+already-built IPK. `make test-router` checks guest scripts using mocked QEMU
+without booting a VM (`make test-lab` is an alias).
 
 ## Sync router data
 
@@ -61,12 +138,116 @@ IPK using the version in `Cargo.toml`. The package and its SHA-256 checksum are
 written to `dist/maestro_<version>-1_aarch64-3.10.ipk` and `.ipk.sha256`.
 This uses the same cross-compilation toolchain as `make release`.
 
+### Cross-compilation for AArch64 musl
+
+`make release` targets `aarch64-unknown-linux-musl` and invokes Cargo directly.
+On an x86_64 Linux development host, set up a local musl cross-compiler first.
+Installing the Rust target alone does not supply the C compiler or linker.
+
+#### Option 1: local `aarch64-linux-musl-gcc` (Arch and Debian/Ubuntu)
+
+Install the download and archive tools for your distribution:
+
+```sh
+# Arch Linux (use the existing package database; do not run pacman -Sy).
+sudo pacman -S --needed ca-certificates curl tar gzip coreutils
+
+# Debian/Ubuntu.
+sudo apt-get update
+sudo apt-get install --no-install-recommends ca-certificates curl tar gzip coreutils
+```
+
+Download the prebuilt [musl.cc toolchain](https://musl.cc/), verify its published
+SHA-512 checksum, and extract it under your account. This is a complete musl
+toolchain; the distribution's `aarch64-linux-gnu-gcc` targets glibc instead.
+
+```sh
+(
+  set -eu
+  stage=$(mktemp -d)
+  trap 'rm -rf -- "$stage"' EXIT
+  cd "$stage"
+  curl --proto '=https' --tlsv1.2 -fsSL https://musl.cc/SHA512SUMS -o SHA512SUMS
+  curl --proto '=https' --tlsv1.2 -fsSL https://musl.cc/aarch64-linux-musl-cross.tgz \
+    -o aarch64-linux-musl-cross.tgz
+  awk '$2 == "aarch64-linux-musl-cross.tgz"' SHA512SUMS | sha512sum --check -
+  mkdir -p "$HOME/.local/share/toolchains"
+  test ! -e "$HOME/.local/share/toolchains/aarch64-linux-musl-cross"
+  tar --no-same-owner -xzf aarch64-linux-musl-cross.tgz -C "$HOME/.local/share/toolchains"
+)
+```
+
+Set the compiler and Cargo linker in your shell. Add these exports to your
+shell startup file if you want them in future sessions:
+
+```sh
+export PATH="$HOME/.local/share/toolchains/aarch64-linux-musl-cross/bin:$PATH"
+export CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc
+export AR_aarch64_unknown_linux_musl=aarch64-linux-musl-ar
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc
+
+aarch64-linux-musl-gcc -dumpmachine  # Expected: aarch64-linux-musl
+rustup target add aarch64-unknown-linux-musl
+make release
+```
+
+If Rust is managed by mise without an active version, run the last two commands
+as `mise exec rust@stable -- rustup target add aarch64-unknown-linux-musl` and
+`mise exec rust@stable -- make release`. The release binary and checksum are
+written to `dist/maestro-aarch64-unknown-linux-musl` and its `.sha256` file.
+
+#### Option 2: container-based build with `cross`
+
+Use `cross` with Docker or Podman when you prefer a container-provided toolchain.
+The container engine must be usable by your account. Installing `cross` does
+not change `make release`; invoke `cross build` explicitly:
+
+1. Install `cross`:
+   ```sh
+   cargo install cross --git https://github.com/cross-rs/cross
+   # Or download the prebuilt binary directly to ~/.cargo/bin:
+   curl -fsSL https://github.com/cross-rs/cross/releases/download/v0.2.5/cross-x86_64-unknown-linux-musl.tar.gz | tar -xz -C ~/.cargo/bin
+   ```
+
+2. Build with `cross`:
+   ```sh
+   cross build --release --locked --target aarch64-unknown-linux-musl --no-default-features --features asuswrt
+   ```
+
 With the Python environment active, run `make test-nginx` for the bundled
 nginx policy and loopback tests. `make test-linux` exercises the API with real
 nginx, including managed-site persistence, regeneration, and HTTPS.
 
+`python3 -m unittest discover -s tests -p 'test_linux_dev.py' -v` checks Arch/Debian
+bootstrap selection, tool manager preference, version gates and download checksum
+handling with mocked commands. It installs no packages and changes no live state.
+
+`make test-quadlet` runs the opt-in native Quadlet generator test against rendered
+Maestro definitions. It generates into a temporary directory and starts no units.
+Set `MAESTRO_QUADLET_GENERATOR` when the generator is installed somewhere other
+than `/usr/lib/podman/quadlet`.
+
+`make test-podman` runs an offline rootless engine smoke test. It requires Rust/Cargo, Podman,
+a C compiler with static libc, tar, sha256sum and GNU timeout, and must run as a
+non-root workload account on a host permitting rootless containers. The script
+builds its own scratch image, disables remote connections and networking, and
+uses `--pull never`. Storage, runtime, auth and user configuration are scoped to
+a fresh private temporary lab. It checks exact storage roots before creating
+containers and before resetting that lab during cleanup. Existing user units and
+normal Podman storage are preserved. Engine commands have bounded deadlines.
+
+The Podman smoke checks create/start/graceful stop/restart/removal and fingerprint
+labels. It also executes Maestro's real bounded metadata reader against a
+running owned container with a deliberately stale fingerprint, then verifies
+refusal to adopt a stopped foreign object using the configured name. The reader
+checks leave that foreign object unchanged before the lab removes it. These
+checks establish native engine, metadata-reader and generated-definition behavior
+on the executing host. Maestro native ownership, runtime-versus-boot reconciliation,
+interrupted operations and the two installer/helper modes require further
+provider acceptance in disposable guests.
+
 The emulated nginx examples are managed inputs in
-`test-fixtures/etc/maestro/nginx/sites.toml`. Test mode still writes fixture
+`test-fixtures/etc/maestro/nginx/sites.yaml`. Test mode still writes fixture
 files when you save settings; the ASUS page is generated at startup and ignored
 by Git.
 

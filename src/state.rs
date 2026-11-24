@@ -760,7 +760,7 @@ pub async fn download_latest_dehydrated(config: &AppConfig) -> Result<Dehydrated
         .user_agent("maestro/dehydrated-updater")
         .build()
         .context("failed to create GitHub download client")?;
-    let response = client
+    let mut response = client
         .get(DEHYDRATED_DOWNLOAD_URL)
         .send()
         .await
@@ -773,15 +773,18 @@ pub async fn download_latest_dehydrated(config: &AppConfig) -> Result<Dehydrated
     {
         bail!("GitHub dehydrated download is unexpectedly large");
     }
-    let body = response
-        .bytes()
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .context("failed to read dehydrated download")?;
-    if body.len() as u64 > MAX_DEHYDRATED_DOWNLOAD_BYTES {
-        bail!("GitHub dehydrated download is unexpectedly large");
+        .context("failed to read dehydrated download")?
+    {
+        if (body.len() as u64).saturating_add(chunk.len() as u64) > MAX_DEHYDRATED_DOWNLOAD_BYTES {
+            bail!("GitHub dehydrated download is unexpectedly large");
+        }
+        body.extend_from_slice(&chunk);
     }
-    let text = String::from_utf8(body.to_vec())
-        .context("GitHub dehydrated download was not UTF-8 text")?;
+    let text = String::from_utf8(body).context("GitHub dehydrated download was not UTF-8 text")?;
     if !text.starts_with("#!") || !text.contains("dehydrated") {
         bail!("GitHub response does not look like the dehydrated script");
     }
@@ -805,15 +808,29 @@ async fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
         .context("cannot write a file without a filename")?
         .to_string_lossy();
     let temp = parent.join(format!(".{filename}.tmp-{}", Uuid::new_v4().simple()));
-    fs::write(&temp, bytes)
-        .await
-        .with_context(|| format!("failed to write {}", temp.display()))?;
-    #[cfg(unix)]
-    fs::set_permissions(&temp, std::fs::Permissions::from_mode(mode)).await?;
-    fs::rename(&temp, path)
-        .await
-        .with_context(|| format!("failed to replace {}", path.display()))?;
-    Ok(())
+    use tokio::io::AsyncWriteExt;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .open(&temp)
+        .await?;
+    let result = async {
+        file.set_permissions(std::fs::Permissions::from_mode(mode))
+            .await?;
+        file.write_all(bytes).await?;
+        file.sync_all().await?;
+        drop(file);
+        fs::rename(&temp, path)
+            .await
+            .with_context(|| format!("failed to replace {}", path.display()))?;
+        Ok(())
+    }
+    .await;
+    if result.is_err() {
+        let _ = fs::remove_file(&temp).await;
+    }
+    result
 }
 
 #[cfg(test)]

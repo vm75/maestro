@@ -81,20 +81,25 @@ EOF
 cat > "$TMP/root/opt/bin/maestro" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$SETUP_COMMANDS"
+case "$*" in
+    *"config-value certificates.dns01_hook") printf '%s\n' "$SETUP_ROOT/opt/var/lib/maestro/dehydrated/hook.sh" ;;
+    *"config-value commands.dehydrated") printf '%s\n' "$SETUP_ROOT/opt/var/lib/maestro/dehydrated/dehydrated" ;;
+esac
 EOF
 cat > "$TMP/root/opt/etc/init.d/S99maestro" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$1" >> "$SERVICE_COMMANDS"
 EOF
 chmod +x "$TMP/bin/id" "$TMP/root/opt/bin/maestro" "$TMP/root/opt/etc/init.d/S99maestro"
-printf 'existing configuration\n' > "$TMP/root/opt/etc/maestro/maestro.toml"
+printf 'existing configuration\n' > "$TMP/root/opt/etc/maestro/maestro.yaml"
 printf '{}\n' > "$TMP/examples/firewall-policy.example.json"
 sed -e "s|/opt/|$TMP/root/opt/|g" -e "s|/jffs/|$TMP/root/jffs/|g" \
     "$REPO_DIR/scripts/setup-merlin.sh" > "$TMP/setup-merlin.sh"
+export SETUP_ROOT="$TMP/root"
 export SETUP_COMMANDS="$TMP/setup-commands" SERVICE_COMMANDS="$TMP/service-commands"
 MAESTRO_DEFER_START=1 sh "$TMP/setup-merlin.sh" "$TMP/examples" >/dev/null
 test ! -f "$SERVICE_COMMANDS"
-grep -F 'migrate-nginx-inputs' "$SETUP_COMMANDS" >/dev/null
+! grep -E 'migrate-config|migrate-nginx-inputs' "$SETUP_COMMANDS" >/dev/null
 grep -F 'init-nginx' "$SETUP_COMMANDS" >/dev/null
 grep -F 'check-config' "$SETUP_COMMANDS" >/dev/null
 test -f "$TMP/root/jffs/scripts/post-mount"

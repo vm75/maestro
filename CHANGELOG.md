@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+## 0.12.0
+
+### Changed
+
+- Move custom Entware package builds to Toolbox; replace the NGINX-specific upgrade command with `maestro toolbox list` and `maestro toolbox install TAG`, verifying every IPK in the selected release.
+- Keep router lab provisioning independent of custom Toolbox installation; require an explicit release selection.
+- Use YAML for main configuration and managed nginx settings/sites on ASUS and Linux. Startup no longer reads TOML configuration.
+
+### Added
+
+- Report actual Quadlet container member states and stale running fingerprints; refuse lifecycle actions on foreign identities or configured-name collisions.
+- Discard uncommitted prepared intent on automatic retry while preserving current YAML, native resources, and any prior interrupted transition.
+- Add durable per-resource apply progress and confirmed safe retry that refuses automatic replay of interrupted removals.
+- Add persisted next-start apply/recovery mode for managed directories and configured rootless Quadlet definitions, including YAML, typed-edit and revert workflows. Native platform acceptance remains pending.
+- Provide `migrate-config` for explicit one-time TOML conversion, private exact-byte backups, conflict protection, and idempotent retries.
+
 ## 0.11.0
 
 ### Changed

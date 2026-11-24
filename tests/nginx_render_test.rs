@@ -189,7 +189,7 @@ async fn native_jinja_output_passes_real_nginx_validation() {
     if let Some(fixture) = std::env::var_os("MAESTRO_NGINX_FIXTURE") {
         fs::create_dir_all(root.join("settings")).unwrap();
         fs::copy(
-            PathBuf::from(fixture).join("../maestro/nginx/sites.toml"),
+            PathBuf::from(fixture).join("../maestro/nginx/sites.yaml"),
             maestro::nginx_sites::path(&config),
         )
         .unwrap();
@@ -275,7 +275,7 @@ async fn bootstrap_installs_current_format_and_backs_up_existing_main_configurat
     fs::create_dir_all(&config.nginx.inputs_dir).unwrap();
     fs::write(
         nginx_render::global_path(&config),
-        "[global]\nhttp_port = 18081\nhttps_port = 18444\n",
+        "{\n  \"global\": {\n    \"http_port\": 18081,\n    \"https_port\": 18444\n  }\n}\n",
     )
     .unwrap();
     assert!(nginx_render::bootstrap(&config).await.unwrap());
@@ -288,7 +288,7 @@ async fn bootstrap_installs_current_format_and_backs_up_existing_main_configurat
     assert!(root.join("mime.types").is_file());
     assert!(!root.join("templates").exists());
     assert!(nginx_render::global_path(&config).is_file());
-    assert!(!root.join("settings/nginx.toml").exists());
+    assert!(!root.join("settings/nginx.yaml").exists());
     assert!(!root.join("settings/allowed_ips.txt").exists());
     assert!(config.nginx.inputs_dir.join("allowed_ips.txt").is_file());
     let paths = ["client_body", "proxy", "fastcgi", "uwsgi", "scgi"]
@@ -349,9 +349,9 @@ async fn bootstrap_installs_current_format_and_backs_up_existing_main_configurat
 
 #[test]
 fn synthetic_current_policies_validate_and_render_natively() {
-    let examples: toml::Value =
-        toml::from_str(include_str!("../config/nginx/examples/sites.toml")).unwrap();
-    for (name, site) in examples["sites"].as_table().unwrap() {
+    let examples: serde_yaml::Value =
+        serde_yaml::from_str(include_str!("../config/nginx/examples/sites.yaml")).unwrap();
+    for (name, site) in examples["sites"].as_mapping().unwrap() {
         let mut site = serde_json::to_value(site)
             .unwrap()
             .as_object()
@@ -382,6 +382,6 @@ fn synthetic_current_policies_validate_and_render_natively() {
             &folder,
             &names,
         )
-        .unwrap_or_else(|e| panic!("{name}: {e}"));
+        .unwrap_or_else(|e| panic!("{name:?}: {e}"));
     }
 }

@@ -1,0 +1,1668 @@
+{
+  "reference": "c1a9f32f5898146ae7ac339043b910b8e2a2c438",
+  "method": "app.Registry with non-nil monitor and command-denying Executor; no tools executed",
+  "verified_modes": [
+    "without_helper",
+    "with_helper"
+  ],
+  "tool_count": 60,
+  "tools": [
+    {
+      "name": "dependencies_install",
+      "module": "updates",
+      "title": "Install module dependencies",
+      "description": "Install native dependencies for an optional module. Does not add repositories or change container ownership, group memberships, or daemon startup settings. Native package scripts can start services; on Arch also upgrades the system. Restart Maestro after installation to refresh provider discovery.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "target": {
+            "type": "string",
+            "description": "Dependency group",
+            "enum": [
+              "podman",
+              "docker",
+              "samba",
+              "nfs",
+              "virtualization",
+              "incus"
+            ]
+          }
+        },
+        "required": [
+          "confirm",
+          "target"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "jobs_cancel",
+      "module": "system",
+      "title": "Cancel job",
+      "description": "Request cancellation of a running management job. Completed host changes cannot be undone by cancellation.",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Job ID",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "jobs_get",
+      "module": "system",
+      "title": "Job details",
+      "description": "Read a management job's state, result, and bounded output.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Job ID",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "jobs_list",
+      "module": "system",
+      "title": "Recent jobs",
+      "description": "List up to 64 recent management jobs, newest first. Fetch an individual job for output.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_apply_retry",
+      "module": "managed_apply",
+      "title": "Retry configuration apply",
+      "description": "Inspect incomplete application and retry non-destructive publication as a job. Uncertain interrupted removals require explicit inspection and are not replayed.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          }
+        },
+        "required": [
+          "confirm"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_apply_status",
+      "module": "managed_apply",
+      "title": "Inspect apply progress",
+      "description": "Read durable per-resource application status without retrying or starting resources.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_artifact_reconcile",
+      "module": "managed_artifact_recovery",
+      "title": "Preserve and reconcile generated-artifact metadata",
+      "description": "After a separate review, preserve any existing private conflicting publication sidecar and atomically restore only its canonical metadata. Never overwrites native generated definitions, changes workloads or automatically retries apply. Requires revision, resource and exact on-disk review token.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "resource": {
+            "type": "string",
+            "description": "Failed managed service resource, e.g. service/example",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "reviewToken": {
+            "type": "string",
+            "description": "Token from the most recent artifact review",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "revision": {
+            "type": "string",
+            "description": "Pinned current configuration revision",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "confirm",
+          "resource",
+          "reviewToken",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_artifact_review",
+      "module": "managed_artifact_recovery",
+      "title": "Review generated artifact conflict",
+      "description": "Inspect the current failed publication, exact previous/desired native bytes and private sidecar state without exposing generated file contents or paths. Unsafe or drifted native files cannot be reconciled automatically.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "resource": {
+            "type": "string",
+            "description": "Failed managed service resource, e.g. service/example",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "resource"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_backup_inventory",
+      "module": "managed_backup",
+      "title": "Review backup inputs",
+      "description": "Inventory private configuration, data, image/private-file references and native/external requirements. Metadata only: never reads referenced private files, exposes native configuration contents, copies data, exports guests or produces a completed backup.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_backup_prepare",
+      "module": "managed_backup",
+      "title": "Capture backup inputs",
+      "description": "Capture supported stopped-workload inputs into a private checksummed bundle for a reviewed revision. This initial capture is not a prepared/restorable backup: complete filesystem metadata, advanced VM state and restore validation remain unfinished; initial stopped Incus exports and basic libvirt XML/standalone-disk collection are supported. Unresolved prerequisites block capture. Recovery of previously running workloads is attempted and failures are reported.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "deadlineSeconds": {
+            "type": "integer",
+            "description": "Backup timeout in seconds (30-86400, default 900)",
+            "minimum": 30,
+            "maximum": 86400
+          },
+          "destination": {
+            "type": "string",
+            "description": "Absolute path to backup destination directory",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "quiesce": {
+            "type": "boolean",
+            "description": "Gracefully stop running workloads during backup and resume afterward"
+          },
+          "revision": {
+            "type": "string",
+            "description": "Reviewed configuration revision",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "confirm",
+          "destination",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_backup_publish",
+      "module": "managed_backup",
+      "title": "Verify and finish capture publication",
+      "description": "Verify the reviewed recorded capture tree and complete its durable publication. A destination must be absent or already be the recorded capture directory. Never replaces/deletes data, starts workloads, imports native data or marks the capture restorable. Requires the current configuration revision and recovery token.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "deadlineSeconds": {
+            "type": "integer",
+            "description": "Verification/publication timeout in seconds (30-86400, default 900)",
+            "minimum": 30,
+            "maximum": 86400
+          },
+          "reviewToken": {
+            "type": "string",
+            "description": "Current recovery review token",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "revision": {
+            "type": "string",
+            "description": "Current configuration revision from recovery status",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "confirm",
+          "reviewToken",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_backup_recover",
+      "module": "managed_backup",
+      "title": "Resume interrupted backup workloads",
+      "description": "Explicitly recover only previously running workloads whose stop was attempted during the reviewed capture. Rechecks configuration revision, definitions and runtime state; never replays capture or restores data.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "reviewToken": {
+            "type": "string",
+            "description": "Token from current recovery status",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "revision": {
+            "type": "string",
+            "description": "Pinned configuration revision",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "confirm",
+          "reviewToken",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_backup_recovery_status",
+      "module": "managed_backup",
+      "title": "Review backup recovery",
+      "description": "Read the private durable record of workload stop/resume progress and staged/synced/uncertain capture publication. Does not activate workloads.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_backup_release",
+      "module": "managed_backup",
+      "title": "Leave backup workloads as they are",
+      "description": "Acknowledge the reviewed interrupted capture and release its management blocker without starting/stopping workloads, publishing/deleting capture data or replaying capture. Requires the current configuration revision and recovery token; retained journal states do not claim successful resumption.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "reviewToken": {
+            "type": "string",
+            "description": "Current recovery review token",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "revision": {
+            "type": "string",
+            "description": "Current configuration revision from recovery status",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "confirm",
+          "reviewToken",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_config_check",
+      "module": "managed_status",
+      "title": "Recheck configuration readiness",
+      "description": "Refresh native prerequisites and file/mount checks. Never installs packages or creates missing data.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_config_health",
+      "module": "managed",
+      "title": "Check workload configuration",
+      "description": "Check configuration validity and required files without changing the host. Runtime readiness checks are reported separately.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_config_history",
+      "module": "managed_history",
+      "title": "Configuration history",
+      "description": "List bounded private configuration revisions. Never reads referenced secret files. Disabled with management writes.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_config_history_read",
+      "module": "managed_history",
+      "title": "Inspect configuration revision",
+      "description": "Read a verified private historical configuration, including malformed YAML for recovery. Never reads referenced secret files.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "History revision to inspect or restore",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_config_model",
+      "module": "managed_edit",
+      "title": "Configuration form data",
+      "description": "Read typed private desired definitions for editing. Disabled with management writes; never reads referenced secret files.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_config_plan",
+      "module": "managed_apply",
+      "title": "Preview configuration changes",
+      "description": "Validate and preview affected resources without publishing or starting workloads. Backend availability is returned explicitly.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "Workload YAML",
+            "minLength": 1,
+            "maxLength": 1048576
+          },
+          "revision": {
+            "type": "string",
+            "description": "Current configuration revision, or missing",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "content",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_config_read",
+      "module": "managed",
+      "title": "Inspect workload configuration",
+      "description": "Read private desired configuration for editing; disabled with management writes. Secret file contents are never read.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_config_readiness",
+      "module": "managed_status",
+      "title": "Configuration readiness",
+      "description": "Read cached backend prerequisites and fresh file/mount checks without inspecting running workloads or changing host state. Missing or invalid configurations remain inspectable.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_config_revert",
+      "module": "managed_history",
+      "title": "Revert configuration",
+      "description": "Restore a verified historical definition as a new revision and reconcile owned resources. May interrupt running workloads. Preserves data; unresolved prior removals cannot be abandoned.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "mode": {
+            "type": "string",
+            "description": "Apply now or publish for next start",
+            "enum": [
+              "now",
+              "next_start"
+            ]
+          },
+          "revision": {
+            "type": "string",
+            "description": "Current configuration revision",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "target": {
+            "type": "string",
+            "description": "History revision to inspect or restore",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "confirm",
+          "mode",
+          "revision",
+          "target"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_config_revert_plan",
+      "module": "managed_history",
+      "title": "Review configuration revert",
+      "description": "Validate a historical definition and preview affected resources. Reverting configuration does not restore data or reverse client effects.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "revision": {
+            "type": "string",
+            "description": "Current configuration revision",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "target": {
+            "type": "string",
+            "description": "History revision to inspect or restore",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "revision",
+          "target"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_config_save",
+      "module": "managed_apply",
+      "title": "Save and apply configuration",
+      "description": "Persist authoritative configuration and apply affected native definitions as a tracked job. Failed apply retains desired configuration and reports failure; no data is deleted implicitly.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "content": {
+            "type": "string",
+            "description": "Workload YAML",
+            "minLength": 1,
+            "maxLength": 1048576
+          },
+          "mode": {
+            "type": "string",
+            "description": "Apply now or publish changes for next start",
+            "enum": [
+              "now",
+              "next_start"
+            ]
+          },
+          "revision": {
+            "type": "string",
+            "description": "Current configuration revision, or missing",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "confirm",
+          "content",
+          "mode",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_config_validate",
+      "module": "managed",
+      "title": "Validate workload configuration",
+      "description": "Validate a proposed YAML workload configuration without saving it or activating resources.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "Workload YAML",
+            "minLength": 1,
+            "maxLength": 1048576
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_directory_browse",
+      "module": "managed_shares",
+      "title": "Browse directories",
+      "description": "List accessible directory paths for choosing a share or storage path without showing file contents.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Directory path to inspect",
+            "maxLength": 4096
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_resource_plan",
+      "module": "managed_edit",
+      "title": "Review definition change",
+      "description": "Validate a typed definition edit and calculate affected resources before saving. Does not modify configuration or workloads.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "definition": {
+            "type": "string",
+            "description": "Typed definition as JSON; omitted for removal",
+            "maxLength": 262144
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable resource ID",
+            "minLength": 1,
+            "maxLength": 63
+          },
+          "kind": {
+            "type": "string",
+            "description": "Resource kind",
+            "enum": [
+              "service",
+              "storage",
+              "share",
+              "binding",
+              "secret"
+            ]
+          },
+          "operation": {
+            "type": "string",
+            "description": "Definition operation",
+            "enum": [
+              "save",
+              "remove"
+            ]
+          },
+          "revision": {
+            "type": "string",
+            "description": "Current central configuration revision or missing",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "operation",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_resource_save",
+      "module": "managed_edit",
+      "title": "Save definition change",
+      "description": "Save a revision-checked typed definition through the authoritative apply workflow. Removing definitions retains persistent data where supported; unsafe removals fail explicitly.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "definition": {
+            "type": "string",
+            "description": "Typed definition as JSON; omitted for removal",
+            "maxLength": 262144
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable resource ID",
+            "minLength": 1,
+            "maxLength": 63
+          },
+          "kind": {
+            "type": "string",
+            "description": "Resource kind",
+            "enum": [
+              "service",
+              "storage",
+              "share",
+              "binding",
+              "secret"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "description": "Apply now or publish for next start",
+            "enum": [
+              "now",
+              "next_start"
+            ]
+          },
+          "operation": {
+            "type": "string",
+            "description": "Definition operation",
+            "enum": [
+              "save",
+              "remove"
+            ]
+          },
+          "revision": {
+            "type": "string",
+            "description": "Current central configuration revision or missing",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "confirm",
+          "id",
+          "kind",
+          "mode",
+          "operation",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_service_disable",
+      "module": "managed_lifecycle",
+      "title": "Managed service disable",
+      "description": "Manage the authoritative service as a tracked job. Start/stop/restart affect execution; enable/disable affect boot policy only.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "service": {
+            "type": "string",
+            "description": "Managed service ID",
+            "minLength": 1,
+            "maxLength": 63
+          }
+        },
+        "required": [
+          "confirm",
+          "service"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_service_enable",
+      "module": "managed_lifecycle",
+      "title": "Managed service enable",
+      "description": "Manage the authoritative service as a tracked job. Start/stop/restart affect execution; enable/disable affect boot policy only.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "service": {
+            "type": "string",
+            "description": "Managed service ID",
+            "minLength": 1,
+            "maxLength": 63
+          }
+        },
+        "required": [
+          "confirm",
+          "service"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_service_logs",
+      "module": "managed_logs",
+      "title": "Read managed application logs",
+      "description": "Explicitly read bounded recent logs for one configured managed application. Runtime logs may contain private application data. This never starts a workload or reads another application.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "service": {
+            "type": "string",
+            "description": "Managed application ID",
+            "minLength": 1,
+            "maxLength": 63
+          },
+          "container": {
+            "type": "string",
+            "description": "Optional configured container ID",
+            "minLength": 1,
+            "maxLength": 63
+          },
+          "tail": {
+            "type": "integer",
+            "description": "Most recent entries per native log reader; default 200",
+            "minimum": 1,
+            "maximum": 2000
+          }
+        },
+        "required": [
+          "service"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_service_restart",
+      "module": "managed_lifecycle",
+      "title": "Managed service restart",
+      "description": "Manage the authoritative service as a tracked job. Start/stop/restart affect execution; enable/disable affect boot policy only.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "service": {
+            "type": "string",
+            "description": "Managed service ID",
+            "minLength": 1,
+            "maxLength": 63
+          }
+        },
+        "required": [
+          "confirm",
+          "service"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_service_start",
+      "module": "managed_lifecycle",
+      "title": "Managed service start",
+      "description": "Manage the authoritative service as a tracked job. Start/stop/restart affect execution; enable/disable affect boot policy only.",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "service": {
+            "type": "string",
+            "description": "Managed service ID",
+            "minLength": 1,
+            "maxLength": 63
+          }
+        },
+        "required": [
+          "service"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_service_stop",
+      "module": "managed_lifecycle",
+      "title": "Managed service stop",
+      "description": "Manage the authoritative service as a tracked job. Start/stop/restart affect execution; enable/disable affect boot policy only.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "service": {
+            "type": "string",
+            "description": "Managed service ID",
+            "minLength": 1,
+            "maxLength": 63
+          }
+        },
+        "required": [
+          "confirm",
+          "service"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_services",
+      "module": "managed_status",
+      "title": "Managed applications",
+      "description": "Read configuration health and selected runtime status without secret values or backend mutations.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_share_publish",
+      "module": "managed_shares",
+      "title": "Publish or unpublish share",
+      "description": "Persist the share's publication toggle and apply the authoritative protocol set. Does not change shared data, accounts or host daemon enablement.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "published": {
+            "type": "boolean"
+          },
+          "share": {
+            "type": "string",
+            "description": "Share ID",
+            "minLength": 1,
+            "maxLength": 63
+          }
+        },
+        "required": [
+          "confirm",
+          "published",
+          "share"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_shares",
+      "module": "managed_shares",
+      "title": "Configured file shares",
+      "description": "Read authoritative share definitions and protocol publication state without changing host daemons.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_storage_create",
+      "module": "managed_storage",
+      "title": "Provision new storage",
+      "description": "Create a reviewed empty directory or new sparse raw/qcow2 disk, optionally cloned from its configured image as a job. Never overwrites data, restores backups, creates parents, changes ownership or starts workloads.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "purpose": {
+            "type": "string",
+            "description": "Explicitly authorize new data, never replacement of missing restored data",
+            "enum": [
+              "new_data"
+            ]
+          },
+          "reviewToken": {
+            "type": "string",
+            "description": "Token from the reviewed provisioning plan",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "revision": {
+            "type": "string",
+            "description": "Current configuration revision",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "sizeGiB": {
+            "type": "integer",
+            "description": "New disk capacity in GiB; omit or use zero for a directory",
+            "minimum": 0,
+            "maximum": 4096
+          },
+          "storage": {
+            "type": "string",
+            "description": "Existing storage reference ID",
+            "minLength": 1,
+            "maxLength": 63
+          }
+        },
+        "required": [
+          "confirm",
+          "purpose",
+          "reviewToken",
+          "revision",
+          "storage"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "managed_storage_plan",
+      "module": "managed_storage",
+      "title": "Review new storage",
+      "description": "Inspect an absent owned path and stopped consumers without creating data. Existing parents must be owned real directories. Private paths require management writes.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "revision": {
+            "type": "string",
+            "description": "Current configuration revision",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "sizeGiB": {
+            "type": "integer",
+            "description": "New disk capacity in GiB; omit or use zero for a directory",
+            "minimum": 0,
+            "maximum": 4096
+          },
+          "storage": {
+            "type": "string",
+            "description": "Existing storage reference ID",
+            "minLength": 1,
+            "maxLength": 63
+          }
+        },
+        "required": [
+          "revision",
+          "storage"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "monitor_processes",
+      "module": "monitor",
+      "title": "Process activity",
+      "description": "Read sampled process activity, sorted and filtered before limiting results. CPU uses 100% per logical core. Process command arguments and environments are never collected.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "filter": {
+            "type": "string",
+            "description": "Case insensitive process name or PID filter",
+            "maxLength": 128
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum rows, default 100",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "sort": {
+            "type": "string",
+            "description": "Order by CPU (default), memory, PID, or name",
+            "enum": [
+              "cpu",
+              "memory",
+              "pid",
+              "name"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "monitor_snapshot",
+      "module": "monitor",
+      "title": "Live resources",
+      "description": "Read cached Linux CPU, memory, disk, network, sensors, load and uptime with up to 60 history points. Null rates mean the first sample, a reset counter, or unavailable data. Check lastError and at for stale data.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "packages_install",
+      "module": "updates",
+      "title": "Install repository packages",
+      "description": "Install 1\u201332 repository package names and their dependencies. Arch also performs a full system upgrade to avoid partial upgrades. Native signatures and locks remain enabled. May restart services; no reboot is requested.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "packages": {
+            "type": "string",
+            "description": "Whitespace-separated repository package names",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        },
+        "required": [
+          "confirm",
+          "packages"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "services_details",
+      "module": "services",
+      "title": "Service details",
+      "description": "Read selected service properties without environment, command lines, credentials or unit-file contents.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "Manager scope; defaults to systemdScope",
+            "enum": [
+              "system",
+              "user"
+            ]
+          },
+          "unit": {
+            "type": "string",
+            "description": "One exact .service unit name in the configured scope",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "unit"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "services_disable",
+      "module": "services",
+      "title": "Service disable",
+      "description": "Run systemctl disable for one validated service as a tracked job. The configured privilege policy applies. Changes startup enablement only; does not start or stop the current service.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "scope": {
+            "type": "string",
+            "description": "Manager scope; defaults to systemdScope",
+            "enum": [
+              "system",
+              "user"
+            ]
+          },
+          "unit": {
+            "type": "string",
+            "description": "One exact .service unit name in the configured scope",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "confirm",
+          "unit"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "services_enable",
+      "module": "services",
+      "title": "Service enable",
+      "description": "Run systemctl enable for one validated service as a tracked job. The configured privilege policy applies. Changes startup enablement only; does not start or stop the current service.",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "Manager scope; defaults to systemdScope",
+            "enum": [
+              "system",
+              "user"
+            ]
+          },
+          "unit": {
+            "type": "string",
+            "description": "One exact .service unit name in the configured scope",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "unit"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "services_list",
+      "module": "services",
+      "title": "Service inventory",
+      "description": "List loaded and installed systemd services with state and enablement in the configured system/user scope; reports partial inventory and bus failures explicitly.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "Manager scope; defaults to systemdScope",
+            "enum": [
+              "system",
+              "user"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "services_logs",
+      "module": "services",
+      "title": "Service journal",
+      "description": "Read bounded recent journal output for one service in the configured scope. Logs may contain private application data.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "Manager scope; defaults to systemdScope",
+            "enum": [
+              "system",
+              "user"
+            ]
+          },
+          "tail": {
+            "type": "integer",
+            "description": "Most recent journal entries, default 200",
+            "minimum": 1,
+            "maximum": 2000
+          },
+          "unit": {
+            "type": "string",
+            "description": "One exact .service unit name in the configured scope",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "unit"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "services_reload",
+      "module": "services",
+      "title": "Service reload",
+      "description": "Run systemctl reload for one validated service as a tracked job. The configured privilege policy applies.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "scope": {
+            "type": "string",
+            "description": "Manager scope; defaults to systemdScope",
+            "enum": [
+              "system",
+              "user"
+            ]
+          },
+          "unit": {
+            "type": "string",
+            "description": "One exact .service unit name in the configured scope",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "confirm",
+          "unit"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "services_restart",
+      "module": "services",
+      "title": "Service restart",
+      "description": "Run systemctl restart for one validated service as a tracked job. The configured privilege policy applies.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "scope": {
+            "type": "string",
+            "description": "Manager scope; defaults to systemdScope",
+            "enum": [
+              "system",
+              "user"
+            ]
+          },
+          "unit": {
+            "type": "string",
+            "description": "One exact .service unit name in the configured scope",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "confirm",
+          "unit"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "services_start",
+      "module": "services",
+      "title": "Service start",
+      "description": "Run systemctl start for one validated service as a tracked job. The configured privilege policy applies.",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "Manager scope; defaults to systemdScope",
+            "enum": [
+              "system",
+              "user"
+            ]
+          },
+          "unit": {
+            "type": "string",
+            "description": "One exact .service unit name in the configured scope",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "unit"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "services_stop",
+      "module": "services",
+      "title": "Service stop",
+      "description": "Run systemctl stop for one validated service as a tracked job. The configured privilege policy applies.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "scope": {
+            "type": "string",
+            "description": "Manager scope; defaults to systemdScope",
+            "enum": [
+              "system",
+              "user"
+            ]
+          },
+          "unit": {
+            "type": "string",
+            "description": "One exact .service unit name in the configured scope",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "confirm",
+          "unit"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "shares_list",
+      "module": "shares",
+      "title": "File shares",
+      "description": "Read managed and existing Samba/NFS share metadata, fragment revisions, configured state, Samba connection counts and registered NFS export state. Never returns full daemon configuration.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol": {
+            "type": "string",
+            "description": "Optional protocol filter",
+            "enum": [
+              "samba",
+              "nfs"
+            ]
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "shares_samba_password",
+      "module": "shares",
+      "title": "Set Samba password",
+      "description": "Set or replace the Samba password for the Linux account running Maestro. Does not change the Linux login password. The password is never stored in configuration or job output.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "password": {
+            "type": "string",
+            "description": "Non-empty Samba password (no NUL or line breaks)",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "confirm",
+          "password"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "shares_setup",
+      "module": "share_setup",
+      "title": "Set up share server",
+      "description": "Install native Samba/NFS server packages, prepare managed configuration, enable and start its system service. Preserves existing configuration and share data. Does not configure firewall rules or Samba passwords. On Arch, package installation also upgrades the system.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          },
+          "protocol": {
+            "type": "string",
+            "description": "Server protocol",
+            "enum": [
+              "samba",
+              "nfs"
+            ]
+          }
+        },
+        "required": [
+          "confirm",
+          "protocol"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "system_capabilities",
+      "module": "system",
+      "title": "Backend capabilities",
+      "description": "Read backend availability, unavailable reasons, and management write policy.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "system_status",
+      "module": "system",
+      "title": "Server status",
+      "description": "Read the connected server identity and management write policy.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "updates_install",
+      "module": "updates",
+      "title": "Install system updates",
+      "description": "Refresh native repositories and apply normal system package updates as one serialized job. May restart services and change dependencies; no distribution migration or reboot is requested. Cancellation interrupts the native process, allowing 30 seconds before forced termination; an interrupted package transaction may need native recovery.",
+      "readOnly": false,
+      "destructive": true,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement of this destructive operation. Must be true."
+          }
+        },
+        "required": [
+          "confirm"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "updates_refresh",
+      "module": "updates",
+      "title": "Refresh update metadata",
+      "description": "Refresh package metadata as a serialized job. Arch uses checkupdates with an isolated database; requires pacman-contrib. Does not install packages or reboot.",
+      "readOnly": false,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
+    {
+      "name": "updates_status",
+      "module": "updates",
+      "title": "Pending system updates",
+      "description": "Read native package-manager capabilities, cached pending updates and reboot status where detectable. Unavailable data is explicit; this does not refresh repositories or install packages.",
+      "readOnly": true,
+      "destructive": false,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    }
+  ]
+}

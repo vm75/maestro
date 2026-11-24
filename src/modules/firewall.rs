@@ -534,7 +534,7 @@ mod tests {
     async fn start_skips_when_disabled_or_empty_files() {
         let mut config = AppConfig::default();
         config
-            .apply_test_mode(std::path::Path::new("test-config.toml"))
+            .apply_test_mode(std::path::Path::new("test-config.yaml"))
             .unwrap();
         let stores = Stores::load(&config).await.unwrap();
         let manager = FirewallManager::new(config, stores).await.unwrap();
@@ -601,7 +601,7 @@ mod tests {
         let root = std::env::current_dir().unwrap();
         let mut config = AppConfig::default();
         config
-            .apply_test_mode(&root.join("config/maestro.toml"))
+            .apply_test_mode(&root.join("config/maestro.yaml"))
             .unwrap();
         let data = tempdir().unwrap();
         config.paths.data_dir = data.path().to_path_buf();
