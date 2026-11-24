@@ -309,6 +309,33 @@ Maestro enforces:
 - Transactional apply with recovery journaling and rollback support.
 - Full revision history and revert capabilities.
 
+### Podman and Docker Compose
+
+Both Compose engines now use the native reference adapter in source. Maestro
+generates a private, explicit project definition and a separate linked user
+systemd oneshot boot launcher under the applications directory. The launcher
+does not supervise containers; Compose uses `restart: no`. Use the managed
+service enable/disable action for startup policy, and start/stop/restart for
+execution. Saving a definition does not start a stopped application;
+`next_start` updates the saved definition and boot policy without recreating
+containers. Immediate apply reconciles only previously running members.
+Removing a service or member requires stopped containers and never passes
+volume deletion options. Exact generated-file ownership and native project
+identity are checked before changes.
+
+Rootless Podman uses the local engine and the podman-compose provider.
+Docker uses the local system socket (access to this socket is a powerful
+host privilege; grant it only to a trusted workload account). Docker automatic
+startup requires the native docker.socket unit to be persistently enabled;
+Podman automatic startup requires its packaged user network-wait unit.
+The daemon remains non-root; neither provider routes ordinary commands
+through the privileged helper. Explicit advanced container options are typed
+and validated; short bind options require preexisting storage.
+
+These are source-level implementations. Build/fixture and disposable Linux
+acceptance, remaining provider-specific readiness, combined log fidelity
+and interrupted artifact-transition recovery are not yet established.
+
 The File Sharing page summarizes configured Samba and NFS network shares and
 their underlying service configurations. Network shares are declared directly
 within the declarative YAML model (`shares:`) and bound to managed storage
