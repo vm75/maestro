@@ -70,15 +70,15 @@ const server=createServer(async(req,res)=>{
   }catch(e){if(!res.headersSent)json(res,{error:String(e)},500);else res.destroy();}
 });
 let browser,socket;const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-async function waitFor(check,label){for(let i=0;i<300;i++){try{if(await check())return;}catch{}await sleep(50);}throw Error('Timed out: '+label);}
+async function waitFor(check,label,attempts=300){let lastError;for(let i=0;i<attempts;i++){try{if(await check())return;}catch(e){lastError=e;}await sleep(50);}throw Error('Timed out: '+label+(lastError?' ('+lastError.message+')':''));}
 try{
   await readFile(join(root,'index.html'));
   server.listen(0,'127.0.0.1');await once(server,'listening');const base='http://127.0.0.1:'+server.address().port;
-  browser=spawn(chrome,['--headless','--no-sandbox','--disable-gpu','--disable-dev-shm-usage','--disable-background-networking','--no-first-run','--remote-debugging-port=0','--user-data-dir='+join(lab,'browser'),'about:blank'],{stdio:['ignore','ignore','pipe']});
-  let log='';browser.stderr.on('data',d=>log+=d.toString());
-  await waitFor(()=>log.includes('DevTools listening on'),'Chromium startup');
-  const debuggerUrl=log.match(/DevTools listening on (ws:\/\/[^\s]+)/)[1];
-  const targets=await (await fetch(debuggerUrl.replace('ws://','http://').split('/devtools/')[0]+'/json/list')).json();
+  browser=spawn(chrome,['--headless=new','--no-sandbox','--disable-gpu','--disable-dev-shm-usage','--disable-background-networking','--disable-component-update','--no-first-run','--no-default-browser-check','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--user-data-dir='+join(lab,'browser'),'about:blank'],{stdio:['ignore','pipe','pipe']});
+  let log='',launchError,port;browser.stderr.on('data',d=>log+=d.toString());browser.stdout.on('data',d=>log+=d.toString());browser.on('error',e=>{launchError=e;});
+  try { await waitFor(async()=>{if(launchError||browser.exitCode!==null)return true;const value=await readFile(join(lab,'browser','DevToolsActivePort'),'utf8');port=Number(value.split('\n')[0]);return port>0;},'Chromium startup',600); } catch(e){throw Error(e.message+'\n'+log);}
+  if(launchError||!port)throw Error('Chromium startup failed: '+(launchError?.message||browser.exitCode)+'\n'+log);
+  let targets;await waitFor(async()=>{targets=await (await fetch('http://127.0.0.1:'+port+'/json/list')).json();return targets.some(t=>t.type==='page');},'Chromium page target');
   socket=new WebSocket(targets.find(t=>t.type==='page').webSocketDebuggerUrl);await once(socket,'open');
   let seq=0;const pending=new Map(),errors=[];
   socket.addEventListener('message',event=>{const m=JSON.parse(event.data);if(m.id){const p=pending.get(m.id);pending.delete(m.id);if(m.error)p.reject(Error(m.error.message));else p.resolve(m.result);}if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.exception?.description||m.params.exceptionDetails.text);});
