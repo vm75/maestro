@@ -173,9 +173,16 @@ pub fn require_yaml(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn private_tempdir() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        root
+    }
     #[test]
     fn migration_preserves_values_original_bytes_and_relative_paths_once() {
-        let root = tempfile::tempdir().unwrap();
+        let root = private_tempdir();
         let source = root.path().join("maestro.toml");
         let original = b"# operator comment\ntest_mode = true\n[server]\nport = 3031\nauth_token = 'retain-this-token'\n[paths]\ndata_dir = './state'\n[nginx]\nroot_dir = './nginx'\ninputs_dir = './inputs'\n";
         fs::write(&source, original).unwrap();
@@ -197,7 +204,7 @@ mod tests {
     }
     #[test]
     fn migration_refuses_conflicts_symlinks_and_malformed_sources() {
-        let root = tempfile::tempdir().unwrap();
+        let root = private_tempdir();
         let source = root.path().join("sites.toml");
         fs::write(&source, "domains = []\n").unwrap();
         let target = source.with_extension("yaml");
@@ -221,13 +228,16 @@ mod tests {
     }
     #[test]
     fn complete_migration_converts_nginx_inputs_and_preserves_native_files() {
-        let root = tempfile::tempdir().unwrap();
+        let root = private_tempdir();
         let source = root.path().join("maestro.toml");
         let nginx = root.path().join("nginx");
         let inputs = root.path().join("inputs");
         let legacy = nginx.join("settings");
         fs::create_dir_all(&legacy).unwrap();
         fs::create_dir_all(&inputs).unwrap();
+        for directory in [&nginx, &inputs, &legacy] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let config = format!(
             "test_mode = true\n[paths]\ndata_dir = '{}'\n[nginx]\nroot_dir = '{}'\ninputs_dir = '{}'\n",
             root.path().join("state").display(),
@@ -259,7 +269,7 @@ mod tests {
     #[test]
     fn matching_outputs_do_not_allow_migration_through_a_writable_directory() {
         use std::os::unix::fs::PermissionsExt;
-        let root = tempfile::tempdir().unwrap();
+        let root = private_tempdir();
         let source = root.path().join("sites.toml");
         fs::write(&source, "[sites]\n").unwrap();
         migrate_file(&source, false).unwrap();

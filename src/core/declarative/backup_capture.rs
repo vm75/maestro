@@ -1178,7 +1178,6 @@ pub fn publish(store:&Store,storage_root:&Path,revision:&str,token:&str,seconds:
 mod tests{
     use super::*;
     use std::os::unix::fs::{PermissionsExt,symlink};
-    use base64::Engine as _;
     use crate::{command::CommandRunner,config::AppConfig};
     fn fixture()->(tempfile::TempDir,Store,PathBuf,PathBuf){
         let tmp=tempfile::tempdir().unwrap();

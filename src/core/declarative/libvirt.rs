@@ -103,29 +103,29 @@ impl LibvirtProvider{
         use super::native_inventory::{NativeWorkload, reserved, valid_text};
         use futures_util::{StreamExt, TryStreamExt, stream};
         let data = self.command(&["list", "--all", "--uuid"], 5, 256 * 1024, false).await?;
-        let ids = std::str::from_utf8(&data)?.split_whitespace().collect::<Vec<_>>();
+        let ids = std::str::from_utf8(&data)?.split_whitespace().map(str::to_owned).collect::<Vec<_>>();
         ensure!(ids.len() <= 128, "native Libvirt inventory exceeds limit");
         let scope = self.connection()?.to_owned();
         let workloads = stream::iter(ids.into_iter().map(|id| {
             let scope = scope.clone();
             async move {
-                ensure!(uuid::Uuid::parse_str(id).is_ok(), "invalid native domain UUID");
+                ensure!(uuid::Uuid::parse_str(&id).is_ok(), "invalid native domain UUID");
                 if config.services.values().any(|s| s.backend == "libvirt" && s.vm.as_ref().is_some_and(|v| v.uuid == id)) {
                     return Ok::<Option<NativeWorkload>, anyhow::Error>(None);
                 }
-                let name = self.command(&["domname", id], 5, 4096, false).await?;
+                let name = self.command(&["domname", &id], 5, 4096, false).await?;
                 let name = std::str::from_utf8(&name)?.trim();
                 if !valid_text(name) || reserved(name) { return Ok(None); }
-                let xml = self.command(&["dumpxml", "--domain", id], 5, super::MAX_CONFIG_BYTES, false).await?;
+                let xml = self.command(&["dumpxml", "--domain", &id], 5, super::MAX_CONFIG_BYTES, false).await?;
                 if std::str::from_utf8(&xml)?.contains(xml::NS) { return Ok(None); }
-                let state = self.state(id).await?;
+                let state = self.state(&id).await?;
                 let actions = match state.as_str() {
                     "running" => vec!["stop","restart"],
                     "shut off" => vec!["start","delete"],
                     _ => vec![],
                 };
                 Ok(Some(NativeWorkload {
-                    provider: "libvirt".into(), scope, id: id.into(), name: name.into(),
+                    provider: "libvirt".into(), scope, id: id.clone(), name: name.into(),
                     kind: "virtual-machine".into(), state,
                     image: String::new(), addresses: vec![], actions, logs: false, identity: id.into(),
                 }))

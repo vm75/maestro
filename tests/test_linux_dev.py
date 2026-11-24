@@ -255,8 +255,9 @@ class LinuxDevTest(unittest.TestCase):
         config = state / "maestro.yaml"
         original_config = config.read_bytes()
         self.assertIn(b"version: 1", original_config)
-        self.assertIn(b"allow_writes: true", original_config)
-        self.assertIn(b"privileged_operations: false", original_config)
+        self.assertIn(b'listen: "127.0.0.1:3030"', original_config)
+        self.assertIn(f'token_file: "{state}/token"'.encode(), original_config)
+        self.assertIn(f'state_dir: "{state}"'.encode(), original_config)
         self.assertEqual((state / "token").read_text().strip(), "test-token-" + "a" * 40)
         self.assertEqual((state / "token").stat().st_mode & 0o777, 0o600)
         self.assertEqual(state.stat().st_mode & 0o777, 0o700)

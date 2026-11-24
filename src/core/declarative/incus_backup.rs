@@ -21,7 +21,8 @@ fn portable_path(path: &str) -> bool {
 }
 
 fn guest_disks(devices: &Devices, permitted: &Devices) -> Result<GuestDisks> {
-    ensure!(devices.len() <= 64, "Incus device limit exceeded");
+    // Up to 64 declared host mounts plus the root disk and network device.
+    ensure!(devices.len() <= 66, "Incus device limit exceeded");
     let mut root = None;
     let mut volumes = BTreeSet::new();
     for (name,device) in devices {
@@ -514,6 +515,24 @@ mod tests{
         bad.get_mut("data").unwrap().remove("pool");
         assert!(guest_disks(&bad,&Devices::new()).is_err());
     }
+    #[test]
+    fn maximum_declared_host_mounts_fit_backup_device_limit() {
+        let mut devices = Devices::from([
+            ("root".into(), BTreeMap::from([("type".into(), "disk".into()), ("path".into(), "/".into()), ("pool".into(), "default".into())])),
+            ("eth0".into(), BTreeMap::from([("type".into(), "nic".into())])),
+        ]);
+        for index in 0..64 {
+            devices.insert(format!("mount-{index}"), BTreeMap::from([
+                ("type".into(), "disk".into()),
+                ("source".into(), format!("/storage/data-{index}")),
+                ("path".into(), format!("/data-{index}")),
+            ]));
+        }
+        assert!(guest_disks(&devices, &devices).is_ok());
+        devices.insert("extra".into(), BTreeMap::from([("type".into(), "nic".into())]));
+        assert!(guest_disks(&devices, &devices).is_err());
+    }
+
     #[test]
     fn portable_archive_must_contain_reviewed_guest_and_root_disk(){
         let config=super::super::super::parse(br#"version: 1
