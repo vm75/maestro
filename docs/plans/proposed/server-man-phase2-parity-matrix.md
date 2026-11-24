@@ -859,3 +859,16 @@ prerequisite discovery and `managed_config_check` are still pending; static
 success is explicitly not a runtime readiness assertion. Added REST and MCP
 schema regression assertions. Compilation, formatting, frontend checks and
 native acceptance have not been run for this increment.
+
+### Native prerequisite probes and managed-service status increment
+
+Added `managed_config_check` and `managed_services` with the frozen no-argument
+schemas. File and pending-apply/restart checks remain fresh; bounded native
+backend probes are cached for ten seconds per configuration revision, and the
+explicit Check operation refreshes them. Backend and configuration issues
+propagate to their consumers and transitively to dependent services. Native
+probe output is not exposed. The Configuration UI shows the probe timestamp
+and explicit incomplete readiness; test mode performs no native probes.
+Compose, libvirt, Incus, share and Quadlet resource-specific prerequisites,
+boot checks and native ownership remain incomplete, so the mutation gates are
+unchanged. Rust/Svelte compilation, fixture execution and native checks are pending.
