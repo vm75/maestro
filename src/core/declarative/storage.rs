@@ -535,7 +535,7 @@ fn descriptor_path(file: &File) -> String {
     format!("/proc/{}/fd/{}", std::process::id(), file.as_raw_fd())
 }
 
-fn check_image_header(file: &File, format: &str) -> Result<()> {
+pub(super) fn check_image_header(file: &File, format: &str) -> Result<()> {
     use std::os::unix::fs::FileExt;
     if format == "raw" { return Ok(()); }
     ensure!(format == "qcow2", "unsupported disk image format");
@@ -630,7 +630,7 @@ impl SourceImage {
     }
 }
 
-fn qemu_img() -> Option<PathBuf> {
+pub(super) fn qemu_img() -> Option<PathBuf> {
     ["/usr/bin/qemu-img", "/usr/local/bin/qemu-img"]
         .into_iter().map(PathBuf::from).find(|path| path.is_file())
 }
