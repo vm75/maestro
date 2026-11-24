@@ -336,6 +336,37 @@ These are source-level implementations. Build/fixture and disposable Linux
 acceptance, remaining provider-specific readiness, combined log fidelity
 and interrupted artifact-transition recovery are not yet established.
 
+### Libvirt/KVM
+
+The native Libvirt provider uses only an explicit local `qemu:///system` or
+`qemu:///session` connection. It checks the configured daemon's KVM domain
+capabilities rather than assuming the workload account can open /dev/kvm.
+Install the native `virsh` client and `virt-xml-validate`; the workload
+account needs appropriate access to the chosen daemon and guest storage.
+
+The pinned Server Man guest profile is x86_64, BIOS, KVM, Q35 by default,
+host-model CPU, headless VGA and a serial console. Disks reference declared
+raw/qcow2 file storage and interfaces reference an explicit network or bridge.
+Existing VM UUID and MAC values are retained by typed edits; new guests
+currently require explicit UUID and MAC in reviewed YAML. The reference's
+automatic identity preparation needs integration with its reviewed candidate
+editor. UEFI and direct initial-image provisioning are not part of this
+profile; prepare the disk through the storage workflow first.
+
+Saving defines a persistent guest and sets autostart without starting it.
+A running hardware change requires Save for next start or a shutdown before
+immediate apply. Restart requests graceful shutdown, waits for shutoff and
+starts the saved definition. Removal requires a stopped owned guest; no
+force-stop, storage deletion, NVRAM deletion or TPM deletion is requested.
+The provider compares ownership namespace, UUID, name, managed hardware,
+fingerprints, generated artifacts and native autostart before mutation and
+during recovery inspection. Unknown/intermediate recovery state remains
+blocked pending the reviewed artifact recovery workflow.
+
+Libvirt source implementation and fake-daemon regression tests are present;
+build/fixture execution and native guest acceptance remain pending.
+Stopped-guest disk export belongs to the remaining backup workflow.
+
 The File Sharing page summarizes configured Samba and NFS network shares and
 their underlying service configurations. Network shares are declared directly
 within the declarative YAML model (`shares:`) and bound to managed storage
