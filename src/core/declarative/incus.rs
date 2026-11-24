@@ -38,6 +38,8 @@ struct Instance{
     kind:String,
     status:String,
     status_code:i64,
+    location:String,
+    expanded_devices:BTreeMap<String,BTreeMap<String,String>>,
 }
 fn binding_name(value:&str)->bool{
     !value.is_empty()&&value.len()<=128&&value.as_bytes()[0].is_ascii_alphanumeric()
@@ -147,6 +149,9 @@ fn check_transition(previous:&Config,desired:&Config,id:&str)->Result<()>{
         "changing Incus project/pool requires explicit storage relocation");
     Ok(())
 }
+
+#[path="incus_backup.rs"]
+mod backup;
 
 pub struct IncusStatus{
     pub state:&'static str,pub runtime_matches:bool,pub restart_required:bool,
