@@ -428,7 +428,7 @@ pub(super) fn router(state: AppState) -> anyhow::Result<Router<AppState>> {
         .route("/tools/{name}", post(invoke))
         .route("/mcp", post(super::mcp::handle_mcp))
         .route("/session", axum::routing::delete(sessions::logout))
-        .merge(super::linux_shared::router())
+        .merge(super::linux_shared::router(state.clone()))
         .route("/terminal", post(super::terminal::handle))
         .layer(Extension(super::terminal::Terminals::default()))
         .route_layer(middleware::from_fn_with_state(

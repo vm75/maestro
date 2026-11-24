@@ -478,11 +478,17 @@ pub async fn get_adguard_status(
     }
 
     let client = AdGuardClient::new(&cfg).map_err(ApiError::internal)?;
-    let status = client.get_status().await.unwrap_or(AdGuardHomeStatus {
-        protection_enabled: false,
-        protection_disabled_duration_ms: 0,
-        filtering_enabled: false,
-    });
+    let status = match client.get_status().await {
+        Ok(status) => status,
+        Err(error) if state.config.platform == crate::config::Platform::Linux => {
+            return Err(ApiError::internal(error));
+        }
+        Err(_) => AdGuardHomeStatus {
+            protection_enabled: false,
+            protection_disabled_duration_ms: 0,
+            filtering_enabled: false,
+        },
+    };
 
     let now = Utc::now();
 

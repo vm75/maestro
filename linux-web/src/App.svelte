@@ -25,6 +25,7 @@
     { id: 'shares', name: 'File shares', subtitle: 'Samba and NFS exports.' },
     { id: 'updates', name: 'Updates', subtitle: 'Keep your Linux system up to date.' },
     { id: 'web', name: 'Web', subtitle: 'Nginx sites, certificates and logs.' },
+    { id: 'network', name: 'Network', subtitle: 'Wake-on-LAN, AdGuard Home and WireGuard.' },
     { id: 'security', name: 'Ban Shield', subtitle: 'Protection, active bans and detection rules.' },
     { id: 'terminal', name: 'Terminal', subtitle: 'Local non-root interactive shell.' },
     { id: 'activity', name: 'Activity', subtitle: 'Inspect management jobs and their output.' },
@@ -35,6 +36,7 @@
   let shared = $state<SharedDiscovery | null>(null)
   const visiblePages = $derived(pages.filter(p => {
     if (p.id === 'web') return shared?.modules.some(m => ['nginx', 'certificates'].includes(m.id) && m.availability !== 'unsupported')
+    if (p.id === 'network') return shared?.modules.some(m => ['wol', 'adguard', 'wireguard'].includes(m.id) && m.availability !== 'unsupported')
     if (p.id === 'security') return shared?.modules.some(m => m.id === 'ban_shield' && m.availability === 'ready')
     if (p.id === 'terminal') return discovery?.modules.some(m => m.id === 'terminal' && m.available)
     return !pageModules[p.id] || discovery?.modules.some(m => m.id === pageModules[p.id])
@@ -127,9 +129,11 @@
       {:else if page.id === 'shares' && status}
         {#if discovery}<Shares allowWrites={workloadWrites} {discovery} {status} />{/if}
       {:else if page.id === 'web' && shared}
-        {#await import('./pages/SharedWeb.svelte')}<p role="status">Loading Web…</p>{:then {default: Page}}<Page discovery={shared} />{:catch failure}<p role="alert">{String(failure)}</p>{/await}
-      {:else if page.id === 'security'}
-        {#await import('./pages/BanShield.svelte')}<p role="status">Loading Ban Shield…</p>{:then {default: Page}}<Page />{:catch failure}<p role="alert">{String(failure)}</p>{/await}
+        {#await import('./pages/SharedWeb.svelte')}<p role="status">Loading Web…</p>{:then {default: Page}}<Page discovery={shared} allowWrites={!!status?.allowWrites} />{:catch failure}<p role="alert">{String(failure)}</p>{/await}
+      {:else if page.id === 'network' && shared && status}
+        {#await import('./pages/Network.svelte')}<p role="status">Loading Network…</p>{:then {default: Page}}<Page discovery={shared} allowWrites={status.allowWrites} />{:catch failure}<p role="alert">{String(failure)}</p>{/await}
+      {:else if page.id === 'security' && status}
+        {#await import('./pages/BanShield.svelte')}<p role="status">Loading Ban Shield…</p>{:then {default: Page}}<Page allowWrites={status.allowWrites} />{:catch failure}<p role="alert">{String(failure)}</p>{/await}
       {:else if page.id === 'terminal' && status}
         {#await import('./pages/Terminal.svelte')}<p role="status">Loading terminal…</p>{:then {default: Page}}<Page />{:catch failure}<p role="alert">{String(failure)}</p>{/await}
       {:else if page.id === 'activity' && status && discovery}
