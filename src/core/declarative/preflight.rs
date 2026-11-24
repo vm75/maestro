@@ -640,6 +640,23 @@ fn propagate(config: &Config, health: &mut Health, native: Vec<Issue>) {
     }
 }
 
+/// Fail closed on static input/dependency blockers before activation, without
+/// requiring every unfinished backend's diagnostic implementation.
+pub fn check_startup_files(
+    state: &crate::state::AppState,
+    store: &Store,
+    config: &Config,
+    id: &str,
+) -> anyhow::Result<()> {
+    let mut health = check_files(store, config, &state.config.paths.storage_dir,
+        state.config.paths.proc_stat.parent());
+    propagate(config, &mut health, Vec::new());
+    let key = format!("service/{id}");
+    anyhow::ensure!(!health.issues.iter().any(|issue| issue.resource == key
+        && issue.severity != "warning"), "required service data or dependencies are unavailable; inspect configuration health");
+    Ok(())
+}
+
 impl ReadinessCache {
     pub async fn check(
         &self,
