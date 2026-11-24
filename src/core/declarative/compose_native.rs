@@ -425,6 +425,11 @@ impl ComposeProvider {
         ensure!(if action=="stop"{status.state=="stopped"}else{status.state=="running"},"Compose group did not reach requested state");
         Ok(())
     }
+    /// Backup recovery has already checked the dependency states. Do not
+    /// issue up/recreate operations to other (already running) applications.
+    pub(crate) async fn resume_backup_workload(&self,config:&Config,id:&str)->Result<()>{
+        self.action_one(config,id,"start").await
+    }
     pub async fn native_action(&self,config:&Config,id:&str,action:&str)->Result<String>{
         ensure!(matches!(action,"start"|"stop"|"restart"),"unsupported Compose action");
         if action=="stop"{self.action_one(config,id,action).await?;return Ok(format!("Compose {action} completed"))}
