@@ -872,3 +872,17 @@ and explicit incomplete readiness; test mode performs no native probes.
 Compose, libvirt, Incus, share and Quadlet resource-specific prerequisites,
 boot checks and native ownership remain incomplete, so the mutation gates are
 unchanged. Rust/Svelte compilation, fixture execution and native checks are pending.
+
+### Reviewed new storage provisioning increment
+
+Added reference-schema `managed_storage_plan` and `managed_storage_create`.
+The read-only plan requires the current exact revision, an absent owned path,
+existing owner-only real parents, sufficient filesystem space, expected mount
+identity when declared, no overlapping private/other data and stopped verified
+consumers. Creation is an explicitly confirmed new-data job. It rechecks the
+review token and revision while holding the authority lock, stages private
+metadata or a sparse disk and publishes without replacement. Directory and
+source-less raw/qcow2 disks are implemented; image cloning and non-Quadlet
+consumer/share ownership checks remain gated. Native qemu-img operations are
+bounded and never target an existing operator path. Compilation, focused tests
+and native acceptance are pending.
