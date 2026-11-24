@@ -14,6 +14,7 @@ pub use journal::{ApplyJournal, ApplyPhase};
 pub mod libvirt;
 mod model;
 pub mod native_shares;
+pub(crate) mod share_definitions;
 mod plan;
 pub mod preflight;
 pub mod quadlet;
