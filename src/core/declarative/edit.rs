@@ -87,7 +87,29 @@ pub fn edit(store: &Store, input: &EditInput) -> Result<Vec<u8>> {
     }
 
     match input.kind.as_str() {
-        "service" => edit_map!(config.services, Service),
+        "service" => {
+            // Server Man's PrepareIdentities preserves the UUID and MAC
+            // when the editor omits them. Do not generate random identities
+            // independently during plan and save: both must use identical
+            // reviewed candidate bytes. New guests currently need explicit
+            // identities until the reference candidate workflow is ported.
+            if input.operation == "remove" {
+                ensure!(config.services.remove(&input.id).is_some(),"resource does not exist");
+            } else {
+                let mut value: Service = serde_json::from_str(definition)
+                    .context("invalid typed definition or unknown JSON fields")?;
+                if let Some(old) = config.services.get(&input.id) {
+                    if let (Some(prior),Some(next)) = (&old.vm,&mut value.vm) {
+                        ensure!(old.backend == value.backend,"existing VM backend cannot be changed");
+                        ensure!(next.uuid.is_empty() || prior.uuid.is_empty() || next.uuid == prior.uuid,"existing VM identity cannot be changed");
+                        ensure!(next.mac.is_empty() || prior.mac.is_empty() || next.mac == prior.mac,"existing VM identity cannot be changed");
+                        if next.uuid.is_empty() { next.uuid = prior.uuid.clone(); }
+                        if next.mac.is_empty() { next.mac = prior.mac.clone(); }
+                    }
+                }
+                config.services.insert(input.id.clone(),value);
+            }
+        },
         "storage" => edit_map!(config.storage, Storage),
         "share" => edit_map!(config.shares, Share),
         "binding" => edit_map!(config.bindings, Binding),
