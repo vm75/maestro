@@ -38,10 +38,10 @@
     return !pageModules[p.id] || discovery?.modules.some(m => m.id === pageModules[p.id])
   }))
   let selected = $state('overview')
+  let status = $state<Status | null>(null)
   const workloadWrites = $derived(!!status?.allowWrites && !!discovery?.modules.find(m => m.id === 'workloads')?.writable)
   function navigate(target: string) { selected = target; location.hash = target; menuOpen = false }
   let menuOpen = $state(false)
-  let status = $state<Status | null>(null)
   let loading = $state(true)
   let error = $state('')
   let needsAuth = $state(false)
