@@ -52,9 +52,18 @@ pub(super) fn validate(containers: &BTreeMap<String, Container>) -> Result<()> {
 
 // Positive Go time.ParseDuration syntax, bounded to its signed nanosecond range.
 pub(super) fn duration(value: &str) -> bool {
+    value.is_empty() || duration_nanos(value).is_some()
+}
+
+/// Convert a validated duration to a rounded-up Podman stop timeout.
+pub(super) fn stop_seconds(value: &str) -> Option<u32> {
     if value.is_empty() {
-        return true;
+        return Some(0);
     }
+    u32::try_from(duration_nanos(value)?.div_ceil(1_000_000_000)).ok()
+}
+
+fn duration_nanos(value: &str) -> Option<u128> {
     let mut remaining = value.strip_prefix('+').unwrap_or(value);
     let mut total = 0_u128;
     while !remaining.is_empty() {
@@ -63,7 +72,7 @@ pub(super) fn duration(value: &str) -> bool {
             .take_while(|byte| byte.is_ascii_digit() || *byte == b'.')
             .count();
         if length == 0 {
-            return false;
+            return None;
         }
         let number = &remaining[..length];
         remaining = &remaining[length..];
@@ -78,39 +87,39 @@ pub(super) fn duration(value: &str) -> bool {
             "s" => 1_000_000_000,
             "m" => 60_000_000_000,
             "h" => 3_600_000_000_000,
-            _ => return false,
+            _ => return None,
         };
         remaining = &remaining[unit_end..];
         let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
         if whole.is_empty() && fraction.is_empty() {
-            return false;
+            return None;
         }
         if !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
-            return false;
+            return None;
         }
         let Ok(whole) = (if whole.is_empty() {
             Ok(0)
         } else {
             whole.parse::<u128>()
         }) else {
-            return false;
+            return None;
         };
         let Some(whole) = whole.checked_mul(unit) else {
-            return false;
+            return None;
         };
         let fraction = &fraction[..fraction.len().min(18)];
         let digits = fraction.parse::<u128>().unwrap_or(0);
         let Some(next) = total.checked_add(whole).and_then(|value| {
             value.checked_add(digits * unit / 10_u128.pow(fraction.len() as u32))
         }) else {
-            return false;
+            return None;
         };
         total = next;
         if total > i64::MAX as u128 {
-            return false;
+            return None;
         }
     }
-    total > 0
+    (total > 0).then_some(total)
 }
 
 #[cfg(test)]
@@ -176,6 +185,19 @@ mod tests {
             .insert("db".into(), "unknown".into());
         assert!(validate(&containers).is_err());
     }
+    #[test]
+    fn stop_timeout_rounds_up_compound_and_fractional_durations() {
+        for (value, seconds) in [
+            ("", 0), ("20s", 20), ("1500ms", 2), ("1m30.5s", 91),
+            ("1ns", 1), ("1h", 3600),
+        ] {
+            assert_eq!(stop_seconds(value), Some(seconds), "{value}");
+        }
+        for value in ["0s", "-1s", "bad", "4294967296s"] {
+            assert_eq!(stop_seconds(value), None, "{value}");
+        }
+    }
+
     #[test]
     fn duration_contract_matches_positive_reference_durations() {
         for value in [

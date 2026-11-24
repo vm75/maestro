@@ -59,10 +59,6 @@ pub fn render_quadlet_at(
         ),
     )]);
     for (name, container) in &service.containers {
-        ensure!(
-            container.entrypoint.is_empty() && !container.tty && container.shm_size.is_empty(),
-            "workload specifies a Quadlet option that cannot yet be rendered"
-        );
         let unit = unit_name(id, name);
         let mut body = format!("{ownership}[Unit]\nDescription=Maestro container {id}/{name}\n");
         for dependency in &service.depends_on {
@@ -77,6 +73,11 @@ pub fn render_quadlet_at(
         }
         for member in container.depends_on.keys() {
             add_dependency(&mut body, &unit_name(id, member))?;
+        }
+        if let Some(peer) = container.network_mode.strip_prefix("service:") {
+            if !container.depends_on.contains_key(peer) {
+                add_dependency(&mut body, &unit_name(id, peer))?;
+            }
         }
         writeln!(body, "\n[Container]")?;
         writeln!(body, "Image={}", scalar(&container.image)?)?;
@@ -172,12 +173,14 @@ pub fn render_quadlet_at(
                 !source.contains(':')
                     && !mount.target.contains(':')
                     && matches!(mount.kind.as_str(), "" | "bind" | "directory" | "file")
-                    && matches!(mount.selinux.as_str(), "" | "z" | "Z"),
+                    && matches!(mount.selinux.as_str(), "" | "z" | "Z" | "private" | "shared"),
                 "unsupported Quadlet mount"
             );
             let mut options = vec![if mount.read_only { "ro" } else { "rw" }];
-            if !mount.selinux.is_empty() {
-                options.push(&mount.selinux);
+            match mount.selinux.as_str() {
+                "private" | "Z" => options.push("Z"),
+                "shared" | "z" => options.push("z"),
+                _ => {}
             }
             if mount.chown {
                 options.push("U");
@@ -202,19 +205,11 @@ pub fn render_quadlet_at(
             "no" => "no",
             _ => return Err(anyhow!("unsupported Quadlet restart policy")),
         };
-        writeln!(body, "\n[Service]\nRestart={restart}")?;
-        if !container.stop_grace_period.is_empty() {
-            // Let Podman finish its own graceful stop before systemd kills it.
-            writeln!(body, "TimeoutStopSec=infinity")?;
-        }
-        if service.containers.values().any(|dependent| {
-            dependent
-                .depends_on
-                .get(name)
-                .is_some_and(|condition| condition == "healthy")
-        }) {
-            writeln!(body, "TimeoutStartSec=900")?;
-        }
+        writeln!(body, "\n[Service]\nRestart={restart}\nRestartSec=5\nTimeoutStartSec=900")?;
+        let stop = super::container_health::stop_seconds(&container.stop_grace_period)
+            .ok_or_else(|| anyhow!("Quadlet stop grace period exceeds native timeout range"))?;
+        let stop = if stop == 0 { 90 } else { u64::from(stop) + 30 };
+        writeln!(body, "TimeoutStopSec={stop}")?;
         if service.enabled {
             writeln!(body, "\n[Install]\nWantedBy=default.target")?;
         }
@@ -426,7 +421,7 @@ services:
             .get_mut("web")
             .unwrap();
         container.environment.clear();
-        container.entrypoint = vec!["/entrypoint".into()];
+        container.entrypoint = vec!["/entrypoint\n[Service]".into()];
         assert!(render_quadlet(&configuration, "demo", base, &fingerprint).is_err());
     }
 
@@ -496,7 +491,7 @@ services:
             unit_name("migration", "vpn")
         )));
         assert!(client.contains("StopTimeout=20"));
-        assert!(client.contains("TimeoutStopSec=infinity"));
+        assert!(client.contains("TimeoutStopSec=50"));
         assert!(client.contains("NoNewPrivileges=true"));
         let home = &files[&format!("{}.container", unit_name("migration", "home"))];
         assert!(home.contains("PodmanArgs=--privileged"));
@@ -529,6 +524,121 @@ services:
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn remaining_reference_quadlet_options_render_with_typed_arguments() {
+        let mut config = super::super::parse(FIXTURE.as_bytes()).unwrap();
+        let container = config.services.get_mut("demo").unwrap().containers.get_mut("web").unwrap();
+        container.entrypoint = vec!["/entrypoint".into(), "two words".into(), "$VALUE".into()];
+        container.tty = true;
+        container.shm_size = "256MB".into();
+        container.stop_grace_period = "1m30.5s".into();
+        container.mounts[0].selinux = "private".into();
+        let files = render_quadlet(&config, "demo", Path::new("/tmp/quadlet-test"), &revision(FIXTURE.as_bytes())).unwrap();
+        let body = &files[&format!("{}.container", unit_name("demo", "web"))];
+        let entrypoint = serde_json::to_string(&container_entrypoint_fixture()).unwrap();
+        assert!(body.contains(&format!("PodmanArgs={}", word(&format!("--entrypoint={}", entrypoint.replace('
+    fn native_generator_accepts_rootless_artifacts() {
+        let temp = tempfile::tempdir().unwrap();
+        let configuration = super::super::parse(FIXTURE.as_bytes()).unwrap();
+        let files = render_quadlet(
+            &configuration,
+            "demo",
+            temp.path(),
+            &revision(FIXTURE.as_bytes()),
+        )
+        .unwrap();
+        for (name, contents) in files {
+            std::fs::write(temp.path().join(name), contents).unwrap();
+        }
+        let advanced = super::super::parse(ADVANCED.as_bytes()).unwrap();
+        for (name, contents) in render_quadlet(
+            &advanced,
+            "migration",
+            temp.path(),
+            &revision(ADVANCED.as_bytes()),
+        )
+        .unwrap()
+        {
+            std::fs::write(temp.path().join(name), contents).unwrap();
+        }
+        let generator = std::env::var_os("MAESTRO_QUADLET_GENERATOR")
+            .unwrap_or_else(|| "/usr/lib/podman/quadlet".into());
+        let output = std::process::Command::new(generator)
+            .args(["-user", "-dryrun", "-no-kmsg-log"])
+            .env("QUADLET_UNIT_DIRS", temp.path())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains(&format!("{}.service", unit_name("demo", "web"))),
+            "{stdout}"
+        );
+        let label = format!("io.maestro.fingerprint={}", revision(FIXTURE.as_bytes()));
+        assert!(stdout.matches(&label).count() >= 3, "{stdout}");
+        assert!(stdout.contains("default.target"), "{stdout}");
+        assert!(stdout.contains("--sdnotify=healthy"), "{stdout}");
+        assert!(stdout.contains("--uidmap=1000:0:1"), "{stdout}");
+        assert!(stdout.contains("--network container:vpn"), "{stdout}");
+    }
+}
+
+#[cfg(test)]
+mod managed_unit_routing_tests {
+    use super::*;
+
+    #[test]
+    fn exact_application_units_resolve_without_matching_network_or_stale_units() {
+        let mut config = Config::default();
+        config.services.insert(
+            "demo".into(),
+            super::super::Service {
+                kind: "container".into(),
+                engine: "podman".into(),
+                backend: "quadlet".into(),
+                containers: BTreeMap::from([("web".into(), Container::default())]),
+                ..Default::default()
+            },
+        );
+        config.services.insert(
+            "stack".into(),
+            super::super::Service {
+                kind: "container".into(),
+                engine: "docker".into(),
+                backend: "compose".into(),
+                ..Default::default()
+            },
+        );
+        let unit = format!("{}.service", unit_name("demo", "web"));
+        assert_eq!(managed_unit_owner(&config, &unit), Some("demo"));
+        assert_eq!(managed_unit_owner(&config, "maestro-compose-stack.service"), Some("stack"));
+        assert_eq!(managed_unit_owner(&config, "maestro-compose-stale.service"), None);
+        assert_eq!(managed_unit_owner(&config, "maestro-custom.service"), None);
+        let network = format!("maestro-network-{}-network.service", &revision(b"demo")[..24]);
+        assert!(managed_unit(&network));
+        assert_eq!(managed_unit_owner(&config, &network), None);
+        assert!(managed_unit("maestro-compose-stale.service"));
+        assert!(!managed_unit("maestro-custom.service"));
+    }
+}
+, "$"))).unwrap())));
+        assert!(body.contains("PodmanArgs=--tty"));
+        assert!(body.contains("PodmanArgs=\"--shm-size=256m\""));
+        assert!(body.contains("StopTimeout=91"));
+        assert!(body.contains("TimeoutStopSec=121"));
+        assert!(body.contains("TimeoutStartSec=900"));
+        assert!(body.contains("RestartSec=5"));
+        assert!(body.contains(":/cache:ro,Z"));
+    }
+
+    fn container_entrypoint_fixture() -> Vec<&'static str> {
+        vec!["/entrypoint", "two words", "$VALUE"]
     }
 
     #[test]

@@ -46,19 +46,26 @@ pub(super) fn render(body: &mut String, container: &Container) -> Result<()> {
     if container.privileged {
         writeln!(body, "PodmanArgs=--privileged")?;
     }
+    if container.tty {
+        writeln!(body, "PodmanArgs=--tty")?;
+    }
+    if !container.entrypoint.is_empty() {
+        // Podman's JSON entrypoint syntax preserves argv boundaries, including
+        // spaces and quotes, without introducing shell evaluation.
+        argument(body, "entrypoint", &serde_json::to_string(&container.entrypoint)?)?;
+    }
+    if !container.shm_size.is_empty() {
+        let size = container.shm_size.to_ascii_lowercase();
+        argument(body, "shm-size", size.strip_suffix('b').unwrap_or(&size))?;
+    }
     for (key, value) in &container.log_options {
         argument(body, "log-opt", &format!("{key}={value}"))?;
     }
     if !container.stop_grace_period.is_empty() {
-        let seconds = container
-            .stop_grace_period
-            .strip_suffix('s')
-            .and_then(|value| value.parse::<u32>().ok());
-        ensure!(
-            seconds.is_some_and(|value| value > 0),
-            "Quadlet stop grace period must be whole seconds"
-        );
-        writeln!(body, "StopTimeout={}", seconds.unwrap())?;
+        let seconds = super::super::container_health::stop_seconds(&container.stop_grace_period)
+            .ok_or_else(|| anyhow::anyhow!("Quadlet stop grace period exceeds native timeout range"))?;
+        ensure!(seconds > 0, "invalid Quadlet stop grace period");
+        writeln!(body, "StopTimeout={seconds}")?;
     }
     if let Some(health) = &container.healthcheck {
         // Podman accepts the Compose CMD/CMD-SHELL JSON array verbatim.
