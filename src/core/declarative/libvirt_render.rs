@@ -249,6 +249,19 @@ services:
         assert_ne!(service_fingerprint(&c,"guest").unwrap(),service_fingerprint(&next,"guest").unwrap());
     }
     #[test]
+    fn private_backup_xml_rejects_unsupported_guest_state(){
+        let config=fixture();
+        let raw=render(&config,"guest",Path::new("/storage")).unwrap();
+        let want=parse_domain(raw.as_bytes()).unwrap();
+        assert!(validate_backup_xml(raw.as_bytes(),&want).is_ok());
+        for altered in [
+            raw.replace("</os>","<nvram>/var/lib/guest.fd</nvram></os>"),
+            raw.replace("</disk>","<backingStore type=\"file\"><source file=\"/disk/base\"/></backingStore></disk>"),
+            raw.replace("</devices>","<tpm model=\"tpm-crb\"/></devices>"),
+            raw.replace("</domain>","<qemu:commandline xmlns:qemu=\"http://libvirt.org/schemas/domain/qemu/1.0\"/></domain>"),
+        ]{assert!(validate_backup_xml(altered.as_bytes(),&want).is_err());}
+    }
+    #[test]
     fn capability_contract(){
         assert!(valid_kvm_capabilities(b"<domainCapabilities><domain>kvm</domain><arch>x86_64</arch><machine>pc-q35-9.0</machine></domainCapabilities>"));
         assert!(!valid_kvm_capabilities(b"<domainCapabilities><domain>qemu</domain><arch>x86_64</arch><machine>q35</machine></domainCapabilities>"));
