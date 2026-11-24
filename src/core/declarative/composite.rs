@@ -76,6 +76,7 @@ pub struct CompositeProvider {
     pub libvirt: LibvirtProvider,
     pub storage: StorageProvider,
     pub shares: ShareProvider,
+    pub readiness: super::preflight::ReadinessCache,
 }
 
 impl CompositeProvider {
@@ -132,6 +133,7 @@ impl CompositeProvider {
             libvirt,
             storage,
             shares,
+            readiness: Default::default(),
         }
     }
 
