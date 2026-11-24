@@ -7,6 +7,9 @@ use super::{ApplyMode,ApplyProvider,Change,Config,ObservedResource,Operation,Rec
     artifacts::{check_bytes,read_artifact,publish_artifact},
     libvirt_render::{self as xml,Domain}};
 
+#[path="libvirt_backup.rs"]
+mod backup;
+
 pub struct LibvirtProvider{
     pub virsh:PathBuf,
     pub uri:Option<String>,
