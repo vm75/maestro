@@ -1,4 +1,5 @@
 mod apply;
+mod artifacts;
 pub mod backup_inventory;
 pub mod browse;
 mod container_health;
