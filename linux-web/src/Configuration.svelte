@@ -85,6 +85,53 @@
   let readiness = $state<Readiness | null>(null)
   let readinessError = $state('')
   let checkingReadiness = $state(false)
+  let provisionId = $state('')
+  let provisionSize = $state(0)
+  let provisionBusy = $state(false)
+  let provisionError = $state('')
+  let provisionMessage = $state('')
+  interface ProvisionPlan { storage: string; revision: string; path: string; kind: string; format: string; sizeGiB: number; availableBytes: number; mode: string; consumers: string[]; reviewToken: string }
+  let provisionReview = $state<{ key: string; plan: ProvisionPlan } | null>(null)
+  const provisionKey = $derived(JSON.stringify([provisionId.trim(), provisionSize, revision]))
+  const provisionPlan = $derived(provisionReview?.key === provisionKey ? provisionReview.plan : null)
+
+  async function reviewProvision(event: SubmitEvent) {
+    event.preventDefault()
+    if (!writable || !revision || provisionBusy) return
+    provisionBusy = true; provisionError = ''; provisionMessage = ''; provisionReview = null
+    const key = provisionKey
+    try {
+      const plan = await invokeTool<ProvisionPlan>('managed_storage_plan', {
+        storage: provisionId.trim(), revision, sizeGiB: provisionSize,
+      })
+      provisionReview = { key, plan }
+    } catch (failure) {
+      provisionError = failure instanceof Error ? failure.message : 'Could not review new storage.'
+    } finally { provisionBusy = false }
+  }
+
+  async function createProvision() {
+    if (!provisionPlan || !writable || provisionBusy) return
+    if (!window.confirm('Create new empty data at the reviewed path? This is not restoration of missing data.')) return
+    const plan = provisionPlan
+    provisionBusy = true; provisionError = ''; provisionMessage = ''; provisionReview = null
+    try {
+      const started = await invokeTool<{job: Job}>('managed_storage_create', {
+        storage: plan.storage, revision: plan.revision, sizeGiB: plan.sizeGiB,
+        reviewToken: plan.reviewToken, purpose: 'new_data', confirm: true,
+      })
+      let job = started.job
+      while (job.state === 'running') {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        job = await invokeTool<Job>('jobs_get', {id:job.id})
+      }
+      if (job.state !== 'succeeded') throw new Error(job.error ?? 'Provisioning did not complete.')
+      provisionMessage = 'New data created; no workload was started.'
+      await checkReadiness()
+    } catch (failure) {
+      provisionError = failure instanceof Error ? failure.message : 'Could not create new data.'
+    } finally { provisionBusy = false }
+  }
 
   async function checkReadiness(refresh = false) {
     if (checkingReadiness) return
@@ -235,7 +282,7 @@
 <section class="panel" aria-labelledby="readiness-title">
   <div class="controls">
     <h2 id="readiness-title">Configuration health</h2>
-    <button type="button" onclick={() => checkReadiness(true)} disabled={checkingReadiness || !readiness?.valid}>Recheck configuration</button>
+    <button type="button" onclick={() => checkReadiness(!!readiness?.valid)} disabled={checkingReadiness}>Recheck configuration</button>
   </div>
   <p>Read-only checks do not create missing data, install packages, or start applications.</p>
   {#if checkingReadiness}<p role="status">Checking configuration…</p>{/if}
@@ -342,6 +389,26 @@
         {editorSaving ? 'Applying…' : 'Apply reviewed edit'}
       </button>
     {/if}
+  {/if}
+</section>
+
+<section class="panel" aria-labelledby="provision-title">
+  <h2 id="provision-title">Provision new storage</h2>
+  <p>Use an existing storage reference and an absent owned path. This creates new data only, never restores missing data, creates parents or overwrites existing files. Source image cloning is not available yet.</p>
+  <form onsubmit={reviewProvision}>
+    <div class="editor-grid">
+      <label>Storage ID <input bind:value={provisionId} required maxlength="63" pattern="[a-z][a-z0-9_-]*" disabled={provisionBusy || !writable} /></label>
+      <label>Disk size (GiB; zero for directory) <input type="number" min="0" max="4096" step="1" required bind:value={provisionSize} disabled={provisionBusy || !writable} /></label>
+    </div>
+    <button type="submit" disabled={provisionBusy || !writable || !revision}>Review new data</button>
+  </form>
+  {#if provisionError}<p role="alert">{provisionError}</p>{/if}
+  {#if provisionMessage}<p role="status">{provisionMessage}</p>{/if}
+  {#if provisionPlan}
+    <p>Destination: <code>{provisionPlan.path}</code></p>
+    <p>{provisionPlan.kind} {provisionPlan.format} · {provisionPlan.sizeGiB} GiB · mode {provisionPlan.mode}</p>
+    <p>Consumers: {provisionPlan.consumers.join(', ') || 'None'}. Sparse disk capacity is not reserved.</p>
+    <button type="button" onclick={createProvision} disabled={provisionBusy || !writable}>Create reviewed new data</button>
   {/if}
 </section>
 
