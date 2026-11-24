@@ -704,6 +704,10 @@ impl ReadinessCache {
                 "apply_unavailable", "Previous apply status cannot be verified.",
                 "Inspect the private apply journal before managing workloads.")),
         }
+        if super::backup_capture::ensure_idle(store).is_err(){
+            health.issues.push(issue("error","configuration","backup","backup_recovery_pending",
+                "A backup recovery record is pending or inaccessible.","Review backup recovery before changing workloads."));
+        }
         if state.runner.is_test_mode() {
             propagate(config, &mut health, Vec::new());
             return health;
