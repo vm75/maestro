@@ -55,6 +55,9 @@ pub(crate) fn verify_archive(c:&Config,id:&str,object:&NativeObject,file:File,en
         let raw=row.path_bytes();
         let name=std::str::from_utf8(&raw)?.trim_end_matches('/').to_owned();
         ensure!(super::super::path_valid(&name,false)&&(name=="backup"||name.starts_with("backup/"))&&name.len()<=4096,"invalid Incus archive member");
+        if let Some(extensions)=row.pax_extensions()?{
+            for extension in extensions{let extension=extension?;ensure!(!extension.key_bytes().starts_with(b"GNU.sparse"),"sparse Incus archive extensions are unsupported");}
+        }
         let kind=row.header().entry_type();
         ensure!(kind.is_file()||kind.is_dir(),"unsupported Incus archive entry type");
         let size=row.header().size()?;
@@ -83,15 +86,15 @@ pub(crate) fn verify_archive(c:&Config,id:&str,object:&NativeObject,file:File,en
     }
     ensure!(count>=512,"Incus archive end marker is incomplete");
     let x=index.ok_or_else(||anyhow!("Incus archive index missing"))?;
-    ensure!(x["name"]==object.name&&x["pool"]==object.pool&&x["type"]=="virtual-machine"
+    ensure!(x["name"].as_str()==Some(object.name.as_str())&&x["pool"].as_str()==Some(object.pool.as_str())&&x["type"]=="virtual-machine"
         &&x["optimized"].as_bool()==Some(false)&&x["optimized_header"].as_bool()==Some(false)
         &&x["backend"].as_str().is_some_and(|s|!s.is_empty())
         &&(x["snapshots"].is_null()||x["snapshots"].as_sequence().is_some_and(Vec::is_empty)),"Incus archive is not the reviewed portable guest");
     let cfg=&x["config"];let guest=&cfg["container"];let volume=&cfg["volume"];
-    ensure!(guest["name"]==object.name&&guest["type"]=="virtual-machine"&&guest["config"][ID]==id
-        &&guest["config"][IDENTITY]==vm(c,id)?.uuid&&volume["name"]==object.name&&volume["type"]=="virtual-machine"
-        &&volume["content_type"]=="block"&&(volume["project"].is_null()||volume["project"]==object.project)
-        &&cfg["pool"]["name"]==object.pool&&cfg["pool"]["driver"]==x["backend"]
+    ensure!(guest["name"].as_str()==Some(object.name.as_str())&&guest["type"]=="virtual-machine"&&guest["config"][ID]==id
+        &&guest["config"][IDENTITY].as_str()==Some(vm(c,id)?.uuid.as_str())&&volume["name"].as_str()==Some(object.name.as_str())&&volume["type"]=="virtual-machine"
+        &&volume["content_type"]=="block"&&(volume["project"].is_null()||volume["project"].as_str()==Some(object.project.as_str()))
+        &&cfg["pool"]["name"].as_str()==Some(object.pool.as_str())&&cfg["pool"]["driver"]==x["backend"]
         &&(cfg["dependent_volumes"].is_null()||cfg["dependent_volumes"].as_sequence().is_some_and(Vec::is_empty)),
         "Incus archive identity or dependency coverage differs");
     let devices:BTreeMap<String,BTreeMap<String,String>>=serde_yaml::from_value(guest["devices"].clone())?;
