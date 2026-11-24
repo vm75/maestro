@@ -49,16 +49,7 @@ pub(super) fn caller_name(uid: u32) -> Result<String> {
         .context("Invalid trusted workload account name")?
         .to_owned();
     ensure!(
-        !name.is_empty()
-            && name.len() <= 32
-            && name
-                .bytes()
-                .next()
-                .is_some_and(|c| c.is_ascii_lowercase() || c == b'_')
-            && name
-                .bytes()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"_-".contains(&c))
-            && !name.contains(' '),
+        regex::Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}\$?$").unwrap().is_match(&name),
         "Unsupported workload username"
     );
     Ok(name)
