@@ -616,7 +616,7 @@ services:
         }
         let mut file=builder.into_inner().unwrap();file.seek(SeekFrom::Start(0)).unwrap();
         let instance=NativeExport{resources:vec!["service/guest".into()],backend:"incus".into(),kind:"incus_instance_export".into(),bundle_path:"native/incus/guest.tar".into(),size_bytes:file.metadata().unwrap().len(),sha256:String::new(),native:object.clone()};
-        let coverage=inspect_archive(&config,&instance,file,end).unwrap();
+        let coverage=inspect_archive(&config,&instance,file,Path::new("/storage"),end).unwrap();
         assert_eq!(coverage.references,refs);
         let volume=NativeExport{resources:vec!["service/guest".into()],backend:"incus".into(),kind:"incus_custom_volume".into(),bundle_path:"native/incus/volume.tar".into(),size_bytes:1,sha256:String::new(),native:NativeObject{backend:"incus".into(),name:"removed".into(),pool:"data".into(),project:"default".into(),content_type:"filesystem".into()}};
         let mut volumes=BTreeMap::new();
@@ -641,7 +641,7 @@ services:
                 builder.append_data(&mut h,path,std::io::empty()).unwrap();
             }
             let mut file=builder.into_inner().unwrap();file.seek(SeekFrom::Start(0)).unwrap();
-            assert_eq!(inspect_archive(&config,&volume,file,end).is_ok(),include_snapshot);
+            assert_eq!(inspect_archive(&config,&volume,file,Path::new("/storage"),end).is_ok(),include_snapshot);
         }
         let mut wrong=index;wrong["config"]["container"]["config"][IDENTITY]=serde_json::json!("foreign");
         assert!(verify_archive(&config,"guest",&object,make(true,&wrong),end).is_err());

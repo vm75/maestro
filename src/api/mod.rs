@@ -13,6 +13,8 @@ pub mod nginx;
 pub mod services;
 #[cfg(feature = "linux")]
 mod sessions;
+#[cfg(feature = "linux")]
+mod terminal;
 pub mod system;
 #[cfg(feature = "linux")]
 pub mod tools;

@@ -26,6 +26,7 @@
     { id: 'updates', name: 'Updates', subtitle: 'Keep your Linux system up to date.' },
     { id: 'web', name: 'Web', subtitle: 'Nginx sites, certificates and logs.' },
     { id: 'security', name: 'Ban Shield', subtitle: 'Protection, active bans and detection rules.' },
+    { id: 'terminal', name: 'Terminal', subtitle: 'Local non-root interactive shell.' },
     { id: 'activity', name: 'Activity', subtitle: 'Inspect management jobs and their output.' },
     { id: 'agent', name: 'Agent access', subtitle: 'Manage your server through MCP.' },
   ]
@@ -35,6 +36,7 @@
   const visiblePages = $derived(pages.filter(p => {
     if (p.id === 'web') return shared?.modules.some(m => ['nginx', 'certificates'].includes(m.id) && m.availability !== 'unsupported')
     if (p.id === 'security') return shared?.modules.some(m => m.id === 'ban_shield' && m.availability === 'ready')
+    if (p.id === 'terminal') return discovery?.modules.some(m => m.id === 'terminal' && m.available)
     return !pageModules[p.id] || discovery?.modules.some(m => m.id === pageModules[p.id])
   }))
   let selected = $state('overview')
@@ -128,6 +130,8 @@
         {#await import('./pages/SharedWeb.svelte')}<p role="status">Loading Web…</p>{:then {default: Page}}<Page discovery={shared} />{:catch failure}<p role="alert">{String(failure)}</p>{/await}
       {:else if page.id === 'security'}
         {#await import('./pages/BanShield.svelte')}<p role="status">Loading Ban Shield…</p>{:then {default: Page}}<Page />{:catch failure}<p role="alert">{String(failure)}</p>{/await}
+      {:else if page.id === 'terminal' && status}
+        {#await import('./pages/Terminal.svelte')}<p role="status">Loading terminal…</p>{:then {default: Page}}<Page />{:catch failure}<p role="alert">{String(failure)}</p>{/await}
       {:else if page.id === 'activity' && status && discovery}
         <Activity {status} {discovery} />
       {:else if page.id === 'updates' && status}

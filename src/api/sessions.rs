@@ -40,6 +40,12 @@ pub(super) struct Sessions {
 }
 
 impl Sessions {
+    pub(super) fn browser_session(&self, headers: &HeaderMap) -> Option<SessionKey> {
+        cookie_key(headers).filter(|key| self.session_active(key))
+    }
+    pub(super) fn session_active(&self, key: &SessionKey) -> bool {
+        self.active.lock().get(key).is_some_and(|expiry| *expiry > unix_now())
+    }
     pub(super) fn new(config: Arc<AppConfig>) -> anyhow::Result<Self> {
         let shared_admin = config.linux_authority.as_ref().map_or_else(
             || Arc::new(Mutex::new(None)),

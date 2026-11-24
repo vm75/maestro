@@ -401,6 +401,8 @@ pub(super) fn router(state: AppState) -> anyhow::Result<Router<AppState>> {
         .route("/mcp", post(super::mcp::handle_mcp))
         .route("/session", axum::routing::delete(sessions::logout))
         .merge(super::linux_shared::router())
+        .route("/terminal",post(super::terminal::handle))
+        .layer(Extension(super::terminal::Terminals::default()))
         .route_layer(middleware::from_fn_with_state(
             sessions.clone(),
             sessions::authorize,
@@ -493,7 +495,8 @@ fn modules(state: &AppState) -> Value {
         {"id": "workloads", "title": "Applications", "available": true, "writable": writes_allowed(state)},
         {"id":"managed_backup","title":"Portable backup planning","available":true,"writable":writes_allowed(state)},
         {"id":"managed_artifact_recovery","title":"Generated artifact recovery","available":true,"writable":writes_allowed(state)},
-        {"id": "shares", "title": "File sharing", "available": true}
+        {"id": "shares", "title": "File sharing", "available": true},
+        {"id":"terminal","title":"Browser terminal","available":super::terminal::available(state)}
     ])
 }
 

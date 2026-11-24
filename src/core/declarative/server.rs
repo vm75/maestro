@@ -24,6 +24,8 @@ pub struct Settings {
     pub admin_password_hash: String,
     pub public_origin: String,
     pub sample_interval_seconds: u64,
+    #[serde(default)]
+    pub terminal_enabled: bool,
 }
 
 impl Settings {
@@ -41,6 +43,7 @@ impl Settings {
             admin_password_hash: String::new(),
             public_origin: String::new(),
             sample_interval_seconds: 2,
+            terminal_enabled: false,
         }
     }
 
