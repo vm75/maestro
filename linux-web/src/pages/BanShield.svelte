@@ -26,7 +26,7 @@
   onMount(() => { void refresh(); return () => controller?.abort() })
 </script>
 
-<p class="policy-note">This Linux workspace displays Ban Shield status and configuration. Changing enforcement, allowlists, detection rules or bans requires an authorized Linux management operation.</p>
+<p class="policy-note">This page currently displays Ban Shield status and configuration. Controls for enforcement, allowlists, detection rules and bans have not yet been implemented in the Linux page.</p>
 {#if error}<p class="form-error" role="alert">{error}</p>{/if}
 <section class="panel">
   <div class="resource-heading"><h2>Ban Shield performance</h2><button disabled={loading} onclick={refresh}>{loading ? 'Refreshing…' : 'Refresh'}</button></div>

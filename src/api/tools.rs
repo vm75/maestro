@@ -499,8 +499,7 @@ fn modules(state: &AppState) -> Value {
 
 fn writes_allowed(state: &AppState) -> bool {
     state.config.test_mode
-        || (state.config.system.allow_workload_writes
-            && matches!(state.config.platform, crate::config::Platform::Linux))
+        || matches!(state.config.platform, crate::config::Platform::Linux)
 }
 
 pub fn discover_tools(_state: &AppState) -> Vec<Value> {
@@ -884,14 +883,14 @@ async fn permissions(state: &AppState) -> Value {
             .any(|unit| {
                 systemd::permits(state, systemd::Scope::System, unit) && helper.permits_unit(unit)
             });
-    let package_policy = state.config.system.allow_package_writes;
-    let samba_password_policy = state.config.system.allow_share_writes;
+    let package_policy = state.config.platform == crate::config::Platform::Linux;
+    let samba_password_policy = state.config.platform == crate::config::Platform::Linux;
     let samba_password_ready = samba_password_policy && helper.permits_samba_password();
     let share_ready = samba_password_policy && helper.permits_shares();
     let package_ready =
         package_policy && package_updates::available(state) && helper.permits_packages();
     let package_reason = if !package_policy {
-        "Package writes are disabled in Maestro configuration."
+        "Package writes require Linux mode."
     } else if !package_updates::available(state) {
         "No supported native package manager is available."
     } else if !helper.permits_packages() {
@@ -917,13 +916,13 @@ async fn permissions(state: &AppState) -> Value {
         "shareWrites": {
             "status": if share_ready { "ready" } else { "unavailable" },
             "code": if share_ready { "ready" } else if !samba_password_policy { "writes_disabled" } else { "helper_unavailable" },
-            "reason": if share_ready { "Protected share operations are authorized; native readiness is checked per protocol." } else { "Share publication requires enabled configuration and root-owned helper grants." }
+            "reason": if share_ready { "Protected share operations are authorized; native readiness is checked per protocol." } else { "Share publication requires an authorized helper with root-owned share grants." }
         },
         "sambaPassword": {
             "status": if samba_password_ready { "ready" } else { "unavailable" },
             "code": if samba_password_ready { "ready" } else if !samba_password_policy { "writes_disabled" } else { "helper_unavailable" },
             "reason": if !samba_password_policy {
-                "Samba password writes are disabled by Maestro policy."
+                "Samba password changes require Linux mode."
             } else if !helper.permits_samba_password() {
                 "An authorized helper with explicit root-owned samba_password policy is required."
             } else {
@@ -1045,7 +1044,7 @@ pub async fn execute_tool(
             );
         }
         if !package_updates::permits(state, install).await {
-            let policy_disabled = !state.config.system.allow_package_writes;
+            let policy_disabled = state.config.platform != crate::config::Platform::Linux;
             return (
                 if policy_disabled {
                     StatusCode::FORBIDDEN
@@ -1619,8 +1618,8 @@ pub async fn execute_tool(
             if !input.confirm || !matches!(input.protocol.as_str(),"samba"|"nfs") {
                 return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected samba or nfs and confirm=true."));
             }
-            if !writes_allowed(state) || !state.config.system.allow_share_writes || !state.config.system.allow_package_writes {
-                return (StatusCode::FORBIDDEN,json_err("writes_disabled","Share server setup requires enabled share and package writes."));
+            if state.config.platform != crate::config::Platform::Linux {
+                return (StatusCode::FORBIDDEN,json_err("writes_disabled","Share server setup requires Linux mode."));
             }
             if state.config.test_mode || !provider.shares.native_enabled() {
                 return (StatusCode::SERVICE_UNAVAILABLE,json_err("helper_unavailable","Native share setup requires the fixed reference configuration paths."));
@@ -1669,7 +1668,7 @@ pub async fn execute_tool(
                     ),
                 );
             }
-            if !state.config.system.allow_share_writes {
+            if state.config.platform != crate::config::Platform::Linux {
                 return (
                     StatusCode::FORBIDDEN,
                     json_err(

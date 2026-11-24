@@ -987,3 +987,30 @@ available after initial provisioning so operators can change the option.
 Three focused helper setup tests, Svelte/TypeScript checks and the UI production
 build passed. Native testparm on temporary files confirmed both Yes and No
 values. Live setup and Windows Explorer acceptance remain pending.
+
+### Operator-directed removal of Linux YAML write gates
+
+Removed `server.allow_writes` and `server.privileged_operations` from native
+settings and generated Linux YAML at the operator's explicit request. Existing
+boolean fields remain readable but are ignored. Authenticated Linux workload
+actions are always enabled; protected package/share/password actions depend on
+the optional helper, its independent root-owned grants and native readiness.
+Legacy runtime write flags no longer gate these Linux actions. Fixed helper
+paths, non-root execution, confirmation, helper validation and router isolation
+remain effective. Router token authentication already required no account; the
+router route-isolation regression now explicitly verifies bearer token access.
+Server-setting tests, Linux tool/history authorization tests, router token/route
+isolation tests and the ASUSWRT compile check passed. The Linux restart fixture
+was corrected to use an actual service action: a storage reference alone creates
+no apply action in the current planner. Live Linux/helper and router firmware
+acceptance remain pending. This operator request supersedes earlier ledger
+requirements for the two YAML flags.
+
+### Shared Linux page status wording
+
+Removed the stale Linux-specific authorization explanation from the Web and
+Ban Shield inventory pages. These pages have GET-only session routes and lack
+mutation UI controls; removing Linux YAML write gates does not implement those
+controls. The UI now states the implementation gap explicitly. No new permissions
+are required to make the existing inventory visible, and no mutation capability
+is claimed. Shared feature editing/action integration remains outstanding.

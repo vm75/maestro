@@ -70,11 +70,11 @@ setup units; review the displayed grants before approving. Existing root-owned
 policy contents for the same workload UID are preserved. No packages,
 Samba/NFS shares or systemd service installation are performed by this target.
 
-In the existing `data/linux/maestro.yaml`, enable `server.allow_writes: true`
-and `server.privileged_operations: true` in the native Linux format. For the
-legacy layout use `system.allow_workload_writes`, `system.allow_package_writes`
-and `system.allow_share_writes`. The helper target intentionally does not
-rewrite this workload-owned configuration. Restart with `make run-linux`
+Linux user operations are enabled automatically. Protected host operations become
+available when the optional helper is installed and its root-owned policy grants
+the action. The retired `server.allow_writes` and `server.privileged_operations`
+flags are accepted in existing YAML but ignored; new configurations omit them.
+Restart with `make run-linux`
 and check Agent access > Capabilities. Before saving an enabled file share,
 open File shares and run **Set up server** for Samba or NFS. Samba setup adds
 the managed include to `smb.conf`; the managed fragment is published when

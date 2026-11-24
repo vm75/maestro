@@ -79,8 +79,6 @@ server:
   listen: "127.0.0.1:$api_port"
   token_file: "$lab/token"
   state_dir: "$lab"
-  allow_writes: true
-  privileged_operations: false
 EOF
     chmod 0600 "$lab/maestro.yaml"
 

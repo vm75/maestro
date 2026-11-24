@@ -23,8 +23,6 @@ pub struct Settings {
     pub admin_username: String,
     pub admin_password_hash: String,
     pub public_origin: String,
-    pub privileged_operations: bool,
-    pub allow_writes: bool,
     pub sample_interval_seconds: u64,
 }
 
@@ -42,8 +40,6 @@ impl Settings {
             admin_username: String::new(),
             admin_password_hash: String::new(),
             public_origin: String::new(),
-            privileged_operations: false,
-            allow_writes: false,
             sample_interval_seconds: 2,
         }
     }
@@ -100,14 +96,6 @@ impl Settings {
             self.samba_config != self.samba_managed_file,
             "Samba managed fragment must differ from its main configuration"
         );
-        if self.privileged_operations {
-            ensure!(
-                self.samba_config == "/etc/samba/smb.conf"
-                    && self.samba_managed_file == "/etc/samba/maestro.conf"
-                    && self.package_manager == "auto",
-                "helper operations require fixed native paths and automatic package detection"
-            );
-        }
         let address = if let Some(port) = self.listen.strip_prefix("localhost:") {
             format!("127.0.0.1:{port}")
         } else {
@@ -258,6 +246,11 @@ pub fn read(input: &[u8], defaults: &Settings) -> Result<Option<Settings>> {
         .ok_or_else(|| anyhow::anyhow!("server settings must be a mapping"))?;
     let mut settings = serde_yaml::to_value(defaults)?;
     for (key, value) in server {
+        // Retired gates remain readable in existing authorities, but have no effect.
+        if matches!(key.as_str(), Some("allow_writes" | "privileged_operations")) {
+            ensure!(value.is_bool(), "retired server flags must be booleans");
+            continue;
+        }
         settings
             .as_mapping_mut()
             .unwrap()
@@ -321,7 +314,7 @@ mod tests {
         for (server, valid) in [
             ("{}", true),
             ("{privileged_operations: true}", true),
-            ("{privileged_operations: true, package_manager: apt}", false),
+            ("{privileged_operations: true, package_manager: apt}", true),
             ("{listen: '[::1]:8081'}", true),
             ("{listen: ':8080'}", false),
             ("{listen: '127.0.0.1:70000'}", false),
@@ -374,6 +367,15 @@ mod tests {
                 "{server}"
             );
         }
+    }
+
+    #[test]
+    fn retired_write_gates_are_ignored_and_not_serialized() {
+        let settings = read(b"version: 1\nserver: {allow_writes: false, privileged_operations: false}\n", &defaults()).unwrap().unwrap();
+        assert!(settings == defaults());
+        let yaml = serde_yaml::to_string(&settings).unwrap();
+        assert!(!yaml.contains("allow_writes"));
+        assert!(!yaml.contains("privileged_operations"));
     }
 
     #[test]

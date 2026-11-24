@@ -88,6 +88,13 @@ systemd, monitoring, package managers and workload coordinator are compiled
 only with `linux`. Shared REST routes and the existing compatibility UI
 remain available to both builds.
 
+Authenticated Linux workload operations are always enabled. Protected package
+and share operations depend on native readiness and the optional helper's
+root-owned grants; workload YAML adds no write-enable gate. The retired
+`server.allow_writes` and `server.privileged_operations` fields are accepted but
+ignored for existing native Linux authorities and omitted from settings output.
+Router routes retain bearer-token authentication without administrator creation.
+
 A Linux build with the `linux-ui` feature embeds the static Svelte shell and
 serves its assets under `/linux-assets/` on the Linux platform. The Overview
 and Services pages load on demand. Services queries system and user systemd

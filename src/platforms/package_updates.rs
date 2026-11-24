@@ -152,8 +152,7 @@ pub fn available(state: &AppState) -> bool {
 }
 
 pub async fn writes_enabled(state: &AppState) -> bool {
-    state.config.system.allow_package_writes
-        && !state.config.test_mode
+    !state.config.test_mode
         && state.config.platform == crate::config::Platform::Linux
         && available(state)
         && admin::probe().await.permits_packages()
@@ -172,16 +171,16 @@ pub async fn status(state: &AppState) -> Status {
         }
     }
     let reason = availability_reason(state, family, &program);
-    let helper = if state.config.system.allow_package_writes {
+    let helper = if state.config.platform == crate::config::Platform::Linux {
         Some(admin::probe().await)
     } else {
         None
     };
     let enabled = reason.is_none()
-        && state.config.system.allow_package_writes
+        && (state.config.platform == crate::config::Platform::Linux)
         && helper.as_ref().is_some_and(admin::Probe::permits_packages);
-    let write_reason = if !state.config.system.allow_package_writes {
-        Some("Package writes are disabled by administrator policy.".to_owned())
+    let write_reason = if state.config.platform != crate::config::Platform::Linux {
+        Some("Package writes require Linux mode.".to_owned())
     } else if reason.is_some() {
         Some("The native package manager is unavailable.".to_owned())
     } else if !enabled {

@@ -7,8 +7,8 @@
 
   let { allowWrites }: { allowWrites: boolean } = $props()
   let inventory = $state<ServiceInventory | null>(null), loading = $state(true), error = $state('')
-  let scope = $state('system')
-  let filter = $state(''), stateFilter = $state('all'), selectedName = $state('')
+  let scope = $state('user')
+  let filter = $state(''), stateFilter = $state('active'), selectedName = $state('')
   let details = $state<ServiceDetails | null>(null), detailLoading = $state(false), detailError = $state('')
   let logs = $state<ServiceLogs | null>(null), logLoading = $state(false), logError = $state(''), tail = $state(200)
   let activeJob = $state<string | null>(null), submitting = $state(false), feedback = $state(''), failed = $state(false)

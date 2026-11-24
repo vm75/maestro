@@ -1884,9 +1884,9 @@ async fn linux_tool_bridge_discovery_auth_and_arguments() {
             "POST",
             "/api/tools/updates_install",
             r#"{"confirm":true}"#,
-            StatusCode::FORBIDDEN,
+            StatusCode::SERVICE_UNAVAILABLE,
             "/error/code",
-            "writes_disabled",
+            "helper_unavailable",
         ),
         (
             "POST",
@@ -3067,6 +3067,11 @@ async fn linux_mcp_protocol_flow() {
 #[tokio::test]
 async fn asuswrt_excludes_linux_tool_and_asset_routes() {
     let (app, state, _temp) = setup_test_app().await;
+    let response = app.clone().oneshot(Request::builder()
+        .uri("/api/auth/check")
+        .header(header::AUTHORIZATION, format!("Bearer {}", state.config.server.auth_token))
+        .body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "router token works without administrator setup");
     assert_linux_routes_missing(app).await;
     let paths = &state.config.paths;
     for path in [
@@ -3137,29 +3142,6 @@ async fn linux_history_metadata_and_permission_contract() {
             .save(b"version: 1\n# edit\n", &original.revision)
             .unwrap();
         let app = api::app(state).unwrap();
-        if !writable {
-            for name in [
-                "managed_config_revert_plan",
-                "managed_config_revert",
-                "managed_apply_retry",
-            ] {
-                let response = app
-                    .clone()
-                    .oneshot(
-                        Request::builder()
-                            .method("POST")
-                            .uri(format!("/api/tools/{name}"))
-                            .header(header::HOST, "localhost:3030")
-                            .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                            .header(header::CONTENT_TYPE, "application/json")
-                            .body(Body::from("{}"))
-                            .unwrap(),
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(response.status(), StatusCode::FORBIDDEN);
-            }
-        }
         for name in ["managed_config_history", "workloads_history"] {
             let response = app
                 .clone()
@@ -3175,15 +3157,8 @@ async fn linux_history_metadata_and_permission_contract() {
                 )
                 .await
                 .unwrap();
-            assert_eq!(
-                response.status(),
-                if writable {
-                    StatusCode::OK
-                } else {
-                    StatusCode::FORBIDDEN
-                }
-            );
-            if writable {
+            assert_eq!(response.status(), StatusCode::OK);
+            {
                 let bytes = axum::body::to_bytes(response.into_body(), 65536)
                     .await
                     .unwrap();

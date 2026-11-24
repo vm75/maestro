@@ -80,7 +80,7 @@
   <button class:active={section === 'certificates'} onclick={() => section = 'certificates'}>Certificates</button>
   <button disabled={loading} onclick={refresh}>{loading ? 'Refreshing…' : 'Refresh'}</button>
 </div>
-<p class="policy-note">Shared module inventory is read-only in the Linux session UI. Configuration changes and privileged service operations are not exposed here until Linux-specific authorization is available.</p>
+<p class="policy-note">This page currently displays Nginx and certificate status. Configuration editing and action controls have not yet been implemented in the Linux Web page.</p>
 {#each Object.entries(errors) as [name, error]}<p class="form-error" role="alert">{name}: {error}</p>{/each}
 
 {#if section === 'nginx'}
@@ -88,10 +88,10 @@
     <section class="panel">
       <div class="resource-heading"><h2><Icon name="server" size={17} /> Nginx</h2><span class="project-state" class:running={status?.running}>{status ? (status.running ? 'Running' : 'Stopped') : 'Unknown'}</span></div>
       {#if status}<p class="muted mono">{status.config_path}</p>{/if}
-      <p>Service lifecycle is managed from Services. Test and reload require an authorized Linux operation.</p>
+      <p>Service lifecycle is managed from Services. Nginx test and reload controls are not yet implemented on this page.</p>
     </section>
     <section class="panel">
-      <div class="resource-heading"><h2>Manage sites</h2><span>{sites.length} sites</span></div>
+      <div class="resource-heading"><h2>Sites</h2><span>{sites.length} sites</span></div>
       <label for="site-filter">Filter sites</label><input id="site-filter" type="search" bind:value={filter} placeholder="Find a domain or subfolder…" />
       <div class="shared-table"><table><thead><tr><th>Site</th><th>Port</th><th>Configuration</th><th>State</th></tr></thead><tbody>
       {#each visibleSites as site (site.kind + '/' + site.domain + '/' + site.name)}

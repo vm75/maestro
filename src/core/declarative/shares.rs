@@ -118,7 +118,7 @@ impl ShareProvider {
             && config.linux_authority.as_ref().is_some_and(|authority| authority.settings.samba_config == "/etc/samba/smb.conf")
             && provider.samba_conf == Path::new("/etc/samba/maestro.conf")
             && provider.exports_file == Path::new("/etc/exports.d/maestro.exports");
-        provider.native_enabled = provider.helper_paths && config.system.allow_share_writes;
+        provider.native_enabled = provider.helper_paths;
         provider
     }
 

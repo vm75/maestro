@@ -144,8 +144,7 @@ restricted sudoers line for a **reviewed** account is:
 ```
 
 The default `package_writes: false` denies package mutations in the
-root-owned policy. Enabling package operations also requires
-`server.allow_writes: true` and `server.privileged_operations: true` for native Linux YAML (or `system.allow_package_writes: true` in the legacy layout) in the non-root Maestro config,
+root-owned policy. Package operations require
 an authorized helper supporting the reference request/response contract and a supported native manager.
 Native package and dependency operations use fixed root-owned executables,
 validate 1–32 repository names, disallow URLs/flags/versions/repository
@@ -198,10 +197,10 @@ for metadata refresh, regular native upgrades, named repository package
 installation, and predefined Podman/Docker/Incus/libvirt/Samba/NFS dependencies.
 The HTTP and MCP tool schemas enforce explicit `confirm=true` for destructive
 operations; the helper independently validates them, and execution is denied
-unless both non-root configuration and private root-owned policy permit writes.
+unless the installed helper and private root-owned policy permit the action.
 
-`server.allow_writes: true` and `server.privileged_operations: true` for native Linux YAML (or `system.allow_package_writes: true` in the legacy layout) **does not itself elevate Maestro**.
-The optional `maestro-admin` must also be installed and narrowly authorized.
+Linux workload operations are always enabled for the authenticated administrator.
+Protected host operations require the optional `maestro-admin` to be installed and authorized.
 The Updates page reports why protected actions are disabled, while cached
 status remains visible. Named and dependency installation are serialized
 management jobs, subject to native package locks, repository signatures and
@@ -222,14 +221,16 @@ directory. A token rotation invalidates previously persisted sessions.
 Logout persists revocation; malformed, symlinked or unsafe session state
 fails closed. Native Linux YAML supports first-run administrator setup and password login.
 Setup records the password hash in the authoritative YAML; the token file
-remains available for authorized API clients. Native/browser authentication
-acceptance remains open.
+remains available for authorized API clients. Router mode continues to use its API token without administrator creation.
+Native/browser authentication acceptance remains open.
 
 ## Workload writes and recovery
 
-Set `server.allow_writes: true` in native Linux YAML (or
-`system.allow_workload_writes: true` in the legacy layout) to allow workload apply, revert,
-recovery and lifecycle actions. The default is read-only. Native apply
+Workload apply, revert, recovery and lifecycle actions are enabled automatically
+for the authenticated Linux administrator. The retired `server.allow_writes` and
+`server.privileged_operations` fields are ignored in existing native YAML and
+omitted from new configurations; legacy `system.allow_*_writes` flags do not
+gate Linux operations. Native apply
 currently accepts reviewed managed-directory provisioning and supported
 Quadlet changes. Plan and revert previews list resources the configured
 provider cannot apply. Removing a storage definition removes its ownership
@@ -538,11 +539,10 @@ The privileged helper policy now has independent default-deny flags:
 }
 ```
 
-Protected package writes additionally require
-`server.allow_writes: true` and `server.privileged_operations: true` for native Linux YAML (or `system.allow_package_writes: true` in the legacy layout); Samba password changes require
-`system.allow_share_writes: true` in the legacy layout. These YAML flags authorize neither
-capability alone. A matching root-owned helper policy, strict sudoers rule,
-native backend readiness and explicit operation confirmation remain required.
+Protected package and share writes require a matching root-owned helper policy,
+strict sudoers rule, native backend readiness and explicit operation confirmation.
+Linux YAML does not add a separate authorization gate. Without the helper,
+user operations and read-only native status remain available.
 The Samba password tool never accepts a selected account; the root helper
 resolves the non-root sudo caller and passes the password only via stdin.
 The helper now has source implementations of the Server Man native share

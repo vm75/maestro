@@ -99,8 +99,7 @@ pub fn initialize(path: &Path) -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".local/state"));
     let document = serde_json::json!({"version":1,"server":{
-        "listen":"127.0.0.1:8080", "token_file":token_path, "state_dir":state_root.join("maestro"),
-        "allow_writes":true, "privileged_operations":false
+        "listen":"127.0.0.1:8080", "token_file":token_path, "state_dir":state_root.join("maestro")
     }});
     let yaml = serde_yaml::to_string(&document)?;
     // Validate the existing/new token and defaults before publishing YAML.
@@ -210,9 +209,9 @@ pub fn load(path: &Path) -> Result<AppConfig> {
     config.nginx.subfolder_upstream_map_path = nginx.join("conf.d/04_subfolder_upstream_map.conf");
     config.nginx.http_forwarder_path = nginx.join("conf.d/05-http-to-https.conf");
     config.nginx.log_dir = root.join("logs/nginx");
-    config.system.allow_workload_writes = settings.allow_writes;
-    config.system.allow_package_writes = settings.allow_writes && settings.privileged_operations;
-    config.system.allow_share_writes = settings.allow_writes && settings.privileged_operations;
+    config.system.allow_workload_writes = true;
+    config.system.allow_package_writes = true;
+    config.system.allow_share_writes = true;
     let credentials = (!settings.admin_username.is_empty()).then(|| {
         (
             settings.admin_username.clone(),
@@ -333,7 +332,7 @@ mod tests {
         let config = load(&path).unwrap();
         assert_eq!(config.platform, Platform::Linux);
         assert!(config.system.allow_workload_writes);
-        assert!(!config.system.allow_package_writes);
+        assert!(config.system.allow_package_writes);
         let yaml = std::fs::read(&path).unwrap();
         let token = std::fs::read(path.parent().unwrap().join("token")).unwrap();
         for file in [&path, &path.parent().unwrap().join("token")] {
@@ -466,7 +465,7 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(result["plan"]["restartRequired"], true);
         assert_eq!(result["plan"]["changes"], serde_json::json!([]));
-        let combined = candidate.clone() + "storage: {data: {kind: directory, path: data}}\n";
+        let combined = candidate.clone() + "services: {web: {kind: container, containers: {app: {image: nginx:alpine}}}}\n";
         let (status, _, _) = auth_request(
             &app,
             "POST",
@@ -590,7 +589,7 @@ mod tests {
         assert_eq!(config.server.port, 8181);
         assert_eq!(config.paths.data_dir, state);
         assert!(config.system.allow_workload_writes);
-        assert!(!config.system.allow_package_writes);
+        assert!(config.system.allow_package_writes);
         let store = store(&config).unwrap();
         let snapshot = store.read().unwrap().unwrap();
         assert_eq!(snapshot.bytes, yaml.as_bytes());

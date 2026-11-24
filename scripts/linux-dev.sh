@@ -133,7 +133,7 @@ init_helper() {
     if ! sudo -n -l -u root -- /usr/local/libexec/maestro-admin; then
         fail 'Helper installed but exact sudo authorization is not available. Check sudoers includes.'
     fi
-    printf 'For protected host operations, enable server.privileged_operations in data/linux/maestro.yaml and review the root-owned helper grants.\n'
+    printf 'Protected host operations are available through the installed helper; review its root-owned grants.\n'
     printf 'Restart with make run-linux and check Agent access > Capabilities.\n'
 }
 
