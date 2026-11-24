@@ -206,6 +206,7 @@ pub fn load(path: &Path) -> Result<AppConfig> {
     config.paths.hosts_add = root.join("hosts.add");
     config.paths.dnsmasq_conf_add = root.join("dnsmasq.conf.add");
     config.firewall.protect_forward = false;
+    config.firewall.command_timeout_seconds = 25;
     config.paths.runtime_dir = root.join("run");
     config.paths.log_file = root.join("logs/maestro.log");
     config.paths.storage_dir = root.join("storage");

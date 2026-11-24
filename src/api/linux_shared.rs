@@ -59,6 +59,7 @@ pub(super) fn router(state: AppState) -> Router<AppState> {
         .route("/shared/certificates/lock/clear", post(clear_certificate_lock))
         .route("/shared/certificates/dehydrated/update", post(update_dehydrated))
         .route("/shared/firewall", get(firewall::status).put(update_firewall))
+        .route("/shared/firewall/capability", get(firewall_capability))
         .route("/shared/firewall/allowlist", post(firewall::add_allowlist))
         .route("/shared/firewall/allowlist/{network}", delete(firewall::delete_allowlist))
         .route("/shared/firewall/bans", post(firewall::manual_ban))
@@ -75,6 +76,7 @@ pub(super) fn router(state: AppState) -> Router<AppState> {
         .route("/shared/adguard/rewrites", get(adguard::get_rewrites).put(adguard::update_rewrites))
         .route("/shared/wireguard/status", get(wireguard_status))
         .route("/shared/wireguard/toggle", post(wireguard_toggle))
+        .route("/shared/wireguard/peers", get(wireguard_peers).put(write_wireguard_peers))
         .route_layer(middleware::from_fn_with_state(state, authorize_mutation))
 }
 
@@ -252,14 +254,21 @@ async fn update_dehydrated(State(state): State<AppState>) -> Result<Json<ApiMess
     Ok(Json(ApiMessage::new("Dehydrated updated")))
 }
 
-// The Linux daemon is non-root. Do not pretend that host firewall enforcement
-// is available until a narrowly scoped privileged netfilter adapter exists.
+// Enforcement is opt-in through the root-owned helper policy.
+async fn firewall_capability() -> Json<Value> {
+    let probe = admin::probe().await;
+    Json(json!({"enforcement":probe.ban_shield,"reason":if probe.ban_shield {
+        "Authorized nftables enforcement"
+    } else {
+        "Install nftables and authorize ban_shield in the root-owned helper policy"
+    }}))
+}
 async fn update_firewall(
     State(state): State<AppState>,
     Json(policy): Json<FirewallPolicy>,
 ) -> Result<Json<FirewallPolicy>, ApiError> {
-    if policy.enabled && !policy.observe_only {
-        return Err(ApiError::bad_request("Linux Ban Shield currently supports observation only"));
+    if policy.enabled && !policy.observe_only && !admin::probe().await.ban_shield {
+        return Err(ApiError::bad_request("Ban Shield enforcement requires the authorized nftables helper"));
     }
     firewall::update_policy(State(state), Json(policy)).await
 }
@@ -280,8 +289,23 @@ async fn wireguard_status(State(state): State<AppState>) -> Result<Json<Value>, 
         "interface": "wg0",
         "is_running": result.success,
         "writable": probe.permits_unit(WG_UNIT),
+        "peers_writable": probe.wireguard_peers,
         "reason": if probe.permits_unit(WG_UNIT) { "Authorized system service" } else { "Authorize wg-quick@wg0.service in the root-owned helper policy" },
     })))
+}
+
+async fn wireguard_peers() -> Result<Json<Value>, ApiError> {
+    if !admin::probe().await.wireguard_peers {
+        return Err(ApiError::bad_request("WireGuard peer access requires the root-owned wireguard_peers grant"));
+    }
+    Ok(Json(admin::network_operation("wireguard_peers_read", json!({})).await.map_err(ApiError::conflict)?))
+}
+
+async fn write_wireguard_peers(Json(input): Json<Value>) -> Result<Json<Value>, ApiError> {
+    if !admin::probe().await.wireguard_peers {
+        return Err(ApiError::bad_request("WireGuard peer editing requires the root-owned wireguard_peers grant"));
+    }
+    Ok(Json(admin::network_operation("wireguard_peers_write", input).await.map_err(ApiError::conflict)?))
 }
 
 #[derive(Deserialize)]

@@ -12,6 +12,7 @@
     tuning: Record<string, number>
   }
   let status = $state<Firewall | null>(null)
+  let capability = $state<{enforcement: boolean; reason: string} | null>(null)
   let loading = $state(false)
   let error = $state('')
   let filter = $state('')
@@ -20,7 +21,7 @@
   async function refresh() {
     controller?.abort(); const active = new AbortController(); controller = active
     loading = true; error = ''
-    try { const value = await request<Firewall>('/api/shared/firewall', { signal: active.signal }); if (!active.signal.aborted) { status = value; policyText = JSON.stringify(value.policy, null, 2) } }
+    try { const [value, grant] = await Promise.all([request<Firewall>('/api/shared/firewall', { signal: active.signal }), request<{enforcement: boolean; reason: string}>('/api/shared/firewall/capability', {signal: active.signal})]); if (!active.signal.aborted) { status = value; capability = grant; policyText = JSON.stringify(value.policy, null, 2) } }
     catch (failure) { if (!active.signal.aborted) error = failure instanceof Error ? failure.message : 'Ban Shield unavailable' }
     finally { if (!active.signal.aborted) loading = false }
   }
@@ -34,18 +35,18 @@
   async function mutate(path: string, method: string, body?: unknown) {
     if (!allowWrites || busy) return
     busy = true; error = ''; actionMessage = ''
-    try { await request('/api/shared/firewall' + path, { method, body: body === undefined ? undefined : JSON.stringify(body) }); actionMessage = 'Operation completed'; await refresh() }
+    try { await request('/api/shared/firewall' + path, { method, body: body === undefined ? undefined : JSON.stringify(body) }, 90_000); actionMessage = 'Operation completed'; await refresh() }
     catch (failure) { error = failure instanceof Error ? failure.message : String(failure) }
     finally { busy = false }
   }
   function savePolicy() {
-    try { const policy = JSON.parse(policyText); policy.observe_only = true; void mutate('', 'PUT', policy) }
+    try { const policy = JSON.parse(policyText); if (policy.enabled && !policy.observe_only && (!capability?.enforcement || !confirm('Enable host firewall enforcement? Verify your management IP is allowlisted.'))) return; void mutate('', 'PUT', policy) }
     catch (failure) { error = String(failure) }
   }
   onMount(() => { void refresh(); return () => controller?.abort() })
 </script>
 
-<p class="policy-note">Linux supports observe-only detection. Host firewall enforcement requires a future restricted privileged adapter; observed bans do not block traffic.</p>
+<p class="policy-note">{capability?.reason ?? 'Checking helper authorization…'}. Observation does not block traffic. Enforcement manages only Maestro's dedicated nftables input table.</p>
 {#if actionMessage}<p role="status">{actionMessage}</p>{/if}
 {#if error}<p class="form-error" role="alert">{error}</p>{/if}
 <section class="panel">
@@ -57,7 +58,9 @@
   <section class="panel"><div class="resource-heading"><h2>Protection</h2><span class="project-state" class:running={status.policy.enabled}>{status.policy.enabled ? status.policy.observe_only ? 'Observe only' : 'Enabled' : 'Disabled'}</span></div>
     <h3>Allowlist</h3>{#if status.policy.allowlist.length}<ul>{#each status.policy.allowlist as network}<li class="mono">{network} <button disabled={!allowWrites || busy} onclick={() => { if (confirm('Remove allowlist entry?')) void mutate('/allowlist/' + encodeURIComponent(network), 'DELETE') }}>Remove</button></li>{/each}</ul>{:else}<p class="muted">No allowlist entries.</p>{/if}
     {#if allowWrites}<form onsubmit={e => { e.preventDefault(); void mutate('/allowlist', 'POST', {network}) }}><label>Network (CIDR) <input bind:value={network} placeholder="192.0.2.0/24" required /></label><button disabled={busy}>Add allowlist entry</button></form>
-    <button disabled={busy} onclick={() => { if (status) void mutate('', 'PUT', {...status.policy, enabled: !status.policy.enabled, observe_only: true}) }}>{status.policy.enabled ? 'Disable' : 'Enable observation'}</button>{/if}
+    <button disabled={busy} onclick={() => { if (status) void mutate('', 'PUT', {...status.policy, enabled: !status.policy.enabled, observe_only: true}) }}>{status.policy.enabled ? 'Disable / observe' : 'Enable observation'}</button>
+    <button disabled={busy || !capability?.enforcement || (status.policy.enabled && !status.policy.observe_only)} onclick={() => { if (status && confirm('Enable firewall enforcement? Verify your management IP is allowlisted.')) void mutate('', 'PUT', {...status.policy, enabled: true, observe_only: false}) }}>Enable enforcement</button>
+    {#if status.policy.enabled && !status.policy.observe_only}<button disabled={busy} onclick={() => { if (status && confirm('Switch to observation and remove Maestro firewall hooks?')) void mutate('', 'PUT', {...status.policy, observe_only: true}) }}>Switch to observation</button>{/if}{/if}
   </section>
   <section class="panel"><div class="resource-heading"><h2>Active bans</h2><span>{status.bans.length} entries</span></div>
     <label for="ban-filter">Filter bans</label><input id="ban-filter" type="search" bind:value={filter} placeholder="Network or reason…" />
@@ -70,7 +73,7 @@
     <div class="shared-table"><table><thead><tr><th>Rule</th><th>Log paths</th><th>Attempts</th><th>Weight</th><th>State</th></tr></thead><tbody>
       {#each status.policy.rules as rule (rule.id)}<tr><td>{rule.name}</td><td class="mono">{rule.log_paths.join(', ')}</td><td>{rule.attempts}</td><td>{rule.weight}</td><td>{rule.enabled ? 'Enabled' : 'Disabled'}</td></tr>{/each}
     </tbody></table></div>{#if !status.policy.rules.length}<p class="muted">No detection rules.</p>{/if}
-    {#if allowWrites}<details><summary>Edit policy and rules (JSON)</summary><p>Observation mode is enforced when saving.</p><textarea aria-label="Firewall policy JSON" bind:value={policyText} rows="12"></textarea><button disabled={busy} onclick={savePolicy}>Save policy</button></details>{/if}
+    {#if allowWrites}<details><summary>Edit policy and rules (JSON)</summary><p>Set observe_only to false to enforce bans when the helper is authorized.</p><textarea aria-label="Firewall policy JSON" bind:value={policyText} rows="12"></textarea><button disabled={busy} onclick={savePolicy}>Save policy</button></details>{/if}
   </section>
   <section class="panel"><h2>Security tuning</h2><dl class="shared-stats">{#each Object.entries(status.tuning) as [key, value]}<div><dt>{key.replaceAll('_', ' ')}</dt><dd>{value}</dd></div>{/each}</dl></section>
 {/if}

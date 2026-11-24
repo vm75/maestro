@@ -7,7 +7,7 @@
   type MachineStatus = {id: string; ip?: string; status: string}
   type AdGuard = {enabled: boolean; api_endpoint: string; launch_url: string; username: string; lan_ip: string}
   type AdStatus = {enabled: boolean; protection_enabled: boolean; filtering_enabled: boolean; protection_remaining_seconds?: number; filtering_remaining_seconds?: number}
-  type WireGuard = {interface: string; is_running: boolean; writable: boolean; reason: string}
+  type WireGuard = {interface: string; is_running: boolean; writable: boolean; peers_writable: boolean; reason: string}
   type Rewrite = {domain: string; answer: string}
   const tabs = [{id: 'wol', label: 'Wake-on-LAN'}, {id: 'adguard', label: 'AdGuard Home'}, {id: 'wireguard', label: 'WireGuard'}]
   const availableTabs = $derived(tabs.filter(t => discovery.modules.some(m => m.id === t.id && m.availability !== 'unsupported')))
@@ -22,7 +22,26 @@
   let rewrites = $state<Rewrite[]>([])
   let rewriteDomain = $state('')
   let rewriteAnswer = $state('')
+  type Peer = {public_key: string; allowed_ips: string; endpoint: string | null; persistent_keepalive: number | null}
+  type PeerConfig = {revision: string; peers: Peer[]; address: string; listen_port: number | null; is_running: boolean}
   let wg = $state<WireGuard | null>(null)
+  let peerConfig = $state<PeerConfig | null>(null)
+  const emptyPeer = (): Peer => ({public_key: '', allowed_ips: '', endpoint: null, persistent_keepalive: null})
+  let peer = $state<Peer>(emptyPeer())
+  let editingPeer = $state('')
+  let endpoint = $state('')
+  let keepalive = $state<number | undefined>(undefined)
+  function editPeer(value: Peer) { editingPeer = value.public_key; peer = {...value}; endpoint = value.endpoint || ''; keepalive = value.persistent_keepalive ?? undefined }
+  function resetPeer() { editingPeer = ''; peer = emptyPeer(); endpoint = ''; keepalive = undefined }
+  async function savePeers(peers: Peer[]) {
+    if (!peerConfig || wg?.is_running) return
+    if (await mutate('wireguard/peers', 'PUT', {revision: peerConfig.revision, peers})) resetPeer()
+  }
+  async function savePeer() {
+    if (!peerConfig) return
+    const next = {...peer, endpoint: endpoint.trim() || null, persistent_keepalive: keepalive ?? null}
+    await savePeers(editingPeer ? peerConfig.peers.map(p => p.public_key === editingPeer ? next : p) : [...peerConfig.peers, next])
+  }
   let errors = $state<Record<string,string>>({})
   let busy = $state(false)
   let loading = $state(false)
@@ -46,7 +65,11 @@
         read<AdStatus>('Status', 'adguard/status', v => adStatus = v),
         read<Rewrite[]>('DNS rewrites', 'adguard/rewrites', v => rewrites = v)
       ])
-    } else await read<WireGuard>('WireGuard', 'wireguard/status', v => wg = v)
+    } else {
+      peerConfig = null
+      await read<WireGuard>('WireGuard', 'wireguard/status', v => wg = v)
+      if (wg?.peers_writable && !active.signal.aborted) await read<PeerConfig>('Peers', 'wireguard/peers', v => peerConfig = v)
+    }
     if (!active.signal.aborted) loading = false
   }
   async function mutate(path: string, method: string, body?: unknown, timeout = 60_000): Promise<boolean> {
@@ -127,12 +150,36 @@
     {#if allowWrites}<form onsubmit={e => { e.preventDefault(); void addRewrite() }}><label>Domain <input bind:value={rewriteDomain} required /></label><label>Answer <input bind:value={rewriteAnswer} required /></label><button disabled={busy}>Add rewrite</button></form>{/if}
   </section>{/if}
 {:else}
-  <section class="panel"><h2>WireGuard</h2><p>Manage the native wg-quick@wg0.service using the optional restricted admin helper. Configure peers and keys in the root-owned /etc/wireguard/wg0.conf outside Maestro.</p>
+  <section class="panel"><h2>WireGuard</h2><p>Manage the native wg-quick@wg0.service using the optional restricted admin helper. Peer editing requires the separate wireguard_peers grant. Interface private keys, hooks and addresses remain administrator-owned.</p>
     {#if wg}<p><strong>{wg.interface}</strong> · {wg.is_running ? 'Present' : 'Not present'}</p><p class="muted">{wg.reason}</p>
       <button disabled={!allowWrites || busy || !wg.writable || wg.is_running} onclick={() => mutate('wireguard/toggle', 'POST', {enable: true}, 1_600_000)}>Start</button>
       <button disabled={!allowWrites || busy || !wg.writable || !wg.is_running} onclick={() => { if (confirm('Stop WireGuard? This may disconnect remote clients.')) void mutate('wireguard/toggle', 'POST', {enable: false}, 1_600_000) }}>Stop</button>
     {:else if !loading}<p class="muted">Status unavailable.</p>{/if}
   </section>
+  {#if peerConfig}
+    <section class="panel"><h2>WireGuard peers</h2>
+      <p>Interface address: {peerConfig.address || '—'} · Listen port: {peerConfig.listen_port ?? '—'}</p>
+      <p class="policy-note">Stop the interface before editing peers, then start it again so wg-quick applies routes. Existing preshared keys are retained when the public key is unchanged. Private keys are never returned.</p>
+      <div class="shared-table"><table><thead><tr><th>Public key</th><th>Allowed IPs</th><th>Endpoint</th><th>Keepalive</th><th>Actions</th></tr></thead><tbody>
+        {#each peerConfig.peers as item (item.public_key)}
+          <tr><td class="mono">{item.public_key}</td><td>{item.allowed_ips}</td><td>{item.endpoint || '—'}</td><td>{item.persistent_keepalive ?? '—'}</td><td>
+            <button disabled={!allowWrites || busy || wg?.is_running || peerConfig.is_running} onclick={() => editPeer(item)}>Edit</button>
+            <button disabled={!allowWrites || busy || wg?.is_running || peerConfig.is_running} onclick={() => { if (peerConfig && confirm('Remove this WireGuard peer?')) void savePeers(peerConfig.peers.filter(p => p.public_key !== item.public_key)) }}>Remove</button>
+          </td></tr>
+        {/each}
+      </tbody></table></div>
+      {#if allowWrites}<form onsubmit={event => { event.preventDefault(); void savePeer() }}>
+        <fieldset disabled={busy || wg?.is_running || peerConfig.is_running}>
+          <h3>{editingPeer ? 'Edit peer' : 'Add peer'}</h3>
+          <label>Public key <input bind:value={peer.public_key} required disabled={!!editingPeer} /></label>
+          <label>Allowed IP networks (comma separated) <input bind:value={peer.allowed_ips} required /></label>
+          <label>Endpoint (optional) <input bind:value={endpoint} placeholder="vpn.example.net:51820" /></label>
+          <label>Persistent keepalive (seconds) <input type="number" min="0" max="65535" bind:value={keepalive} /></label>
+          <button>Save peer</button><button type="button" onclick={resetPeer}>Reset</button>
+        </fieldset>
+      </form>{/if}
+    </section>
+  {:else if wg && !wg.peers_writable}<p class="policy-note">To enable peer management, authorize wireguard_peers in the root-owned helper policy.</p>{/if}
 {/if}
 
 <style>

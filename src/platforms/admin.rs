@@ -16,6 +16,8 @@ use std::{
 use super::{admin_packages, admin_shares};
 #[path = "admin_reference.rs"]
 mod reference;
+#[path = "admin_network.rs"]
+mod network;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -44,6 +46,10 @@ struct Policy {
     samba_password: bool,
     #[serde(default)]
     share_writes: bool,
+    #[serde(default)]
+    ban_shield: bool,
+    #[serde(default)]
+    wireguard_peers: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -56,6 +62,8 @@ pub struct Probe {
     pub package_writes: bool,
     pub samba_password: bool,
     pub share_writes: bool,
+    pub ban_shield: bool,
+    pub wireguard_peers: bool,
 }
 
 impl Probe {
@@ -73,6 +81,8 @@ impl Probe {
             package_writes,
             samba_password,
             share_writes,
+            ban_shield: false,
+            wireguard_peers: false,
         }
     }
 
@@ -85,6 +95,8 @@ impl Probe {
             package_writes: false,
             samba_password: false,
             share_writes: false,
+            ban_shield: false,
+            wireguard_peers: false,
         }
     }
 
@@ -182,7 +194,7 @@ fn helper_installation() -> Probe {
     Probe::ready(vec![], false, false, false)
 }
 
-/// All calls use the reference envelope, with no private wire operation.
+/// All calls use the existing bounded helper envelope.
 async fn call(
     operation: &str,
     arguments: serde_json::Value,
@@ -248,6 +260,18 @@ fn checked(response: reference::Response) -> Result<reference::Response> {
     Ok(response)
 }
 
+pub async fn network_operation(operation: &str, arguments: serde_json::Value) -> Result<serde_json::Value> {
+    ensure!(
+        matches!(operation, "ban_shield_apply" | "wireguard_peers_read" | "wireguard_peers_write"),
+        "invalid network operation"
+    );
+    checked(call(operation, arguments, Duration::from_secs(20)).await?)?
+        .result
+        .context("missing network operation result")
+}
+
+pub use network::HelperBanBackend;
+
 fn safe_system_unit(unit: &str) -> bool {
     crate::platforms::systemd::valid_unit(unit)
         && unit != "maestro.service"
@@ -295,12 +319,17 @@ pub async fn probe() -> Probe {
             "Review noninteractive sudo authorization for the exact helper command.",
         );
     }
-    Probe::ready(
+    let mut result = Probe::ready(
         policy.system_units,
         policy.package_writes,
         policy.samba_password,
         policy.share_writes,
-    )
+    );
+    result.ban_shield = policy.ban_shield && reference::program("nft").is_some();
+    result.wireguard_peers = policy.wireguard_peers
+        && reference::program("wg").is_some()
+        && reference::program("wg-quick").is_some();
+    result
 }
 
 pub async fn system_service(unit: &str, action: &str) -> Result<String> {

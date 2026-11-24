@@ -176,6 +176,8 @@ shared_write -X PUT -d '{"name":"Updated","mac":"02:00:00:00:00:01","port":9}' "
 shared_get wol | python3 -c 'import json,sys; assert json.load(sys.stdin)[0]["name"]=="Updated"'
 shared_write -X DELETE "$api/api/shared/wol/$id" >/dev/null
 shared_get wol | python3 -c 'import json,sys; assert json.load(sys.stdin)==[]'
+shared_get firewall/capability | python3 -c 'import json,sys; x=json.load(sys.stdin); assert not x["enforcement"], x'
+[[ $(shared_code -b "$lab/cookies" "$api/api/shared/wireguard/peers") == 400 ]]
 shared_get adguard/config | python3 -c 'import json,sys; x=json.load(sys.stdin); assert not x["enabled"] and "password" not in x'
 shared_write -X PUT -d '{"enabled":false,"api_endpoint":"http://127.0.0.1:3000","username":"test","password":"not-a-real-password","lan_ip":"127.0.0.1"}' "$api/api/shared/adguard/config" >/dev/null
 shared_get adguard/config | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["username"]=="test" and "password" not in x'

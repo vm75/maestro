@@ -180,6 +180,15 @@ impl FirewallManager {
     pub async fn replace_policy(&self, candidate: FirewallPolicy) -> Result<()> {
         let _update = self.policy_update.lock().await;
         validate_policy(&candidate)?;
+        #[cfg(feature = "linux")]
+        if self.config.platform == crate::config::Platform::Linux
+            && candidate.enabled
+            && !candidate.observe_only
+        {
+            anyhow::ensure!(crate::platforms::admin::probe().await.ban_shield,
+                "Ban Shield enforcement requires nftables and the root-owned ban_shield grant");
+            anyhow::ensure!(!candidate.rules.is_empty(), "Enforcement requires at least one detection rule");
+        }
         let candidate_config = self.build_ban_attack_config(&candidate)?;
         if !candidate_config.files.is_empty() {
             crate::ban_attack::validate_config(candidate_config)?;
@@ -198,6 +207,30 @@ impl FirewallManager {
     pub async fn update_policy(&self, policy: &FirewallPolicy) -> Result<()> {
         let ban_config = self.build_ban_attack_config(policy)?;
         let mut inner = self.inner.write().await;
+        // Mode changes replace the backend, not just the compiled rule set.
+        // Disable the old table before switching to observation; flush before
+        // starting the replacement so persisted bans carry across modes.
+        if self.config.platform == crate::config::Platform::Linux {
+            let previous = self.stores.firewall_policy.read().await.clone();
+            if previous.observe_only != policy.observe_only && policy.enabled && !ban_config.files.is_empty() {
+                if let Some(engine) = inner.as_ref() {
+                    engine.handle().flush()?;
+                    engine.handle().disable()?;
+                }
+                *inner = None;
+                match self.start_engine(ban_config) {
+                    Ok(engine) => { *inner = Some(engine); return Ok(()); }
+                    Err(error) => {
+                        if previous.enabled {
+                            if let Ok(config) = self.build_ban_attack_config(&previous) {
+                                if !config.files.is_empty() { *inner = self.start_engine(config).ok(); }
+                            }
+                        }
+                        return Err(error.into());
+                    }
+                }
+            }
+        }
         if let Some(ref mut engine) = *inner {
             if !policy.enabled || ban_config.files.is_empty() {
                 engine.handle().disable()?;
@@ -214,6 +247,16 @@ impl FirewallManager {
         } else if policy.enabled && !ban_config.files.is_empty() {
             let engine = self.start_engine(ban_config)?;
             *inner = Some(engine);
+        } else {
+            #[cfg(feature = "linux")]
+            if self.config.platform == crate::config::Platform::Linux {
+                let previous = self.stores.firewall_policy.read().await;
+                if previous.enabled && !previous.observe_only {
+                    crate::platforms::admin::network_operation(
+                        "ban_shield_apply", serde_json::json!({"enabled":false,"active":[],"exceptions":[]}),
+                    ).await?;
+                }
+            }
         }
         Ok(())
     }
@@ -322,24 +365,25 @@ impl FirewallManager {
 
     fn start_engine(&self, config: BanAttackConfig) -> Result<BanEngine, crate::ban_attack::Error> {
         if self.config.platform == crate::config::Platform::Linux {
-            // The non-root Linux service never owns host netfilter hooks. Even
-            // CommandIpSet's observe mode removes its old hooks on reconcile.
-            BanEngine::start_with_backend(
+            if config.firewall.observe_only {
+                return BanEngine::start_with_backend(
+                    config,
+                    Arc::new(crate::ban_attack::MemoryBanBackend::default()),
+                );
+            }
+            #[cfg(feature = "linux")]
+            return BanEngine::start_with_backend(
                 config,
-                Arc::new(crate::ban_attack::MemoryBanBackend::default()),
-            )
+                Arc::new(crate::platforms::admin::HelperBanBackend::default()),
+            );
+            #[cfg(not(feature = "linux"))]
+            return Err(crate::ban_attack::Error::Config("Linux helper unavailable".into()));
         } else {
             BanEngine::start(config)
         }
     }
 
     fn build_ban_attack_config(&self, policy: &FirewallPolicy) -> Result<BanAttackConfig> {
-        if self.config.platform == crate::config::Platform::Linux
-            && policy.enabled
-            && !policy.observe_only
-        {
-            bail!("Linux Ban Shield requires observe_only; host enforcement is unavailable");
-        }
         let tuning = self.effective_tuning(policy);
         let mut file_map: BTreeMap<PathBuf, Vec<BanRuleConfig>> = BTreeMap::new();
 
