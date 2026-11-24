@@ -254,7 +254,11 @@ class LinuxDevTest(unittest.TestCase):
         self.assertEqual(hook.read_text(), "bundled hook\n")
         config = state / "maestro.yaml"
         original_config = config.read_bytes()
-        self.assertEqual(json.loads(original_config)["commands"]["dehydrated"], str(self.bin / "dehydrated"))
+        self.assertIn(b"version: 1", original_config)
+        self.assertIn(b"allow_writes: true", original_config)
+        self.assertIn(b"privileged_operations: false", original_config)
+        self.assertEqual((state / "token").read_text().strip(), "test-token-" + "a" * 40)
+        self.assertEqual((state / "token").stat().st_mode & 0o777, 0o600)
         self.assertEqual(state.stat().st_mode & 0o777, 0o700)
         self.assertTrue((state / "init.d/S80nginx").exists())
         hook.write_text("operator hook\n")

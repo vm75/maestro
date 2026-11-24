@@ -24,7 +24,7 @@ api_port=3030
 nginx_port=8080
 nginx_tls_port=8443
 umask 077
-mkdir -p "$lab"/{state,run,logs/nginx,nginx/conf.d,nginx/domains-available,nginx/domains-enabled,nginx/snippets,init.d,wireguard,certs}
+mkdir -p "$lab"/{run,logs/nginx,nginx/conf.d,nginx/domains-available,nginx/domains-enabled,nginx/snippets,init.d,wireguard,certs}
 mkdir -p "$lab/tmp" "$lab/nginx/logs"
 
 nginx_bin=$(command -v nginx)
@@ -41,14 +41,14 @@ fi
 if [[ ! -e "$lab/certs/dehydrated-dns01-hook.sh" && -f "$repo_root/scripts/dehydrated-dns01-hook.sh" ]]; then
     install -m 0755 "$repo_root/scripts/dehydrated-dns01-hook.sh" "$lab/certs/dehydrated-dns01-hook.sh"
 fi
-if [[ ! -e "$lab/state/firewall-policy.json" && ! -L "$lab/state/firewall-policy.json" ]]; then
-    printf '%s\n' '{"enabled":false,"observe_only":false,"rules":[],"allowlist":[]}' > "$lab/state/firewall-policy.json"
+if [[ ! -e "$lab/firewall-policy.json" && ! -L "$lab/firewall-policy.json" ]]; then
+    printf '%s\n' '{"enabled":false,"observe_only":false,"rules":[],"allowlist":[]}' > "$lab/firewall-policy.json"
 fi
 
 if [[ ! -e "$lab/nginx/nginx.conf" && ! -L "$lab/nginx/nginx.conf" ]]; then
     python3 "$repo_root/scripts/render-nginx-config.py" \
         "$repo_root/config/nginx" "$lab/nginx" \
-        --inputs-dir "$lab/maestro/nginx" \
+        --inputs-dir "$lab/nginx-inputs" \
         --var-dir "$lab/var" --pid-path "$lab/run/nginx.pid" \
         --error-log-path "$lab/var/log/nginx/error.log" \
         --acme-directory "$lab/certs/acme-challenge" \
@@ -71,82 +71,18 @@ fi
 
 if [[ ! -e "$lab/maestro.yaml" && ! -L "$lab/maestro.yaml" ]]; then
     token=$(openssl rand -hex 24)
-cat > "$lab/maestro.yaml" <<EOF
-{
-  "platform": "linux",
-  "test_mode": false,
-  "server": {
-    "bind": "127.0.0.1",
-    "port": $api_port,
-    "auth_token": "$token",
-    "allowed_origins": [
-      "http://127.0.0.1:$api_port"
-    ],
-    "daemonize": false
-  },
-  "paths": {
-    "data_dir": "$lab/state",
-    "runtime_dir": "$lab/run",
-    "log_file": "$lab/logs/maestro.log",
-    "hosts_add": "$lab/hosts.add",
-    "dnsmasq_conf_add": "$lab/dnsmasq.conf.add",
-    "wireguard_conf": "$lab/wireguard/wglab.conf",
-    "proc_stat": "/proc/stat",
-    "proc_meminfo": "/proc/meminfo",
-    "proc_net_dev": "/proc/net/dev",
-    "proc_uptime": "/proc/uptime",
-    "proc_loadavg": "/proc/loadavg"
-  },
-  "commands": {
-    "nginx": "$nginx_bin",
-    "dehydrated": "$dehydrated_bin",
-    "openssl": "$(command -v openssl)",
-    "ip": "$(command -v ip || printf /usr/sbin/ip)",
-    "ping": "$(command -v ping || printf /bin/ping)"
-  },
-  "asus_ui": {
-    "enabled": false,
-    "rendered_page": "$lab/maestro.asp"
-  },
-  "services": {
-    "init_dir": "$repo_root/data/linux/init.d",
-    "log_dirs": [
-      "$lab/logs"
-    ]
-  },
-  "nginx": {
-    "inputs_dir": "$lab/maestro/nginx",
-    "root_dir": "$lab/nginx",
-    "config_path": "$lab/nginx/nginx.conf",
-    "prefix_path": "$lab/nginx",
-    "pid_path": "$lab/run/nginx.pid",
-    "domains_available_dir": "$lab/nginx/domains-available",
-    "domains_enabled_dir": "$lab/nginx/domains-enabled",
-    "domain_upstream_map_path": "$lab/nginx/conf.d/02_domain_upstream_map.conf",
-    "subdomain_upstream_map_path": "$lab/nginx/conf.d/03_subdomain_upstream_map.conf",
-    "subfolder_upstream_map_path": "$lab/nginx/conf.d/04_subfolder_upstream_map.conf",
-    "http_forwarder_path": "$lab/nginx/conf.d/05-http-to-https.conf",
-    "log_dir": "$lab/var/log/nginx"
-  },
-  "certificates": {
-    "certs_dir": "$lab/certs",
-    "dns01_hook": "$lab/certs/dehydrated-dns01-hook.sh"
-  },
-  "firewall": {
-    "log_dirs": [
-      "$lab/var/log/nginx"
-    ]
-  },
-  "adguard": {
-    "enabled": false,
-    "lan_ip": "127.0.0.1"
-  },
-  "system": {
-    "wan_interface": "lo"
-  }
-}
-
+    printf '%s\n' "$token" > "$lab/token"
+    chmod 0600 "$lab/token"
+    cat > "$lab/maestro.yaml" <<EOF
+version: 1
+server:
+  listen: "127.0.0.1:$api_port"
+  token_file: "$lab/token"
+  state_dir: "$lab"
+  allow_writes: true
+  privileged_operations: false
 EOF
+    chmod 0600 "$lab/maestro.yaml"
 
 fi
 
@@ -158,7 +94,8 @@ for name in S80nginx S99maestro; do
 done
 
 printf 'Linux development environment ready: %s\n' "$lab"
-printf 'Auth token is stored in %s/maestro.yaml\n' "$lab"
+printf 'Unified Linux config: %s/maestro.yaml\n' "$lab"
+printf 'API token is stored in the private file %s/token\n' "$lab"
 printf 'Start from the repository root:\n  make run-linux\n'
 echo 'New configs use http://127.0.0.1:3030 and nginx port 8080. Existing files are preserved.'
 echo 'Optional feature tools: ip, ping, wg, wg-quick, dehydrated, ipset, iptables, ip6tables.'

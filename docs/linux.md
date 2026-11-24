@@ -24,13 +24,15 @@ To prepare a persistent local setup, run:
 cargo run --bin maestro --no-default-features --features linux -- --config data/linux/maestro.yaml --linux-mode serve
 ```
 
-The setup script checks for required tools and creates `data/linux/maestro.yaml`,
-`data/linux/nginx/nginx.conf`, and isolated state, log, and runtime directories.
-It preserves existing files on subsequent runs. New configs bind the API to
-`127.0.0.1:3030`, use nginx port `8080`, generate a random API token in the YAML
-file, and disable firewall enforcement and AdGuard integration. Nginx uses local
-temporary directories so it can run without root. Start nginx through the UI;
-the setup script does not start services or install packages.
+The setup script checks for required tools and creates a unified Linux
+`version: 1` configuration at `data/linux/maestro.yaml`, a private bearer token
+at `data/linux/token`, `data/linux/nginx/nginx.conf`, and isolated state, log,
+and runtime directories. It preserves existing files on subsequent runs. New
+configs bind the API to `127.0.0.1:3030`, allow workload-owned writes, leave
+privileged operations disabled until explicitly configured, use nginx port
+`8080`, and disable firewall enforcement and AdGuard integration. Nginx uses
+local temporary directories so it can run without root. Start nginx through the
+UI; the setup script does not start services or install packages.
 
 For development with the Svelte UI on Arch or Debian 12+ and compatible
 derivatives, use `make init-linux` once, then `make run-linux`, as your non-root

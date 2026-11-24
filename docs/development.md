@@ -27,7 +27,7 @@ Use `make help` to list the three development environments:
 | Environment | First-time setup | Start | Browser access |
 | --- | --- | --- | --- |
 | Simulated router | None beyond Rust | `make run-simulated` | <http://127.0.0.1:3030>, token `maestro-test-token` |
-| Native Linux | `make init-linux` | `make run-linux` | <http://127.0.0.1:3030>, token from `data/linux/maestro.yaml` |
+| Native Linux | `make init-linux` | `make run-linux` | <http://127.0.0.1:3030>, token from `data/linux/token` |
 | QEMU router | `make init-router` | `make run-router` | <http://127.0.0.1:8080/user20.asp>; see the [guest guide](../lab/aarch64/README.md) for credentials |
 
 Run one environment at a time: they share API port 3030, and Linux nginx uses
