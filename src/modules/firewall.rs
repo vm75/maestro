@@ -56,7 +56,7 @@ impl FirewallManager {
                 tracing::debug!("firewall policy enabled but no log files configured");
                 return;
             }
-            match BanEngine::start(ban_config) {
+            match self.start_engine(ban_config) {
                 Ok(engine) => {
                     *inner = Some(engine);
                 }
@@ -204,7 +204,7 @@ impl FirewallManager {
                 *inner = None;
             } else if let Err(update_error) = engine.handle().update_config(ban_config.clone()) {
                 engine.handle().flush()?;
-                let new_engine = BanEngine::start(ban_config).map_err(|restart_error| {
+                let new_engine = self.start_engine(ban_config).map_err(|restart_error| {
                     anyhow::anyhow!(
                         "live policy update failed ({update_error}); replacement engine failed ({restart_error})"
                     )
@@ -212,7 +212,7 @@ impl FirewallManager {
                 *inner = Some(new_engine);
             }
         } else if policy.enabled && !ban_config.files.is_empty() {
-            let engine = BanEngine::start(ban_config)?;
+            let engine = self.start_engine(ban_config)?;
             *inner = Some(engine);
         }
         Ok(())
@@ -320,7 +320,26 @@ impl FirewallManager {
         })
     }
 
+    fn start_engine(&self, config: BanAttackConfig) -> Result<BanEngine, crate::ban_attack::Error> {
+        if self.config.platform == crate::config::Platform::Linux {
+            // The non-root Linux service never owns host netfilter hooks. Even
+            // CommandIpSet's observe mode removes its old hooks on reconcile.
+            BanEngine::start_with_backend(
+                config,
+                Arc::new(crate::ban_attack::MemoryBanBackend::default()),
+            )
+        } else {
+            BanEngine::start(config)
+        }
+    }
+
     fn build_ban_attack_config(&self, policy: &FirewallPolicy) -> Result<BanAttackConfig> {
+        if self.config.platform == crate::config::Platform::Linux
+            && policy.enabled
+            && !policy.observe_only
+        {
+            bail!("Linux Ban Shield requires observe_only; host enforcement is unavailable");
+        }
         let tuning = self.effective_tuning(policy);
         let mut file_map: BTreeMap<PathBuf, Vec<BanRuleConfig>> = BTreeMap::new();
 

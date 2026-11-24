@@ -77,6 +77,7 @@
   let siteUpstream = $state('')
   let editingSite = $state<Site | null>(null)
   let siteSettings = $state('{}')
+  let siteServerNames = $state('')
   let siteContent = $state('')
   let customSite = $state(false)
   let certificateId = $state('')
@@ -101,17 +102,17 @@
     if (busy) return
     actionError = ''; busy = true
     try {
-      const detail = await request<{settings: unknown; content: string; upstream?: string}>('/api/shared/' + objectPath(site))
+      const detail = await request<{settings: unknown; content: string; upstream?: string; server_names: string[]}>('/api/shared/' + objectPath(site))
       editingSite = site; siteKind = site.kind; siteDomain = site.domain; siteName = site.name
       siteUpstream = detail.upstream || ''; customSite = !site.managed
-      siteSettings = JSON.stringify(detail.settings || {}, null, 2); siteContent = detail.content
+      siteSettings = JSON.stringify(detail.settings || {}, null, 2); siteContent = detail.content; siteServerNames = detail.server_names.join(' ')
     } catch (failure) { actionError = String(failure) }
     finally { busy = false }
   }
-  function resetSite() { editingSite = null; siteDomain = ''; siteName = ''; siteUpstream = ''; siteSettings = '{}'; siteContent = ''; customSite = false }
+  function resetSite() { editingSite = null; siteDomain = ''; siteName = ''; siteUpstream = ''; siteSettings = '{}'; siteContent = ''; siteServerNames = ''; customSite = false }
   async function saveSite() {
     try {
-      const body = { ...(customSite ? {content: siteContent} : {settings: JSON.parse(siteSettings)}), upstream: siteUpstream }
+      const body = { ...(customSite ? {content: siteContent} : {settings: JSON.parse(siteSettings)}), upstream: siteUpstream, ...(siteServerNames.trim() ? {server_names: siteServerNames.trim().split(/\s+/)} : {}) }
       if (editingSite) await mutate(objectPath(editingSite), 'PUT', body)
       else await mutate('nginx/objects/' + siteKind, 'POST', {...body, domain: siteDomain, name: siteKind === 'domain' ? siteDomain : siteName, enabled: false})
       if (!actionError) resetSite()
@@ -176,6 +177,7 @@
             <label>Domain <input bind:value={siteDomain} required disabled={!!editingSite} /></label>
             {#if siteKind !== 'domain'}<label>Name <input bind:value={siteName} required disabled={!!editingSite} /></label>{/if}
             <label>Upstream <input bind:value={siteUpstream} placeholder="http://127.0.0.1:8080" /></label>
+            <label>Server names (optional, space separated) <input bind:value={siteServerNames} /></label>
             <label><input type="checkbox" bind:checked={customSite} disabled={!!editingSite} /> Custom Nginx configuration</label>
             {#if customSite}<label>Configuration <textarea bind:value={siteContent} rows="8" required></textarea></label>
             {:else}<label>Managed settings (JSON) <textarea bind:value={siteSettings} rows="6" required></textarea></label>{/if}
@@ -197,7 +199,7 @@
   {/if}
 {:else}
   {#if !hasCertificates}<section class="panel"><h2>Certificates unavailable</h2></section>{:else}
-    <section class="panel"><h2>HTTP certificate access</h2>
+    <section class="panel"><h2>HTTP certificate access</h2><button disabled={!allowWrites || busy || !httpAccess} onclick={() => { if (confirm('Close the managed HTTP validation window?')) void mutate('certificates/http-access', 'DELETE') }}>Close validation window</button>
       {#if httpAccess}<dl class="shared-stats"><div><dt>State</dt><dd>{httpAccess.state}</dd></div><div><dt>WAN control</dt><dd>{httpAccess.wan_control}</dd></div><div><dt>Names</dt><dd>{httpAccess.names.join(', ') || '—'}</dd></div><div><dt>Expires</dt><dd>{httpAccess.expires_at ? new Date(httpAccess.expires_at).toLocaleString() : '—'}</dd></div></dl>{:else}<p class="muted">No validation status available.</p>{/if}
     </section>
     <section class="panel"><h2>Dehydrated</h2><p>{lock ? (lock.locked ? 'Locked' : 'Unlocked') + ' · ' + lock.status : 'Status unavailable'}</p>

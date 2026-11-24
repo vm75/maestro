@@ -151,6 +151,38 @@ python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["tools"] and x["mo
 get /api/system/usage | python3 -c 'import json,sys; x=json.load(sys.stdin); assert "cpu" in x and "memory" in x, x'
 get /api/firewall | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["policy"]["enabled"] is False, x'
 
+# Test session-backed shared routes without sending WOL packets or touching host firewall.
+shared_code() {
+    curl --silent --output /dev/null --write-out '%{http_code}' "$@"
+}
+[[ $(shared_code "$api/api/shared/wol") == 401 ]]
+curl --silent --show-error --fail-with-body -c "$lab/cookies" \
+    -H "Origin: $api" -H 'Content-Type: application/json' \
+    -d "{\"token\":\"$token\"}" "$api/api/session" >/dev/null
+shared_get() {
+    curl --silent --show-error --fail-with-body -b "$lab/cookies" "$api/api/shared/$1"
+}
+shared_write() {
+    curl --silent --show-error --fail-with-body -b "$lab/cookies" \
+        -H "Origin: $api" -H 'Content-Type: application/json' "$@"
+}
+shared_get modules | python3 -c 'import json,sys; x=json.load(sys.stdin); assert {m["id"] for m in x["modules"]} >= {"nginx","certificates","ban_shield","wol","adguard","wireguard"}, x'
+machine='{"name":"Test machine","mac":"02:00:00:00:00:01","broadcast":"192.0.2.255","port":9}'
+[[ $(shared_code -b "$lab/cookies" -H 'Content-Type: application/json' -d "$machine" "$api/api/shared/wol") == 403 ]]
+[[ $(shared_code -b "$lab/cookies" -H 'Origin: https://invalid.example' -H 'Content-Type: application/json' -d "$machine" "$api/api/shared/wol") == 403 ]]
+id=$(shared_write -d "$machine" "$api/api/shared/wol" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+shared_get wol | python3 -c 'import json,sys; x=json.load(sys.stdin); assert len(x)==1 and x[0]["name"]=="Test machine", x'
+shared_write -X PUT -d '{"name":"Updated","mac":"02:00:00:00:00:01","port":9}' "$api/api/shared/wol/$id" >/dev/null
+shared_get wol | python3 -c 'import json,sys; assert json.load(sys.stdin)[0]["name"]=="Updated"'
+shared_write -X DELETE "$api/api/shared/wol/$id" >/dev/null
+shared_get wol | python3 -c 'import json,sys; assert json.load(sys.stdin)==[]'
+shared_get adguard/config | python3 -c 'import json,sys; x=json.load(sys.stdin); assert not x["enabled"] and "password" not in x'
+shared_write -X PUT -d '{"enabled":false,"api_endpoint":"http://127.0.0.1:3000","username":"test","password":"not-a-real-password","lan_ip":"127.0.0.1"}' "$api/api/shared/adguard/config" >/dev/null
+shared_get adguard/config | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["username"]=="test" and "password" not in x'
+[[ $(shared_code -b "$lab/cookies" -H "Origin: $api" -H 'Content-Type: application/json' -X PUT -d '{"enabled":true,"observe_only":false}' "$api/api/shared/firewall") == 400 ]]
+[[ $(shared_code -b "$lab/cookies" -H "Origin: $api" -H 'Content-Type: application/json' -d '{"name":"bad","domains":["example.test"],"method":"dns","staging":true,"auto_renew":false,"hook":"/tmp/invalid"}' "$api/api/shared/certificates") == 422 ]]
+shared_write -X POST "$api/api/shared/nginx/test" | real_result
+
 post /api/nginx/test | real_result
 post /api/nginx/start | real_result
 get /api/nginx/status | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["running"] is True, x'

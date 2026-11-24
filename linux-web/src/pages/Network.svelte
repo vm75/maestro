@@ -20,7 +20,8 @@
   let adStatus = $state<AdStatus | null>(null)
   let password = $state('')
   let rewrites = $state<Rewrite[]>([])
-  let rewriteText = $state('')
+  let rewriteDomain = $state('')
+  let rewriteAnswer = $state('')
   let wg = $state<WireGuard | null>(null)
   let errors = $state<Record<string,string>>({})
   let busy = $state(false)
@@ -39,11 +40,11 @@
       read<MachineStatus[]>('Reachability', 'wol/status', v => machineStatus = v)
     ])
     else if (section === 'adguard') {
-      adStatus = null; rewrites = []; rewriteText = ''
+      adStatus = null; rewrites = []
       await read<AdGuard>('Configuration', 'adguard/config', v => ad = v)
       if (ad?.enabled && !active.signal.aborted) await Promise.all([
         read<AdStatus>('Status', 'adguard/status', v => adStatus = v),
-        read<Rewrite[]>('DNS rewrites', 'adguard/rewrites', v => { rewrites = v; rewriteText = JSON.stringify(v, null, 2) })
+        read<Rewrite[]>('DNS rewrites', 'adguard/rewrites', v => rewrites = v)
       ])
     } else await read<WireGuard>('WireGuard', 'wireguard/status', v => wg = v)
     if (!active.signal.aborted) loading = false
@@ -66,9 +67,10 @@
     try { await mutate('adguard/config', 'PUT', {...ad, ...(password ? {password} : {})}) }
     finally { password = '' }
   }
-  function saveRewrites() {
-    try { const value = JSON.parse(rewriteText); if (!Array.isArray(value)) throw new Error('Expected an array of DNS rewrites'); void mutate('adguard/rewrites', 'PUT', value) }
-    catch (failure) { errors['DNS rewrites'] = String(failure) }
+  async function addRewrite() {
+    if (await mutate('adguard/rewrites', 'PUT', [...rewrites, {domain: rewriteDomain.trim(), answer: rewriteAnswer.trim()}])) {
+      rewriteDomain = ''; rewriteAnswer = ''
+    }
   }
   onMount(() => { section = availableTabs[0]?.id || 'wol'; void refresh(); return () => controller?.abort() })
 </script>
@@ -119,8 +121,10 @@
     <button disabled={!allowWrites || busy} onclick={() => { if (adStatus && (!adStatus.filtering_enabled || confirm('Disable DNS filtering?'))) void mutate('adguard/filtering', 'POST', {enabled: !adStatus.filtering_enabled}) }}>{adStatus.filtering_enabled ? 'Disable filtering' : 'Enable filtering'}</button>
   </section>{/if}
   {#if ad?.enabled && !errors['DNS rewrites'] && !loading}<section class="panel"><h2>DNS rewrites</h2><p>{rewrites.length} editable rewrites. Nginx-managed names are excluded.</p>
-    <textarea aria-label="DNS rewrites JSON" rows="10" bind:value={rewriteText} disabled={!allowWrites || busy}></textarea>
-    <button disabled={!allowWrites || busy} onclick={() => { if (confirm('Replace the editable DNS rewrite list?')) saveRewrites() }}>Save rewrites</button>
+    <div class="shared-table"><table><thead><tr><th>Domain</th><th>Answer</th><th>Action</th></tr></thead><tbody>
+      {#each rewrites as rewrite, index}<tr><td>{rewrite.domain}</td><td>{rewrite.answer}</td><td><button disabled={!allowWrites || busy} onclick={() => { if (confirm('Remove this DNS rewrite?')) void mutate('adguard/rewrites', 'PUT', rewrites.filter((_, i) => i !== index)) }}>Remove</button></td></tr>{/each}
+    </tbody></table></div>
+    {#if allowWrites}<form onsubmit={e => { e.preventDefault(); void addRewrite() }}><label>Domain <input bind:value={rewriteDomain} required /></label><label>Answer <input bind:value={rewriteAnswer} required /></label><button disabled={busy}>Add rewrite</button></form>{/if}
   </section>{/if}
 {:else}
   <section class="panel"><h2>WireGuard</h2><p>Manage the native wg-quick@wg0.service using the optional restricted admin helper. Configure peers and keys in the root-owned /etc/wireguard/wg0.conf outside Maestro.</p>
@@ -139,5 +143,4 @@
   td small { display: block; color: var(--muted); }
   form, fieldset { display: grid; gap: .75rem; }
   fieldset { border: 0; padding: 0; }
-  textarea { width: 100%; }
 </style>

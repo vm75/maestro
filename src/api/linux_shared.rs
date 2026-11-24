@@ -9,15 +9,16 @@ use axum::{
     routing::{delete, get, post},
 };
 use serde::Deserialize;
+use serde_json::{Value, json};
 use uuid::Uuid;
+
 use crate::{
     models::{ApiMessage, CertificateMethod, CertificateSpec, FirewallPolicy},
     platforms::admin,
+    state::AppState,
 };
-use super::{ApiError, adguard, firewall, nginx, wol};
-use serde_json::{Value, json};
 
-use crate::state::AppState;
+use super::{ApiError, adguard, firewall, nginx, wol};
 
 pub(super) fn router(state: AppState) -> Router<AppState> {
     Router::new()
@@ -43,12 +44,16 @@ pub(super) fn router(state: AppState) -> Router<AppState> {
         .route("/shared/nginx/logs", get(super::nginx::list_logs))
         .route("/shared/nginx/logs/{*path}", get(super::nginx::get_log))
         .route("/shared/certificates", get(certificates).post(create_certificate))
-        .route("/shared/certificates/{id}", delete(super::certificates::delete).put(update_certificate))
+        .route(
+            "/shared/certificates/{id}",
+            delete(super::certificates::delete).put(update_certificate),
+        )
         .route("/shared/certificates/{id}/issue", post(issue_certificate))
         .route("/shared/certificates/{id}/renew", post(renew_certificate))
         .route(
             "/shared/certificates/http-access",
-            get(super::certificates::http_access_status).delete(super::certificates::close_http_access),
+            get(super::certificates::http_access_status)
+                .delete(super::certificates::close_http_access),
         )
         .route("/shared/certificates/lock", get(certificate_lock))
         .route("/shared/certificates/lock/clear", post(clear_certificate_lock))
@@ -138,7 +143,11 @@ async fn modules(State(state): State<AppState>) -> Json<crate::core::modules::Di
     let mut discovery = crate::core::modules::discover(&state.config);
     let enabled = adguard::get_effective_config(&state).await.enabled;
     if let Some(module) = discovery.modules.iter_mut().find(|m| m.id == "adguard") {
-        module.availability = if enabled { Availability::Ready } else { Availability::Disabled };
+        module.availability = if enabled {
+            Availability::Ready
+        } else {
+            Availability::Disabled
+        };
     }
     Json(discovery)
 }
@@ -190,8 +199,14 @@ async fn update_certificate(
     Path(id): Path<Uuid>,
     Json(input): Json<CertificateInput>,
 ) -> Result<Json<ApiMessage>, ApiError> {
-    let mut spec = state.stores.certificates.read().await.iter()
-        .find(|spec| spec.id == id).cloned()
+    let mut spec = state
+        .stores
+        .certificates
+        .read()
+        .await
+        .iter()
+        .find(|spec| spec.id == id)
+        .cloned()
         .ok_or_else(|| ApiError::not_found("certificate not found"))?;
     input.apply(&mut spec);
     super::certificates::update(State(state), Path(id), Json(spec)).await?;
@@ -199,18 +214,28 @@ async fn update_certificate(
 }
 
 // Do not return command output: DNS hook diagnostics can contain credentials.
-async fn issue_certificate(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json<ApiMessage>, ApiError> {
-    let result = super::certificates::issue(State(state), Path(id)).await
-        .map_err(|_| ApiError::conflict("Certificate issuance failed; inspect server logs"))?.0;
+async fn issue_certificate(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ApiMessage>, ApiError> {
+    let result = super::certificates::issue(State(state), Path(id))
+        .await
+        .map_err(|_| ApiError::conflict("Certificate issuance failed; inspect server logs"))?
+        .0;
     if !result.success {
         return Err(ApiError::conflict("Certificate issuance failed; inspect server logs"));
     }
     Ok(Json(ApiMessage::new("Certificate issued")))
 }
 
-async fn renew_certificate(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Json<ApiMessage>, ApiError> {
-    let result = super::certificates::renew(State(state), Path(id)).await
-        .map_err(|_| ApiError::conflict("Certificate renewal failed; inspect server logs"))?.0;
+async fn renew_certificate(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ApiMessage>, ApiError> {
+    let result = super::certificates::renew(State(state), Path(id))
+        .await
+        .map_err(|_| ApiError::conflict("Certificate renewal failed; inspect server logs"))?
+        .0;
     if !result.success {
         return Err(ApiError::conflict("Certificate renewal failed; inspect server logs"));
     }
@@ -229,7 +254,10 @@ async fn update_dehydrated(State(state): State<AppState>) -> Result<Json<ApiMess
 
 // The Linux daemon is non-root. Do not pretend that host firewall enforcement
 // is available until a narrowly scoped privileged netfilter adapter exists.
-async fn update_firewall(State(state): State<AppState>, Json(policy): Json<FirewallPolicy>) -> Result<Json<FirewallPolicy>, ApiError> {
+async fn update_firewall(
+    State(state): State<AppState>,
+    Json(policy): Json<FirewallPolicy>,
+) -> Result<Json<FirewallPolicy>, ApiError> {
     if policy.enabled && !policy.observe_only {
         return Err(ApiError::bad_request("Linux Ban Shield currently supports observation only"));
     }
@@ -240,11 +268,14 @@ const WG_UNIT: &str = "wg-quick@wg0.service";
 
 async fn wireguard_status(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let probe = admin::probe().await;
-    let result = state.runner.run(
-        &state.config.commands.ip,
-        ["link", "show", "dev", "wg0"],
-        std::time::Duration::from_secs(5),
-    ).await?;
+    let result = state
+        .runner
+        .run(
+            &state.config.commands.ip,
+            ["link", "show", "dev", "wg0"],
+            std::time::Duration::from_secs(5),
+        )
+        .await?;
     Ok(Json(json!({
         "interface": "wg0",
         "is_running": result.success,
@@ -255,11 +286,41 @@ async fn wireguard_status(State(state): State<AppState>) -> Result<Json<Value>, 
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WireguardToggle { enable: bool }
+struct WireguardToggle {
+    enable: bool,
+}
 
-async fn wireguard_toggle(Json(input): Json<WireguardToggle>) -> Result<Json<ApiMessage>, ApiError> {
+async fn wireguard_toggle(
+    Json(input): Json<WireguardToggle>,
+) -> Result<Json<ApiMessage>, ApiError> {
     // Never pass browser-selected configuration paths or hooks to a root command.
     admin::system_service(WG_UNIT, if input.enable { "start" } else { "stop" })
-        .await.map_err(ApiError::conflict)?;
+        .await
+        .map_err(ApiError::conflict)?;
     Ok(Json(ApiMessage::new("WireGuard service action completed")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn certificate_input_rejects_hook_fields() {
+        let input = json!({
+            "name": "example", "domains": ["example.test"], "method": "dns",
+            "staging": true, "auto_renew": false, "hook_env": {"TOKEN": "secret"},
+        });
+        assert!(serde_json::from_value::<CertificateInput>(input).is_err());
+    }
+
+    #[test]
+    fn wireguard_toggle_rejects_arbitrary_units_and_paths() {
+        assert!(serde_json::from_value::<WireguardToggle>(
+            json!({"enable": true, "unit": "other.service"})
+        ).is_err());
+        assert!(serde_json::from_value::<WireguardToggle>(
+            json!({"enable": true, "config": "/tmp/wg.conf"})
+        ).is_err());
+        assert!(serde_json::from_value::<WireguardToggle>(json!({"enable": true})).is_ok());
+    }
 }

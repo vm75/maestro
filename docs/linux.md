@@ -552,3 +552,9 @@ owned stale containers.
 End-to-end Maestro publication/lifecycle in a real user manager, boot policy,
 metadata-only/runtime fingerprint separation, interrupted recovery and both native
 installer/helper modes remain acceptance requirements.
+
+## Shared modules in the Svelte workspace
+
+Use **Web** for Maestro's private Nginx and certificates, **Ban Shield** for log-driven observation, and **Network** for Wake-on-LAN, AdGuard Home and WireGuard. Initialize the private Nginx tree before managing sites or certificate definitions. For the development lab, `make init-linux` prepares unprivileged ports and installs the certificate tools. Existing DNS hook environment values remain on the host; certificate issue/renew does not return hook diagnostics to the browser.
+
+Linux Ban Shield uses an in-process observation backend, including on reload and shutdown, and rejects active host enforcement. Set detection-rule log paths within the configured private Nginx log directory. AdGuard connection settings are persisted in the private state directory; no router dnsmasq/JFFS files are used by the session UI. For WireGuard, provision `/etc/wireguard/wg0.conf` as root and authorize the exact `wg-quick@wg0.service` unit in the optional root-owned helper policy before enabling start/stop. Peer and private-key configuration remains a host administrator operation. Neither the browser nor the non-root server receives root WireGuard configuration access through this helper.

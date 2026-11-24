@@ -185,6 +185,11 @@ pub async fn update_config(
     State(state): State<AppState>,
     Json(config): Json<WireGuardConfig>,
 ) -> Result<Json<WireGuardConfig>, ApiError> {
+    if state.config.platform == crate::config::Platform::Linux {
+        return Err(ApiError::bad_request(
+            "Linux WireGuard configuration is owned by the host administrator",
+        ));
+    }
     let content = write_wg_conf(&config);
     let path = &state.config.paths.wireguard_conf;
     let iface = path
