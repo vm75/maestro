@@ -886,3 +886,16 @@ source-less raw/qcow2 disks are implemented; image cloning and non-Quadlet
 consumer/share ownership checks remain gated. Native qemu-img operations are
 bounded and never target an existing operator path. Compilation, focused tests
 and native acceptance are pending.
+
+### Rootless Quadlet boot-policy increment
+
+Reference-named enable/disable tools and UI now change only the authoritative
+Quadlet boot flag through the revision-checked next-start journal. Before and
+after loaded default-target membership is verified; enable requires a lingering
+workload account and a local rootless Podman runtime. No systemctl enable,
+start, stop or restart is issued. Runtime inspection recognizes the exact
+alternate boot-policy fingerprint for an otherwise identical definition, so
+already-running containers do not appear stale from a boot-only edit. Exact
+source/loaded ownership and all other fingerprint comparisons remain unchanged.
+Native start/restart also reject static data/dependency blockers. Other native
+boot providers remain gated; compilation and native validation are pending.
