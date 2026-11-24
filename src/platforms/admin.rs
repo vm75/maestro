@@ -14,6 +14,8 @@ use std::{
 };
 
 use super::{admin_packages, admin_shares};
+#[path = "admin_reference.rs"]
+mod reference;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -25,10 +27,10 @@ use tokio::{
 pub const HELPER_PATH: &str = "/usr/local/libexec/maestro-admin";
 const POLICY_PATH: &str = "/etc/maestro/admin-policy.json";
 const SUDO_PATH: &str = "/usr/bin/sudo";
-const SYSTEMCTL_PATH: &str = "/usr/bin/systemctl";
 const PROTOCOL: u32 = 1;
-const MAX_REQUEST: usize = 4096;
+const MAX_REQUEST: usize = reference::MAX_REQUEST;
 const MAX_REPLY: usize = 16384;
+const MAX_WIRE_REPLY: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -204,7 +206,27 @@ fn helper_installation() -> Probe {
 
 async fn call(request: &Request, deadline: Duration) -> Result<Reply> {
     validate_request(request)?;
-    let data = serde_json::to_vec(request)?;
+    // Only the inert Maestro capability probe retains its private extension.
+    // All management requests use the exact reference operation/arguments envelope.
+    let data = if request.operation == "probe" {
+        serde_json::to_vec(request)?
+    } else {
+        let (operation, arguments) = match request.operation.as_str() {
+            "system_service" => {
+                let action = request.action.as_deref().context("missing action")?;
+                let mut arguments = serde_json::json!({"scope":"system","unit":request.unit});
+                if let Some(confirm) = request.confirm { arguments["confirm"] = serde_json::json!(confirm); }
+                (format!("services_{action}"), arguments)
+            }
+            "package_refresh" => ("updates_refresh".into(), serde_json::json!({})),
+            "package_upgrade" => ("updates_install".into(), serde_json::json!({"confirm":true})),
+            "package_install" => ("packages_install".into(), serde_json::json!({"packages":request.packages.join(" "),"confirm":true})),
+            "dependency_install" => ("dependencies_install".into(), serde_json::json!({"target":request.target,"confirm":true})),
+            "samba_password" => ("shares_samba_password".into(), serde_json::json!({"password":request.password,"confirm":true})),
+            _ => anyhow::bail!("unknown privileged operation"),
+        };
+        serde_json::to_vec(&reference::Request { operation, arguments })?
+    };
     ensure!(data.len() <= MAX_REQUEST, "helper request is too large");
     let mut child = Command::new(SUDO_PATH)
         .args(["-n", "--", HELPER_PATH])
@@ -220,6 +242,7 @@ async fn call(request: &Request, deadline: Duration) -> Result<Reply> {
         .stdout
         .take()
         .context("privileged helper has no stdout")?;
+    let limit = if request.operation == "probe" { MAX_REPLY } else { MAX_WIRE_REPLY };
     let mut output = Vec::with_capacity(1024);
     timeout(deadline, async {
         if let Some(mut stdin) = child.stdin.take() {
@@ -228,11 +251,11 @@ async fn call(request: &Request, deadline: Duration) -> Result<Reply> {
         // Reading only MAX_REPLY+1 avoids an unbounded allocation even if the
         // installed executable is corrupt or has an incompatible protocol.
         stdout
-            .take((MAX_REPLY + 1) as u64)
+            .take((limit + 1) as u64)
             .read_to_end(&mut output)
             .await?;
         ensure!(
-            output.len() <= MAX_REPLY,
+            output.len() <= limit,
             "privileged helper reply is too large"
         );
         let status = child.wait().await?;
@@ -244,6 +267,18 @@ async fn call(request: &Request, deadline: Duration) -> Result<Reply> {
     })
     .await
     .context("privileged helper timed out")??;
+    if request.operation != "probe" {
+        let response: reference::Response = serde_json::from_slice(&output)
+            .context("unrecognized privileged helper response")?;
+        ensure!(response.result.is_some() || !response.error.is_empty(), "privileged helper protocol mismatch");
+        return Ok(Reply {
+            version: PROTOCOL, ok: response.error.is_empty(),
+            code: if response.error.is_empty() { "ok".into() } else { response.code },
+            message: if response.error.is_empty() { "Privileged operation completed.".into() } else { response.error },
+            system_units: vec![], package_writes: false, samba_password: false,
+            output: response.output,
+        });
+    }
     let reply: Reply =
         serde_json::from_slice(&output).context("unrecognized privileged helper response")?;
     ensure!(
@@ -420,9 +455,9 @@ pub async fn system_service(unit: &str, action: &str) -> Result<String> {
         capability.code
     );
     // Revalidation is deliberately repeated inside the root helper.
-    let reply = call(&request, Duration::from_secs(130)).await?;
+    let reply = call(&request, Duration::from_secs(25 * 60)).await?;
     ensure!(reply.ok, "{} ({})", reply.message, reply.code);
-    Ok(reply.message)
+    Ok(reply.output)
 }
 
 /// The main server never invokes a package manager directly. Only a validated
@@ -540,183 +575,42 @@ fn lock_root_operation() -> Result<fs::File> {
     Ok(lock)
 }
 
-fn root_command() -> Command {
-    let mut cmd = Command::new(SYSTEMCTL_PATH);
-    cmd.env_clear()
-        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-        .env("LANG", "C")
-        .env("LC_ALL", "C")
-        .current_dir("/")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    cmd
-}
-
-async fn root_service_action(policy: &Policy, unit: &str, action: &str) -> Result<()> {
-    ensure!(
-        policy.system_units.iter().any(|allowed| allowed == unit),
-        "system service is outside root-owned policy"
-    );
-    trusted_component(Path::new(SYSTEMCTL_PATH), false)?;
-    let mut show = root_command();
-    let identity = timeout(
-        Duration::from_secs(12),
-        show.args([
-            "--system",
-            "--no-pager",
-            "--no-ask-password",
-            "show",
-            "--property=Id",
-            "--value",
-            "--",
-            unit,
-        ])
-        .output(),
-    )
-    .await
-    .context("systemd identity check timed out")??;
-    ensure!(
-        identity.status.success() && identity.stdout.len() <= 4096,
-        "systemd identity unavailable"
-    );
-    let canonical = std::str::from_utf8(&identity.stdout)?.trim();
-    ensure!(
-        canonical == unit && safe_system_unit(canonical),
-        "systemd unit alias is outside policy"
-    );
-    let mut command = root_command();
-    let status = timeout(
-        Duration::from_secs(120),
-        command
-            .args([
-                "--system",
-                "--no-pager",
-                "--no-ask-password",
-                action,
-                "--",
-                canonical,
-            ])
-            .status(),
-    )
-    .await
-    .context("systemd operation timed out")??;
-    ensure!(
-        status.success(),
-        "systemd operation failed; inspect the host journal"
-    );
-    Ok(())
-}
-
 /// Invoked by the separate root-owned binary. No listener, argv commands or user-selected paths.
 pub async fn helper_main() -> Result<()> {
-    ensure!(unsafe { libc::geteuid() } == 0, "helper requires root");
-    ensure!(
-        std::env::args_os().len() == 1,
-        "helper accepts no command arguments"
-    );
+    ensure!(unsafe { libc::geteuid() } == 0 && std::env::args_os().len() == 1,
+        "helper requires root and no arguments");
     let caller_uid: u32 = std::env::var("SUDO_UID")
         .context("helper requires sudo caller identity")?
-        .parse()
-        .context("invalid sudo caller identity")?;
+        .parse().context("invalid helper caller UID")?;
     let policy = load_policy(caller_uid)?;
-    unsafe {
-        libc::umask(0o077);
-        libc::alarm(10);
-    }
+    unsafe { libc::umask(0o077); }
     std::env::set_current_dir("/")?;
+    // As in the reference helper, serialize native operations and bound a
+    // stalled request. The probe is inert and does not take the native lock.
     let mut input = Vec::new();
-    std::io::stdin()
-        .take((MAX_REQUEST + 1) as u64)
-        .read_to_end(&mut input)?;
-    unsafe {
-        libc::alarm(0);
-    }
-    ensure!(input.len() <= MAX_REQUEST, "helper request is too large");
+    unsafe { libc::alarm(25 * 60); }
+    std::io::stdin().take((MAX_REQUEST + 1) as u64).read_to_end(&mut input)?;
+    unsafe { libc::alarm(0); }
+    ensure!(input.len() <= MAX_REQUEST, "request exceeds 1 MiB");
 
-    let response = match serde_json::from_slice::<Request>(&input) {
-        Ok(request) if validate_request(&request).is_ok() => {
-            if request.operation == "probe" {
-                Reply {
-                    version: PROTOCOL,
-                    ok: true,
-                    code: "ready".into(),
-                    message: "Privileged helper authorized.".into(),
-                    system_units: policy.system_units,
-                    package_writes: policy.package_writes,
-                    samba_password: policy.samba_password,
-                    output: String::new(),
-                }
-            } else {
-                let _lock = lock_root_operation()?;
-                let result = if request.operation == "system_service" {
-                    root_service_action(
-                        &policy,
-                        request.unit.as_deref().unwrap_or_default(),
-                        request.action.as_deref().unwrap_or_default(),
-                    )
-                    .await
-                    .map(|()| String::new())
-                } else if request.operation == "samba_password" {
-                    if policy.samba_password {
-                        admin_shares::set_password(
-                            caller_uid,
-                            request.password.as_deref().unwrap_or_default(),
-                        )
-                        .await
-                        .map(|()| String::new())
-                    } else {
-                        Err(anyhow::anyhow!(
-                            "Samba password administration is disabled by root policy"
-                        ))
-                    }
-                } else if policy.package_writes {
-                    // A request may never choose the native executable, PATH,
-                    // repository, arbitrary arguments or target account.
-                    admin_packages::execute(
-                        &request.operation,
-                        &request.packages,
-                        request.target.as_deref(),
-                    )
-                    .await
-                } else {
-                    Err(anyhow::anyhow!(
-                        "Package writes are disabled by root-owned policy"
-                    ))
-                };
-                Reply {
-                    version: PROTOCOL,
-                    ok: result.is_ok(),
-                    code: if result.is_ok() {
-                        "ok"
-                    } else {
-                        "operation_denied"
-                    }
-                    .into(),
-                    message: if result.is_ok() {
-                        "Privileged operation completed.".into()
-                    } else {
-                        "Privileged operation denied or failed; inspect the native host state."
-                            .into()
-                    },
-                    system_units: vec![],
-                    package_writes: false,
-                    samba_password: false,
-                    output: result.unwrap_or_default(),
-                }
-            }
+    if let Ok(request) = serde_json::from_slice::<Request>(&input) {
+        if request.operation == "probe" && validate_request(&request).is_ok() {
+            let response = Reply {
+                version: PROTOCOL, ok: true, code: "ready".into(),
+                message: "Privileged helper authorized.".into(),
+                system_units: policy.system_units, package_writes: policy.package_writes,
+                samba_password: policy.samba_password, output: String::new(),
+            };
+            let mut stdout = std::io::stdout().lock();
+            serde_json::to_writer(&mut stdout, &response)?;
+            stdout.write_all(b"\n")?;
+            return Ok(());
         }
-        _ => Reply {
-            version: PROTOCOL,
-            ok: false,
-            code: "invalid_request".into(),
-            message: "Unsupported or malformed privileged request.".into(),
-            system_units: vec![],
-            package_writes: false,
-            samba_password: false,
-            output: String::new(),
-        },
-    };
+    }
+    let request = reference::decode(&input)?;
+    let _lock = lock_root_operation()?;
+    let response = timeout(Duration::from_secs(25 * 60), reference::execute(request, &policy, caller_uid))
+        .await.context("context deadline exceeded")?;
     let mut stdout = std::io::stdout().lock();
     serde_json::to_writer(&mut stdout, &response)?;
     stdout.write_all(b"\n")?;
