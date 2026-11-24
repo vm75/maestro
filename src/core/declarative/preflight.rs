@@ -575,17 +575,15 @@ async fn backend_prerequisites(
             }
         }
         "libvirt" => {
-            // Never select an implicit remote connection for readiness.
-            let uri = state.config.linux_authority.as_ref()
-                .map(|authority| authority.settings.libvirt_uri.as_str())
-                .unwrap_or("qemu:///system");
-            if !matches!(uri, "qemu:///system" | "qemu:///session") ||
-                probe(state, &commands.virsh, &["--connect", uri, "uri"]).await.is_none() {
-                issues.push(backend_issue(backend, "error", "libvirt_unavailable",
-                    "The configured local libvirt connection is unavailable."));
+            let mut provider = super::libvirt::LibvirtProvider::new(commands.virsh.clone(),state.runner.clone())
+                .native_paths(state.config.paths.applications_dir.clone(),state.config.paths.storage_dir.clone());
+            if let Some(authority) = state.config.linux_authority.as_ref() {
+                provider.uri = Some(authority.settings.libvirt_uri.clone());
             }
-            issues.push(backend_issue(backend, "unknown", "provider_checks_pending",
-                "KVM capabilities, guest identity and native provider readiness are not yet verified."));
+            if let Err(error) = provider.check_prerequisites().await {
+                issues.push(issue("error","backend/libvirt","runtime","libvirt_unavailable",
+                    error.to_string(),"Check local daemon, XML validation tools, KVM capabilities and workload account permissions."));
+            }
         }
         "incus" => {
             if probe(state, &commands.incus, &["query", "local:/1.0"]).await.is_none() {
