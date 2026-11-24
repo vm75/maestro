@@ -227,8 +227,30 @@ fn is_quadlet(service: &super::Service) -> bool {
     service.kind == "container" && service.engine == "podman" && service.backend == "quadlet"
 }
 
-/// Names emitted by Maestro's Quadlet generator are reserved for the
-/// declarative coordinator, including units left behind by a prior apply.
+/// Return the unique declared owner of an exact generated application unit.
+/// Network units and ambiguous names are intentionally not actionable.
+pub fn managed_unit_owner<'a>(config: &'a Config, unit: &str) -> Option<&'a str> {
+    let mut owners = config.services.iter().filter(|(id, service)| {
+        if is_quadlet(service) {
+            service.containers.keys().any(|member| {
+                format!("{}.service", unit_name(id, member)) == unit
+            })
+        } else {
+            service.kind == "container"
+                && service.backend == "compose"
+                && matches!(service.engine.as_str(), "podman" | "docker")
+                && super::compose::boot_unit(id) == unit
+        }
+    });
+    let (owner, _) = owners.next()?;
+    if owners.next().is_some() {
+        return None;
+    }
+    Some(owner.as_str())
+}
+
+/// Names emitted by Maestro's Quadlet and Compose generators are reserved
+/// for the declarative coordinator, including units left behind by a prior apply.
 pub fn managed_unit(unit: &str) -> bool {
     let Some(stem) = unit
         .strip_prefix("maestro-")
@@ -236,6 +258,9 @@ pub fn managed_unit(unit: &str) -> bool {
     else {
         return false;
     };
+    if stem.strip_prefix("compose-").is_some_and(super::id_valid) {
+        return true;
+    }
     let hex = |value: &str, width: usize| {
         value.len() == width
             && value
@@ -555,5 +580,44 @@ services:
         assert!(stdout.contains("--sdnotify=healthy"), "{stdout}");
         assert!(stdout.contains("--uidmap=1000:0:1"), "{stdout}");
         assert!(stdout.contains("--network container:vpn"), "{stdout}");
+    }
+}
+
+#[cfg(test)]
+mod managed_unit_routing_tests {
+    use super::*;
+
+    #[test]
+    fn exact_application_units_resolve_without_matching_network_or_stale_units() {
+        let mut config = Config::default();
+        config.services.insert(
+            "demo".into(),
+            super::super::Service {
+                kind: "container".into(),
+                engine: "podman".into(),
+                backend: "quadlet".into(),
+                containers: BTreeMap::from([("web".into(), Container::default())]),
+                ..Default::default()
+            },
+        );
+        config.services.insert(
+            "stack".into(),
+            super::super::Service {
+                kind: "container".into(),
+                engine: "docker".into(),
+                backend: "compose".into(),
+                ..Default::default()
+            },
+        );
+        let unit = format!("{}.service", unit_name("demo", "web"));
+        assert_eq!(managed_unit_owner(&config, &unit), Some("demo"));
+        assert_eq!(managed_unit_owner(&config, "maestro-compose-stack.service"), Some("stack"));
+        assert_eq!(managed_unit_owner(&config, "maestro-compose-stale.service"), None);
+        assert_eq!(managed_unit_owner(&config, "maestro-custom.service"), None);
+        let network = format!("maestro-network-{}-network.service", &revision(b"demo")[..24]);
+        assert!(managed_unit(&network));
+        assert_eq!(managed_unit_owner(&config, &network), None);
+        assert!(managed_unit("maestro-compose-stale.service"));
+        assert!(!managed_unit("maestro-custom.service"));
     }
 }

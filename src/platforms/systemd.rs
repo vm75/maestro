@@ -575,6 +575,7 @@ mod tests {
         for unit in [
             "maestro-example-app-0123456789abcdef.service",
             "maestro-network-0123456789abcdef01234567-network.service",
+            "maestro-compose-example-app.service",
             "maestro.service",
             "router-hub.service",
         ] {

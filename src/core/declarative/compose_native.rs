@@ -18,7 +18,7 @@ const REMOVED: &[&str] = &[
     "PODMAN_COMPOSE_PROVIDER",
 ];
 pub(super) fn project(id: &str) -> String { format!("maestro-{id}-{}",&revision(id.as_bytes())[..12]) }
-fn unit(id: &str) -> String { format!("maestro-compose-{id}.service") }
+fn unit(id: &str) -> String { super::boot_unit(id) }
 
 fn runtime_fingerprint(config: &Config,id: &str) -> Result<String> {
     let mut copy = config.clone();
