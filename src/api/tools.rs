@@ -2941,7 +2941,7 @@ pub async fn execute_tool(
             // The authorized helper can inspect native ownership and runtime
             // tables that the workload account cannot read. Without it, keep
             // the unprivileged inventory available and fail closed on writes.
-            if !state.config.test_mode && provider.shares.native_enabled() {
+            if !state.config.test_mode && provider.shares.helper_paths() {
                 let capability = admin::probe().await;
                 if capability.status == "ready" {
                     let args = match input.protocol.as_deref() {
@@ -2949,7 +2949,7 @@ pub async fn execute_tool(
                         None => json!({}),
                     };
                     if let Ok((mut result,_)) = admin::share_operation("shares_list",args).await {
-                        if !capability.permits_shares() {
+                        if !provider.shares.native_enabled() || !capability.permits_shares() {
                             if let Some(backends) = result["backends"].as_array_mut() {
                                 for backend in backends {
                                     backend["canManage"] = json!(false);
