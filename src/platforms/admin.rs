@@ -275,6 +275,10 @@ pub async fn samba_password(password: String) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn workload_account() -> Result<String> {
+    admin_shares::caller_name(unsafe { libc::geteuid() })
+}
+
 pub(crate) async fn share_operation(operation: &str, arguments: serde_json::Value) -> Result<(serde_json::Value,String)> {
     ensure!(matches!(operation,"shares_list"|"shares_definitions_inspect"|"shares_definitions_validate"|"shares_definitions_apply"|"shares_setup"),
         "unsupported share operation");
