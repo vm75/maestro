@@ -213,13 +213,19 @@ fn consumers(config: &Config, kind: &str, id: &str) -> Vec<String> {
     for (service_id, service) in &config.services {
         let referenced = match kind {
             "storage" => {
-                service.containers.values().any(|container| {
-                    container.mounts.iter().any(|mount| mount.storage == id)
-                }) || service.vm.as_ref().is_some_and(|vm| vm.disks.iter().any(|disk| disk == id))
+                service
+                    .containers
+                    .values()
+                    .any(|container| container.mounts.iter().any(|mount| mount.storage == id))
+                    || service
+                        .vm
+                        .as_ref()
+                        .is_some_and(|vm| vm.disks.iter().any(|disk| disk == id))
             }
-            "secret" => service.containers.values().any(|container| {
-                container.env_files.iter().any(|secret| secret == id)
-            }),
+            "secret" => service
+                .containers
+                .values()
+                .any(|container| container.env_files.iter().any(|secret| secret == id)),
             _ => false,
         };
         if referenced {
@@ -240,27 +246,43 @@ fn consumers(config: &Config, kind: &str, id: &str) -> Vec<String> {
 /// configuration or private runtime state. No capture is authorized by this.
 fn annotate_coverage(inventory: &mut BackupInventory, store: &Store, root: &Path) {
     let config_path = store.path();
-    let config_name = config_path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+    let config_name = config_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
     for input in &mut inventory.inputs {
         if input.strategy != "bundle_copy" {
             continue;
         }
-        let Some(path) = input.path.as_deref().map(Path::new) else { continue };
+        let Some(path) = input.path.as_deref().map(Path::new) else {
+            continue;
+        };
         let Ok(relative) = path.strip_prefix(root) else {
             inventory.issues.push(issue(
-                &input.id, "path", "backup_path_escape",
+                &input.id,
+                "path",
+                "backup_path_escape",
                 "A required backup input is outside the authoritative configuration root.",
                 "Review and explicitly rebind this storage before capture.",
             ));
             input.inspection = "outside_configuration_root";
             continue;
         };
-        let first = relative.components().next().and_then(|part| part.as_os_str().to_str()).unwrap_or("");
-        if input.id != "configuration" && (
-            first.is_empty() || first == config_name || first == store.history_name
+        let first = relative
+            .components()
+            .next()
+            .and_then(|part| part.as_os_str().to_str())
+            .unwrap_or("");
+        if input.id != "configuration"
+            && (first.is_empty()
+                || first == config_name
+                || first == store.history_name
                 || first.starts_with(&format!("{config_name}."))
-                || matches!(first, "apply-candidate.yaml" | "apply-journal.json" | "applications" | "run" | "logs")
-        ) {
+                || matches!(
+                    first,
+                    "apply-candidate.yaml" | "apply-journal.json" | "applications" | "run" | "logs"
+                ))
+        {
             inventory.issues.push(issue(
                 &input.id, "path", "backup_derived_state_collision",
                 "A backup input overlaps the authoritative configuration or derived private state.",
@@ -271,15 +293,24 @@ fn annotate_coverage(inventory: &mut BackupInventory, store: &Store, root: &Path
         }
         input.bundle_path = Some(relative.to_string_lossy().into_owned());
     }
-    let mut indices: Vec<_> = inventory.inputs.iter().enumerate()
-        .filter(|(_, input)| input.strategy == "bundle_copy" && input.inspection == "metadata_only"
-            && input.bundle_path.is_some())
+    let mut indices: Vec<_> = inventory
+        .inputs
+        .iter()
+        .enumerate()
+        .filter(|(_, input)| {
+            input.strategy == "bundle_copy"
+                && input.inspection == "metadata_only"
+                && input.bundle_path.is_some()
+        })
         .map(|(index, _)| index)
         .collect();
     indices.sort_by(|&left, &right| {
         let a = &inventory.inputs[left];
         let b = &inventory.inputs[right];
-        a.path.as_ref().map(String::len).cmp(&b.path.as_ref().map(String::len))
+        a.path
+            .as_ref()
+            .map(String::len)
+            .cmp(&b.path.as_ref().map(String::len))
             .then_with(|| a.id.cmp(&b.id))
     });
     for (position, &index) in indices.iter().enumerate() {
@@ -425,7 +456,11 @@ fn inventory_inputs(
         if service.vm.is_some() {
             inventory.input(BackupInput {
                 id: format!("native/{id}"),
-                kind: if service.backend == "incus" { "incus_instance_export" } else { "libvirt_guest_state" },
+                kind: if service.backend == "incus" {
+                    "incus_instance_export"
+                } else {
+                    "libvirt_guest_state"
+                },
                 strategy: "native_export",
                 path: None,
                 bundle_path: None,
@@ -592,16 +627,51 @@ mod tests {
         fs::write(&file, "PRIVATE_CONTENT_SENTINEL").unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
         let result = inventory(&store, &directory, &storage).unwrap();
-        let shared = result.inputs.iter().find(|input| input.id == "storage/shared").unwrap();
+        let shared = result
+            .inputs
+            .iter()
+            .find(|input| input.id == "storage/shared")
+            .unwrap();
         assert_eq!(shared.bundle_path.as_deref(), Some("storage/shared"));
-        assert!(shared.resources.iter().any(|resource| resource == "service/app"));
-        assert!(shared.resources.iter().any(|resource| resource == "share/files"));
-        let secret = result.inputs.iter().find(|input| input.id == "secret/nested").unwrap();
+        assert!(
+            shared
+                .resources
+                .iter()
+                .any(|resource| resource == "service/app")
+        );
+        assert!(
+            shared
+                .resources
+                .iter()
+                .any(|resource| resource == "share/files")
+        );
+        let secret = result
+            .inputs
+            .iter()
+            .find(|input| input.id == "secret/nested")
+            .unwrap();
         assert_eq!(secret.included_by.as_deref(), Some("storage/shared"));
-        assert!(secret.resources.iter().any(|resource| resource == "service/app"));
-        assert!(result.requirements.iter().any(|item| item.kind == "share_quiescence"));
-        assert!(!serde_json::to_string(&result).unwrap().contains("PRIVATE_CONTENT_SENTINEL"));
-        assert_eq!(fs::read_to_string(file).unwrap(), "PRIVATE_CONTENT_SENTINEL");
+        assert!(
+            secret
+                .resources
+                .iter()
+                .any(|resource| resource == "service/app")
+        );
+        assert!(
+            result
+                .requirements
+                .iter()
+                .any(|item| item.kind == "share_quiescence")
+        );
+        assert!(
+            !serde_json::to_string(&result)
+                .unwrap()
+                .contains("PRIVATE_CONTENT_SENTINEL")
+        );
+        assert_eq!(
+            fs::read_to_string(file).unwrap(),
+            "PRIVATE_CONTENT_SENTINEL"
+        );
     }
 
     #[test]

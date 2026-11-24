@@ -14,7 +14,10 @@ pub(super) fn read(path: &Path) -> Result<String> {
     File::open(path)?
         .take(MAX_PROC_BYTES + 1)
         .read_to_string(&mut text)?;
-    ensure!(text.len() as u64 <= MAX_PROC_BYTES, "proc counter file exceeds limit");
+    ensure!(
+        text.len() as u64 <= MAX_PROC_BYTES,
+        "proc counter file exceeds limit"
+    );
     Ok(text)
 }
 
@@ -86,7 +89,10 @@ pub(super) fn parse_cpu(text: &str) -> Result<Vec<CpuStat>> {
             steal: numbers[7],
         });
     }
-    ensure!(result.iter().any(|cpu| cpu.name == "cpu"), "aggregate CPU counters are missing");
+    ensure!(
+        result.iter().any(|cpu| cpu.name == "cpu"),
+        "aggregate CPU counters are missing"
+    );
     Ok(result)
 }
 
@@ -105,9 +111,15 @@ pub(super) fn parse_memory(text: &str) -> Result<Memory> {
     ensure!(total > 0, "memory total is missing");
     let cached = get("Cached").saturating_add(get("SReclaimable"));
     let buffers = get("Buffers");
-    let available = values.get("MemAvailable").copied().unwrap_or_else(|| {
-        get("MemFree").saturating_add(buffers).saturating_add(cached)
-    }).min(total);
+    let available = values
+        .get("MemAvailable")
+        .copied()
+        .unwrap_or_else(|| {
+            get("MemFree")
+                .saturating_add(buffers)
+                .saturating_add(cached)
+        })
+        .min(total);
     let swap_total = get("SwapTotal");
     Ok(Memory {
         total,
@@ -123,11 +135,17 @@ pub(super) fn parse_memory(text: &str) -> Result<Memory> {
 pub(super) fn parse_network(text: &str) -> Result<BTreeMap<String, NetworkStat>> {
     let mut result = BTreeMap::new();
     for line in text.lines() {
-        let Some((name, data)) = line.split_once(':') else { continue };
+        let Some((name, data)) = line.split_once(':') else {
+            continue;
+        };
         let fields: Vec<_> = data.split_whitespace().collect();
         ensure!(fields.len() >= 16, "incomplete network counters");
-        let rx_bytes = fields[0].parse().context("invalid network receive counter")?;
-        let tx_bytes = fields[8].parse().context("invalid network transmit counter")?;
+        let rx_bytes = fields[0]
+            .parse()
+            .context("invalid network receive counter")?;
+        let tx_bytes = fields[8]
+            .parse()
+            .context("invalid network transmit counter")?;
         result.insert(name.trim().into(), NetworkStat { rx_bytes, tx_bytes });
     }
     Ok(result)
@@ -166,7 +184,8 @@ mod tests {
         std::fs::write(kernel.join("hostname"), "fixture-host\n").unwrap();
         std::fs::write(kernel.join("osrelease"), "6.12-fixture\n").unwrap();
         std::fs::write(etc.join("os-release"), "PRETTY_NAME=\"Fixture Linux\"\n").unwrap();
-        let cpuinfo = "model name: Example CPU\ncpu MHz: 1000\ncpu MHz: 2000\ncpu MHz: NaN\ncpu MHz: -1";
+        let cpuinfo =
+            "model name: Example CPU\ncpu MHz: 1000\ncpu MHz: 2000\ncpu MHz: NaN\ncpu MHz: -1";
         let host = host_identity(&proc, cpuinfo);
         assert_eq!(host.hostname, "fixture-host");
         assert_eq!(host.kernel, "6.12-fixture");
@@ -174,7 +193,10 @@ mod tests {
         assert_eq!(host.cpu_model, "Example CPU");
         assert_eq!(cpu_frequency(cpuinfo), Some(1500.0));
         assert_eq!(cpu_frequency("cpu MHz: 0\ncpu MHz: inf"), None);
-        assert_eq!(host_identity(&proc, "Hardware: ARM fixture").cpu_model, "ARM fixture");
+        assert_eq!(
+            host_identity(&proc, "Hardware: ARM fixture").cpu_model,
+            "ARM fixture"
+        );
         assert_eq!(host_identity(&proc, "").cpu_model, "Unknown CPU");
     }
 
@@ -194,7 +216,10 @@ mod tests {
         let memory = parse_memory("MemTotal: 1000 kB\nMemAvailable: 600 kB\nCached: 200 kB\nSwapTotal: 100 kB\nSwapFree: 40 kB\n").unwrap();
         assert_eq!(memory.used, 400 * 1024);
         assert_eq!(memory.swap_used, 60 * 1024);
-        let memory = parse_memory("MemTotal: 1000\nMemFree: 20\nBuffers: 10\nCached: 30\nSReclaimable: 40\n").unwrap();
+        let memory = parse_memory(
+            "MemTotal: 1000\nMemFree: 20\nBuffers: 10\nCached: 30\nSReclaimable: 40\n",
+        )
+        .unwrap();
         assert_eq!(memory.available, 100 * 1024);
         assert_eq!(memory.cached, 70 * 1024);
         let memory = parse_memory("MemTotal: 1000\nMemAvailable: 0\nMemFree: 20").unwrap();

@@ -218,7 +218,10 @@ impl QuadletProvider {
         journalctl: &Path,
         tail: usize,
     ) -> Result<String> {
-        Ok(self.managed_logs(config, id, journalctl, tail).await?.display_text())
+        Ok(self
+            .managed_logs(config, id, journalctl, tail)
+            .await?
+            .display_text())
     }
 
     pub async fn managed_logs(

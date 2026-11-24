@@ -1692,10 +1692,10 @@ pub async fn execute_tool(
                 Ok(config) => (
                     StatusCode::OK,
                     json!({"valid":true, "runtimeChecked":false,
-                        "files":crate::core::declarative::preflight::check_files(
-                            store, &config, &state.config.paths.storage_dir,
-                            state.config.paths.proc_stat.parent(),
-                        )}),
+                    "files":crate::core::declarative::preflight::check_files(
+                        store, &config, &state.config.paths.storage_dir,
+                        state.config.paths.proc_stat.parent(),
+                    )}),
                 ),
                 Err(error) => (
                     StatusCode::BAD_REQUEST,
@@ -1708,10 +1708,10 @@ pub async fn execute_tool(
                 Ok(config) => (
                     StatusCode::OK,
                     json!({"configured":true, "valid":true, "runtimeChecked":false,
-                        "files":crate::core::declarative::preflight::check_files(
-                            store, &config, &state.config.paths.storage_dir,
-                            state.config.paths.proc_stat.parent(),
-                        )}),
+                    "files":crate::core::declarative::preflight::check_files(
+                        store, &config, &state.config.paths.storage_dir,
+                        state.config.paths.proc_stat.parent(),
+                    )}),
                 ),
                 Err(error) => (
                     StatusCode::OK,
@@ -1835,7 +1835,10 @@ pub async fn execute_tool(
             if !writes_allowed(state) {
                 return (
                     StatusCode::FORBIDDEN,
-                    json_err("writes_disabled", "Private backup inventory is disabled by policy."),
+                    json_err(
+                        "writes_disabled",
+                        "Private backup inventory is disabled by policy.",
+                    ),
                 );
             }
             // Never perform native mutation or claim the result can be restored.
@@ -2396,7 +2399,9 @@ pub async fn execute_tool(
             (StatusCode::OK, json!({ "applications": apps }))
         }
 
-        "applications_action" | "managed_service_start" | "managed_service_stop"
+        "applications_action"
+        | "managed_service_start"
+        | "managed_service_stop"
         | "managed_service_restart" => {
             if !writes_allowed(state) {
                 return (
@@ -2413,7 +2418,10 @@ pub async fn execute_tool(
                 if arguments.len() != 2 || !matches!(action, Some("start" | "stop" | "restart")) {
                     return (
                         StatusCode::BAD_REQUEST,
-                        json_err("invalid_arguments", "Expected id and start, stop or restart action."),
+                        json_err(
+                            "invalid_arguments",
+                            "Expected id and start, stop or restart action.",
+                        ),
                     );
                 }
                 ("applications_action", id, action.unwrap())
@@ -2429,10 +2437,17 @@ pub async fn execute_tool(
                 {
                     return (
                         StatusCode::BAD_REQUEST,
-                        json_err("invalid_arguments", "Provide a service ID and confirm=true for stop or restart."),
+                        json_err(
+                            "invalid_arguments",
+                            "Provide a service ID and confirm=true for stop or restart.",
+                        ),
                     );
                 }
-                (tool, arguments.get("service").and_then(Value::as_str), action)
+                (
+                    tool,
+                    arguments.get("service").and_then(Value::as_str),
+                    action,
+                )
             };
             let Some(id) = id.filter(|id| crate::core::declarative::id_valid(id)) else {
                 return (
@@ -2480,14 +2495,20 @@ pub async fn execute_tool(
         "applications_logs" | "managed_service_logs" => {
             let reference = name == "managed_service_logs";
             let key = if reference { "service" } else { "id" };
-            if arguments.keys().any(|argument| argument != key && argument != "tail") {
+            if arguments
+                .keys()
+                .any(|argument| argument != key && argument != "tail")
+            {
                 return (
                     StatusCode::BAD_REQUEST,
                     json_err("invalid_arguments", "Unexpected managed logs argument."),
                 );
             }
-            let Some(id) = arguments.get(key).and_then(Value::as_str)
-                .filter(|id| crate::core::declarative::id_valid(id)) else {
+            let Some(id) = arguments
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|id| crate::core::declarative::id_valid(id))
+            else {
                 return (
                     StatusCode::BAD_REQUEST,
                     json_err("invalid_arguments", "Expected 'id' string."),
@@ -2516,7 +2537,10 @@ pub async fn execute_tool(
                 .unwrap_or_default();
             match provider.managed_logs(&config, id, tail).await {
                 Ok(logs) if reference => (StatusCode::OK, json!(logs)),
-                Ok(logs) => (StatusCode::OK, json!({ "id": id, "logs": logs.display_text() })),
+                Ok(logs) => (
+                    StatusCode::OK,
+                    json!({ "id": id, "logs": logs.display_text() }),
+                ),
                 Err(e) => (
                     StatusCode::BAD_REQUEST,
                     json_err("logs_error", &e.to_string()),
@@ -2524,39 +2548,68 @@ pub async fn execute_tool(
             }
         }
 
-        "managed_shares" => {
-            match store.read() {
-                Ok(Some(snapshot)) => match snapshot.config() {
-                    Ok(config) => {
-                        let mut shares = serde_json::to_value(provider.list_shares(&config))
-                            .expect("share summaries serialize");
-                        for item in shares.as_array_mut().expect("share array") {
-                            if let Some(id) = item["id"].as_str().map(str::to_owned) {
-                                item["definition"] = json!(config.shares[&id]);
-                                item["configuration"] = json!("unknown");
-                                item["issues"] = json!([]);
-                            }
+        "managed_shares" => match store.read() {
+            Ok(Some(snapshot)) => match snapshot.config() {
+                Ok(config) => {
+                    let mut shares = serde_json::to_value(provider.list_shares(&config))
+                        .expect("share summaries serialize");
+                    for item in shares.as_array_mut().expect("share array") {
+                        if let Some(id) = item["id"].as_str().map(str::to_owned) {
+                            item["definition"] = json!(config.shares[&id]);
+                            item["configuration"] = json!("unknown");
+                            item["issues"] = json!([]);
                         }
-                        (StatusCode::OK, json!({"configured": true, "revision": snapshot.revision, "shares": shares}))
                     }
-                    Err(_) => (StatusCode::SERVICE_UNAVAILABLE, json_err("unavailable", "Authoritative shares configuration is invalid.")),
-                },
-                Ok(None) => (StatusCode::OK, json!({"configured": false, "shares": []})),
-                Err(_) => (StatusCode::SERVICE_UNAVAILABLE, json_err("unavailable", "Authoritative shares configuration is unavailable.")),
-            }
-        }
+                    (
+                        StatusCode::OK,
+                        json!({"configured": true, "revision": snapshot.revision, "shares": shares}),
+                    )
+                }
+                Err(_) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err(
+                        "unavailable",
+                        "Authoritative shares configuration is invalid.",
+                    ),
+                ),
+            },
+            Ok(None) => (StatusCode::OK, json!({"configured": false, "shares": []})),
+            Err(_) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json_err(
+                    "unavailable",
+                    "Authoritative shares configuration is unavailable.",
+                ),
+            ),
+        },
 
         "shares_list" => {
             #[derive(serde::Deserialize, Default)]
             #[serde(default, deny_unknown_fields)]
-            struct Input { protocol: Option<String> }
-            let Ok(input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
-                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Expected an optional share protocol."));
-            };
-            if input.protocol.as_deref().is_some_and(|protocol| !matches!(protocol, "samba" | "nfs")) {
-                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Unsupported share protocol."));
+            struct Input {
+                protocol: Option<String>,
             }
-            let result = crate::core::declarative::native_shares::inventory(state, input.protocol.as_deref()).await;
+            let Ok(input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Expected an optional share protocol."),
+                );
+            };
+            if input
+                .protocol
+                .as_deref()
+                .is_some_and(|protocol| !matches!(protocol, "samba" | "nfs"))
+            {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Unsupported share protocol."),
+                );
+            }
+            let result = crate::core::declarative::native_shares::inventory(
+                state,
+                input.protocol.as_deref(),
+            )
+            .await;
             (StatusCode::OK, json!(result))
         }
 
@@ -2564,12 +2617,15 @@ pub async fn execute_tool(
             let result = crate::core::declarative::native_shares::inventory(state, None).await;
             let mut response = Map::new();
             for backend in result.backends {
-                response.insert(backend.protocol.into(), json!({
-                    "configured": !backend.setup_required && !state.config.test_mode,
-                    "available": backend.available,
-                    "path": backend.managed_file,
-                    "reason": backend.reason,
-                }));
+                response.insert(
+                    backend.protocol.into(),
+                    json!({
+                        "configured": !backend.setup_required && !state.config.test_mode,
+                        "available": backend.available,
+                        "path": backend.managed_file,
+                        "reason": backend.reason,
+                    }),
+                );
             }
             (StatusCode::OK, Value::Object(response))
         }

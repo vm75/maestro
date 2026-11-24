@@ -303,9 +303,10 @@ impl Monitor {
 impl Samples {
     fn accept(&mut self, mut usage: Reading, now: Instant, at: DateTime<Utc>) {
         // Preserve the reference's bounded time window and reject clock regressions.
-        let previous = self.previous.as_ref().filter(|(sampled, _)| {
-            now > *sampled && self.current.at.is_none_or(|old| at > old)
-        });
+        let previous = self
+            .previous
+            .as_ref()
+            .filter(|(sampled, _)| now > *sampled && self.current.at.is_none_or(|old| at > old));
         let cpu_usage = |cpu: &CpuStat| {
             previous.and_then(|(_, usage)| {
                 usage
@@ -370,9 +371,10 @@ impl Samples {
         if history.back().is_some_and(|point| point.at >= at) {
             history.clear();
         }
-        let cutoff = at - chrono::Duration::seconds(
-            (self.current.interval_seconds * HISTORY_LIMIT as u64) as i64,
-        );
+        let cutoff = at
+            - chrono::Duration::seconds(
+                (self.current.interval_seconds * HISTORY_LIMIT as u64) as i64,
+            );
         while history.front().is_some_and(|point| point.at < cutoff) {
             history.pop_front();
         }
@@ -395,7 +397,10 @@ impl Samples {
             memory,
             uptime_seconds: usage.uptime_seconds,
             process_count: usage.processes.as_ref().map_or(0, processes::Counters::len),
-            processes_limited: usage.processes.as_ref().is_some_and(processes::Counters::limited),
+            processes_limited: usage
+                .processes
+                .as_ref()
+                .is_some_and(processes::Counters::limited),
             load: usage.load_average,
             networks,
             disk_io: usage.storage.rates(
@@ -403,7 +408,12 @@ impl Samples {
             ),
             disks: std::mem::take(&mut usage.storage.disks),
             temperatures: std::mem::take(&mut usage.storage.temperatures),
-            warnings: usage.warnings.iter().chain(&usage.storage.warnings).copied().collect(),
+            warnings: usage
+                .warnings
+                .iter()
+                .chain(&usage.storage.warnings)
+                .copied()
+                .collect(),
             history: std::mem::take(history),
             last_error: None,
         };
@@ -473,7 +483,15 @@ mod tests {
                 ..Memory::default()
             },
             network: network
-                .map(|rx_bytes| ("eth0".into(), NetworkStat { rx_bytes, tx_bytes: 0 }))
+                .map(|rx_bytes| {
+                    (
+                        "eth0".into(),
+                        NetworkStat {
+                            rx_bytes,
+                            tx_bytes: 0,
+                        },
+                    )
+                })
                 .into_iter()
                 .collect(),
             warnings: vec![],
@@ -543,11 +561,21 @@ mod tests {
             rx_bytes_per_second: rate,
             tx_bytes_per_second: rate,
         };
-        let rows = [row("eth0", Some(10.0)), row("lo", None), row("eth1", Some(20.0))];
-        assert_eq!(aggregate_rate(&rows, |net| net.rx_bytes_per_second), Some(30.0));
+        let rows = [
+            row("eth0", Some(10.0)),
+            row("lo", None),
+            row("eth1", Some(20.0)),
+        ];
+        assert_eq!(
+            aggregate_rate(&rows, |net| net.rx_bytes_per_second),
+            Some(30.0)
+        );
         let rows = [row("eth0", Some(10.0)), row("eth1", None)];
         assert_eq!(aggregate_rate(&rows, |net| net.rx_bytes_per_second), None);
-        assert_eq!(aggregate_rate(&[row("lo", Some(10.0))], |net| net.rx_bytes_per_second), None);
+        assert_eq!(
+            aggregate_rate(&[row("lo", Some(10.0))], |net| net.rx_bytes_per_second),
+            None
+        );
     }
 
     #[test]
@@ -562,11 +590,7 @@ mod tests {
             at + chrono::Duration::seconds(1000),
         );
         assert_eq!(samples.current.history.len(), 1);
-        samples.accept(
-            reading(30, Some(30)),
-            start + Duration::from_secs(1001),
-            at,
-        );
+        samples.accept(reading(30, Some(30)), start + Duration::from_secs(1001), at);
         assert_eq!(samples.current.history.len(), 1);
         assert_eq!(samples.current.networks[0].rx_bytes_per_second, None);
     }
@@ -585,10 +609,18 @@ mod tests {
         );
         assert_eq!(samples.current.cpu.usage, Some(50.0));
         assert_eq!(samples.current.networks[0].rx_bytes_per_second, Some(20.0));
-        samples.accept(reading(1, None), start + Duration::from_secs(4), Utc::now() + chrono::Duration::seconds(4));
+        samples.accept(
+            reading(1, None),
+            start + Duration::from_secs(4),
+            Utc::now() + chrono::Duration::seconds(4),
+        );
         assert!(samples.current.cpu.usage.is_none());
         assert!(samples.current.networks.is_empty());
-        samples.accept(reading(3, Some(2)), start + Duration::from_secs(6), Utc::now() + chrono::Duration::seconds(6));
+        samples.accept(
+            reading(3, Some(2)),
+            start + Duration::from_secs(6),
+            Utc::now() + chrono::Duration::seconds(6),
+        );
         assert!(samples.current.networks[0].rx_bytes_per_second.is_none());
         for index in 0..HISTORY_LIMIT {
             samples.accept(

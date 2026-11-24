@@ -87,10 +87,7 @@ impl Counters {
                 rows.insert(pid, row);
             }
         }
-        Some(Self {
-            rows,
-            limited,
-        })
+        Some(Self { rows, limited })
     }
 
     pub(super) fn len(&self) -> usize {

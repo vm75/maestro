@@ -280,7 +280,13 @@ mod simulation_tests {
     #[tokio::test]
     async fn lifecycle_does_not_require_native_capture_in_simulation() {
         let provider = LibvirtProvider::new("/nonexistent/virsh".into(), CommandRunner::new(true));
-        assert!(provider.action("demo", "restart").await.unwrap().starts_with("SIMULATED:"));
+        assert!(
+            provider
+                .action("demo", "restart")
+                .await
+                .unwrap()
+                .starts_with("SIMULATED:")
+        );
         assert!(provider.action("demo", "invalid").await.is_err());
     }
 }

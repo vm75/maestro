@@ -308,7 +308,9 @@ impl ComposeProvider {
             "compose file does not exist for {service_id}"
         );
         if self.runner.is_test_mode() {
-            return Ok(format!("SIMULATED: Compose logs for {service_id} (tail {tail})"));
+            return Ok(format!(
+                "SIMULATED: Compose logs for {service_id} (tail {tail})"
+            ));
         }
         let tail_str = tail.to_string();
         let file_str = file.to_str().ok_or_else(|| anyhow!("invalid path"))?;
@@ -701,8 +703,20 @@ services:
             .await
             .unwrap();
         assert!(temp.path().join("myapp/compose.yaml").exists());
-        assert!(provider.action("myapp", "restart").await.unwrap().starts_with("SIMULATED:"));
-        assert!(provider.logs("myapp", 10).await.unwrap().starts_with("SIMULATED:"));
+        assert!(
+            provider
+                .action("myapp", "restart")
+                .await
+                .unwrap()
+                .starts_with("SIMULATED:")
+        );
+        assert!(
+            provider
+                .logs("myapp", 10)
+                .await
+                .unwrap()
+                .starts_with("SIMULATED:")
+        );
         assert!(provider.action("myapp", "invalid").await.is_err());
         assert!(provider.logs("missing", 10).await.is_err());
 

@@ -213,8 +213,20 @@ mod simulation_tests {
     #[tokio::test]
     async fn lifecycle_and_logs_do_not_require_native_capture_in_simulation() {
         let provider = IncusProvider::new("/nonexistent/incus".into(), CommandRunner::new(true));
-        assert!(provider.action("demo", "restart").await.unwrap().starts_with("SIMULATED:"));
-        assert!(provider.logs("demo").await.unwrap().starts_with("SIMULATED:"));
+        assert!(
+            provider
+                .action("demo", "restart")
+                .await
+                .unwrap()
+                .starts_with("SIMULATED:")
+        );
+        assert!(
+            provider
+                .logs("demo")
+                .await
+                .unwrap()
+                .starts_with("SIMULATED:")
+        );
         assert!(provider.action("demo", "invalid").await.is_err());
     }
 }

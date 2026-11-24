@@ -166,9 +166,10 @@ fn mounts(table: &str) -> Vec<Disk> {
             continue;
         }
         let key = (*device_id, filesystem);
-        if by_device.get(&key).is_some_and(|old| {
-            old.mount.len() <= mount.len()
-        }) {
+        if by_device
+            .get(&key)
+            .is_some_and(|old| old.mount.len() <= mount.len())
+        {
             continue;
         }
         by_device.insert(

@@ -50,8 +50,7 @@ fn issue(
     }
 }
 
-const RESTORE: &str =
-    "Restore or rebind the required data; do not replace it with empty data.";
+const RESTORE: &str = "Restore or rebind the required data; do not replace it with empty data.";
 
 #[derive(Debug)]
 struct Mount {
@@ -139,20 +138,29 @@ fn check_path(
         issues.push(issue("error", resource, field, code, message, remedy));
     };
     if !path.is_absolute() {
-        add("invalid_root", "The configuration location must be absolute.",
-            "Select an absolute manifest path.");
+        add(
+            "invalid_root",
+            "The configuration location must be absolute.",
+            "Select an absolute manifest path.",
+        );
         return None;
     }
     if let Some(root) = root {
         let Ok(real_root) = fs::canonicalize(root) else {
-            add("unavailable_root", "The configuration directory is inaccessible.",
-                "Restore the configuration directory and its access permissions.");
+            add(
+                "unavailable_root",
+                "The configuration directory is inaccessible.",
+                "Restore the configuration directory and its access permissions.",
+            );
             return None;
         };
         if let Ok(real) = fs::canonicalize(path) {
             if !real.starts_with(real_root) {
-                add("path_escape", "A portable path resolves outside the configuration directory.",
-                    "Replace the escaping link or declare external storage explicitly.");
+                add(
+                    "path_escape",
+                    "A portable path resolves outside the configuration directory.",
+                    "Replace the escaping link or declare external storage explicitly.",
+                );
                 return None;
             }
         }
@@ -161,40 +169,65 @@ fn check_path(
         Ok(info) => info,
         Err(error) => {
             if error.kind() == std::io::ErrorKind::NotFound {
-                add("missing_path", "A required file or folder is missing.", RESTORE);
+                add(
+                    "missing_path",
+                    "A required file or folder is missing.",
+                    RESTORE,
+                );
             } else {
-                add("inaccessible_path", "A required path cannot be accessed.", RESTORE);
+                add(
+                    "inaccessible_path",
+                    "A required path cannot be accessed.",
+                    RESTORE,
+                );
             }
             return None;
         }
     };
     if (directory && !info.is_dir()) || (!directory && !info.is_file()) {
-        add("wrong_type", "A required path has the wrong file type.",
-            "Select the correct file or directory.");
+        add(
+            "wrong_type",
+            "A required path has the wrong file type.",
+            "Select the correct file or directory.",
+        );
         return None;
     }
     let mode = libc::R_OK | if directory { libc::X_OK } else { 0 };
     if !access(path, mode) {
-        add("path_permissions",
+        add(
+            "path_permissions",
             "A required path cannot be read or traversed by the service account.",
-            "Restore access permissions or select the correct service account.");
+            "Restore access permissions or select the correct service account.",
+        );
     }
     if private && info.permissions().mode() & 0o077 != 0 {
-        add("secret_permissions", "A referenced private file allows group or other access.",
-            "Restrict file permissions to the service account.");
+        add(
+            "secret_permissions",
+            "A referenced private file allows group or other access.",
+            "Restrict file permissions to the service account.",
+        );
     }
     Some((path.to_owned(), info))
 }
 
 fn writable_mount_issue(resource: &str, path: &Path, mounts: Option<&[Mount]>) -> Option<Issue> {
-    let unknown = || issue(
-        "unknown", resource, "path", "mount_state_unavailable",
-        "The filesystem write state could not be verified.",
-        "Restore access to /proc/self/mountinfo and recheck before starting workloads that write to this storage.",
-    );
-    let Some(mounts) = mounts else { return Some(unknown()) };
+    let unknown = || {
+        issue(
+            "unknown",
+            resource,
+            "path",
+            "mount_state_unavailable",
+            "The filesystem write state could not be verified.",
+            "Restore access to /proc/self/mountinfo and recheck before starting workloads that write to this storage.",
+        )
+    };
+    let Some(mounts) = mounts else {
+        return Some(unknown());
+    };
     let resolved = fs::canonicalize(path).ok()?;
-    let Some(mount) = mounted_filesystem(&resolved, mounts) else { return Some(unknown()) };
+    let Some(mount) = mounted_filesystem(&resolved, mounts) else {
+        return Some(unknown());
+    };
     mount.read_only.then(|| issue(
         "error", resource, "path", "read_only_mount",
         "Required writable storage is on a read-only filesystem.",
@@ -215,7 +248,9 @@ fn port_issues(config: &Config) -> Vec<Issue> {
                 if parts.len() != 2 {
                     continue;
                 }
-                declared.entry(format!("{protocol}/{}", parts[0])).or_default()
+                declared
+                    .entry(format!("{protocol}/{}", parts[0]))
+                    .or_default()
                     .push((format!("service/{id}"), format!("containers.{name}.ports")));
             }
         }
@@ -276,13 +311,25 @@ pub fn check_files(
             storage_root.join(&storage.path)
         };
         let metadata = check_path(
-            &mut issues, &resource, "path", (!storage.external).then_some(storage_root),
-            &path, storage.kind != "file", false,
+            &mut issues,
+            &resource,
+            "path",
+            (!storage.external).then_some(storage_root),
+            &path,
+            storage.kind != "file",
+            false,
         );
         if let Some(source) = &storage.source {
             let first = issues.len();
-            check_path(&mut issues, &resource, "source.path", Some(private_root),
-                &private_root.join(&source.path), false, false);
+            check_path(
+                &mut issues,
+                &resource,
+                "source.path",
+                Some(private_root),
+                &private_root.join(&source.path),
+                false,
+                false,
+            );
             if metadata.as_ref().is_some_and(|(_, info)| info.is_file()) {
                 for issue in &mut issues[first..] {
                     issue.severity = "warning";
@@ -292,9 +339,14 @@ pub fn check_files(
         }
         if writable.contains(id.as_str()) && metadata.is_some() {
             if !access(&path, libc::W_OK) {
-                issues.push(issue("error", &resource, "path", "storage_not_writable",
+                issues.push(issue(
+                    "error",
+                    &resource,
+                    "path",
+                    "storage_not_writable",
                     "The service account cannot write required persistent data.",
-                    "Restore ownership, ACLs and mount write access before starting the workload."));
+                    "Restore ownership, ACLs and mount write access before starting the workload.",
+                ));
             }
             if let Some(issue) = writable_mount_issue(&resource, &path, mounts.as_deref()) {
                 issues.push(issue);
@@ -302,13 +354,22 @@ pub fn check_files(
         }
         if !storage.mount.is_empty() {
             match mounts.as_deref() {
-                None => issues.push(issue("unknown", &resource, "mount", "mount_inventory_unavailable",
+                None => issues.push(issue(
+                    "unknown",
+                    &resource,
+                    "mount",
+                    "mount_inventory_unavailable",
                     "Mounted filesystem identity could not be checked.",
-                    "Restore access to the host mount inventory and recheck.")),
+                    "Restore access to the host mount inventory and recheck.",
+                )),
                 Some(_) if !Path::new(&storage.mount).is_absolute() => issues.push(issue(
-                    "error", &resource, "mount", "mount_check_pending",
+                    "error",
+                    &resource,
+                    "mount",
+                    "mount_check_pending",
                     "The expected mounted filesystem requires an absolute device source.",
-                    "Set mount to the expected mount source, such as /dev/mapper/data.")),
+                    "Set mount to the expected mount source, such as /dev/mapper/data.",
+                )),
                 Some(mounts) => {
                     let actual = fs::canonicalize(&path).ok().and_then(|resolved| {
                         mounted_filesystem(&resolved, mounts).map(|mount| mount.source.as_str())
@@ -323,16 +384,33 @@ pub fn check_files(
         }
     }
     for (id, path) in &config.secrets {
-        check_path(&mut issues, &format!("secret/{id}"), "path", Some(private_root),
-            &private_root.join(path), false, true);
+        check_path(
+            &mut issues,
+            &format!("secret/{id}"),
+            "path",
+            Some(private_root),
+            &private_root.join(path),
+            false,
+            true,
+        );
     }
 
     let initial = issues.clone();
     for (id, service) in &config.services {
         let mut refs = BTreeSet::new();
         for container in service.containers.values() {
-            refs.extend(container.mounts.iter().map(|mount| format!("storage/{}", mount.storage)));
-            refs.extend(container.env_files.iter().map(|secret| format!("secret/{secret}")));
+            refs.extend(
+                container
+                    .mounts
+                    .iter()
+                    .map(|mount| format!("storage/{}", mount.storage)),
+            );
+            refs.extend(
+                container
+                    .env_files
+                    .iter()
+                    .map(|secret| format!("secret/{secret}")),
+            );
         }
         if let Some(vm) = &service.vm {
             refs.extend(vm.disks.iter().map(|disk| format!("storage/{disk}")));
@@ -340,20 +418,40 @@ pub fn check_files(
         for input in &initial {
             if refs.contains(&input.resource) {
                 let (severity, code, message) = if input.severity == "warning" {
-                    ("warning", "initial_asset_unavailable",
-                     "An initial disk image asset needs attention; the existing disk remains authoritative data.")
+                    (
+                        "warning",
+                        "initial_asset_unavailable",
+                        "An initial disk image asset needs attention; the existing disk remains authoritative data.",
+                    )
                 } else {
-                    ("error", "blocked_reference", "A required storage or private-file reference is blocked.")
+                    (
+                        "error",
+                        "blocked_reference",
+                        "A required storage or private-file reference is blocked.",
+                    )
                 };
-                issues.push(issue(severity, &format!("service/{id}"), &input.resource, code, message, input.remedy));
+                issues.push(issue(
+                    severity,
+                    &format!("service/{id}"),
+                    &input.resource,
+                    code,
+                    message,
+                    input.remedy,
+                ));
             }
         }
     }
     for (id, share) in &config.shares {
         for input in &initial {
             if input.resource == format!("storage/{}", share.storage) {
-                issues.push(issue("error", &format!("share/{id}"), "storage", "blocked_reference",
-                    "The shared directory is unavailable or requires verification.", input.remedy));
+                issues.push(issue(
+                    "error",
+                    &format!("share/{id}"),
+                    "storage",
+                    "blocked_reference",
+                    "The shared directory is unavailable or requires verification.",
+                    input.remedy,
+                ));
             }
         }
     }
@@ -373,10 +471,21 @@ mod tests {
             "1 0 8:1 / / rw - ext4 /dev/root rw\n\
              2 1 8:2 / /data\\040disk rw - ext4 /dev/data ro\n\
              3 1 8:3 / /data\\040disk rw - ext4 /dev/new rw",
-        ).unwrap();
+        )
+        .unwrap();
         assert!(mounts[1].read_only);
-        assert_eq!(mounted_filesystem(Path::new("/data disk/child"), &mounts).unwrap().source, "/dev/new");
-        assert_eq!(mounted_filesystem(Path::new("/data disk2"), &mounts).unwrap().source, "/dev/root");
+        assert_eq!(
+            mounted_filesystem(Path::new("/data disk/child"), &mounts)
+                .unwrap()
+                .source,
+            "/dev/new"
+        );
+        assert_eq!(
+            mounted_filesystem(Path::new("/data disk2"), &mounts)
+                .unwrap()
+                .source,
+            "/dev/root"
+        );
         assert!(parse_mounts("malformed").is_none());
     }
 
@@ -391,14 +500,40 @@ mod tests {
         fs::set_permissions(&secret, fs::Permissions::from_mode(0o644)).unwrap();
         let config = super::super::parse(b"version: 1\nstorage:\n  data: {kind: directory, path: data}\nsecrets:\n  key: secret.env\nservices:\n  app:\n    kind: container\n    engine: podman\n    backend: quadlet\n    containers:\n      web:\n        image: example/image:1\n        env_files: [key]\n        mounts: [{storage: data, target: /data}]\n").unwrap();
         let health = check_files(&store, &config, &storage, None);
-        assert!(health.issues.iter().any(|i| i.resource == "storage/data" && i.code == "missing_path"));
-        assert!(health.issues.iter().any(|i| i.resource == "secret/key" && i.code == "secret_permissions"));
-        assert_eq!(health.issues.iter().filter(|i| i.resource == "service/app" && i.code == "blocked_reference").count(), 2);
+        assert!(
+            health
+                .issues
+                .iter()
+                .any(|i| i.resource == "storage/data" && i.code == "missing_path")
+        );
+        assert!(
+            health
+                .issues
+                .iter()
+                .any(|i| i.resource == "secret/key" && i.code == "secret_permissions")
+        );
+        assert_eq!(
+            health
+                .issues
+                .iter()
+                .filter(|i| i.resource == "service/app" && i.code == "blocked_reference")
+                .count(),
+            2
+        );
         assert!(!storage.join("data").exists());
-        assert!(!serde_json::to_string(&health).unwrap().contains("DO_NOT_RETURN"));
+        assert!(
+            !serde_json::to_string(&health)
+                .unwrap()
+                .contains("DO_NOT_RETURN")
+        );
         symlink(root.path(), storage.join("data")).unwrap();
         let health = check_files(&store, &config, &storage, None);
-        assert!(health.issues.iter().any(|i| i.resource == "storage/data" && i.code == "path_escape"));
+        assert!(
+            health
+                .issues
+                .iter()
+                .any(|i| i.resource == "storage/data" && i.code == "path_escape")
+        );
     }
 
     #[test]
@@ -418,6 +553,10 @@ mod tests {
         }
         let issues = port_issues(&config);
         assert_eq!(issues.len(), 2);
-        assert!(issues.iter().all(|i| i.severity == "warning" && i.code == "host_port_overlap"));
+        assert!(
+            issues
+                .iter()
+                .all(|i| i.severity == "warning" && i.code == "host_port_overlap")
+        );
     }
 }
