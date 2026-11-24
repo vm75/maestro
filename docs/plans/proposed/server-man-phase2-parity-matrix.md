@@ -882,7 +882,7 @@ identity when declared, no overlapping private/other data and stopped verified
 consumers. Creation is an explicitly confirmed new-data job. It rechecks the
 review token and revision while holding the authority lock, stages private
 metadata or a sparse disk and publishes without replacement. Directory and
-source-less raw/qcow2 disks are implemented; image cloning and non-Quadlet
+raw/qcow2 disks and SHA-256-pinned initial image cloning are implemented; non-Quadlet
 consumer/share ownership checks remain gated. Native qemu-img operations are
 bounded and never target an existing operator path. Compilation, focused tests
 and native acceptance are pending.
@@ -899,3 +899,5 @@ already-running containers do not appear stale from a boot-only edit. Exact
 source/loaded ownership and all other fingerprint comparisons remain unchanged.
 Native start/restart also reject static data/dependency blockers. Other native
 boot providers remain gated; compilation and native validation are pending.
+
+Source image cloning uses protected, held file descriptors, explicit raw/qcow2 formats, header rejection of backing/external/encrypted qcow2 images, virtual-capacity checks, SHA-256 before and after conversion, and the same no-replacement publication. Native qemu-img testing remains outstanding.
