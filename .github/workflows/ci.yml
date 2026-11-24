@@ -141,14 +141,54 @@ jobs:
           browser=$(command -v google-chrome || command -v chromium)
           node scripts/test-linux-ui.mjs "$browser"
 
+  linux-native:
+    name: Native Linux integration
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out selected revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.ref }}
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: linux-web/package-lock.json
+
+      - name: Build Linux UI assets
+        run: |
+          npm --prefix linux-web ci
+          npm --prefix linux-web run build
+
       - name: Install stable Rust
         run: rustup toolchain install stable --profile minimal
 
       - name: Cache Cargo dependencies and build artifacts
         uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3 # v2.7.7
 
-      - name: Check Linux UI binary
-        run: cargo +stable check --locked --no-default-features --features linux-ui --all-targets
+      - name: Set up supported nginx for native Linux tests
+        uses: ./.github/actions/setup-nginx
+
+      - name: Install isolated Python requirements
+        run: |
+          python3 -m venv "$RUNNER_TEMP/maestro-python"
+          "$RUNNER_TEMP/maestro-python/bin/python" -m pip install -r requirements.txt
+
+      - name: Test and build Linux UI binary
+        run: |
+          cargo +stable test --locked --no-default-features --features linux-ui
+          cargo +stable build --locked --no-default-features --features linux-ui
+
+      - name: Native unprivileged Linux integration
+        env:
+          MAESTRO_LINUX_SMOKE_BIN: ${{ github.workspace }}/target/debug/maestro
+        run: |
+          PYTHON="$RUNNER_TEMP/maestro-python/bin/python" bash scripts/test-linux-integration.sh
 
   stable:
     name: Stable compatibility
@@ -173,7 +213,7 @@ jobs:
 
   tag:
     name: Tag new stable version
-    needs: [source, full, stable, linux-ui]
+    needs: [source, full, stable, linux-ui, linux-native]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5

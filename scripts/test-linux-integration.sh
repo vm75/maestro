@@ -176,6 +176,8 @@ shared_write -X PUT -d '{"name":"Updated","mac":"02:00:00:00:00:01","port":9}' "
 shared_get wol | python3 -c 'import json,sys; assert json.load(sys.stdin)[0]["name"]=="Updated"'
 shared_write -X DELETE "$api/api/shared/wol/$id" >/dev/null
 shared_get wol | python3 -c 'import json,sys; assert json.load(sys.stdin)==[]'
+shared_get 'firewall?include_bans=false' | python3 -c 'import json,sys; assert json.load(sys.stdin)["bans"]==[]'
+shared_get firewall/bans | python3 -c 'import json,sys; assert isinstance(json.load(sys.stdin),list)'
 shared_get firewall/capability | python3 -c 'import json,sys; x=json.load(sys.stdin); assert not x["enforcement"], x'
 # Use disabled detection rules and the same validated per-rule handlers as router mode.
 rule_id=$(shared_write -d '{"name":"Linux parity rule","enabled":false,"log_paths":["/tmp/maestro-lab-only.log"],"pattern":"(?P<ip>[0-9.]+)","weight":1}' "$api/api/shared/firewall/rules" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')

@@ -16,7 +16,7 @@ let allowWrites=true, reach='down', adStatus={enabled:true, protection_enabled:t
 let rewrites=[{domain:'old.test',answer:'192.0.2.5'}];
 const modules=['nginx','certificates','ban_shield','wol','adguard','wireguard'].map(id=>({id,availability:'ready',dependencies:[]}));
 const site={kind:'domain',domain:'example.test',name:'example.test',display_name:'example.test',managed:true,enabled:true,state:'live',port:8443,effective_access:{listener_profile:'legacy',access_policy:'legacy',https:[{address:'127.0.0.1',port:8443}],http:[],allowed_sources:['127.0.0.1/32'],routes:[]}};
-const global={shared:{},site_defaults:{disable_root:false,routes:[{path:'/admin',match:'exact',access_policy:'deny'}]},listener_profiles:{},access_policies:{},limit_policies:{},allowed_ips:[],free_subdomains:[]};
+let global={shared:{},site_defaults:{disable_root:false,routes:[{path:'/admin',match:'exact',access_policy:'deny'}]},listener_profiles:{},access_policies:{},limit_policies:{},allowed_ips:[],free_subdomains:[]};
 const tuning={ip_failures:5,subnet_failures:10,promote_after_banned_ips:2,reputation_repromote_after_offenses:1,score_retention_days:60,reputation_retention_days:365,subnet_promotion_window_days:60,subnet_ban_days:30,first_ban_days:1,second_ban_days:7,third_ban_days:30,max_ban_days:180};
 let policy={enabled:true,observe_only:true,rules:[{id:'rule-1',name:'Test rule',enabled:true,log_paths:['/tmp/lab.log'],pattern:'(?P<ip>.*)',attempts:5,weight:1,ip_group:'ip',group_values:{}}],allowlist:[]};
 const health={state:'running',set_capacity:8192,set_entries:1,dropped_line_count:0,command_timeout_count:0,error_count:0};
@@ -41,12 +41,13 @@ const server=createServer(async(req,res)=>{
     const key=path.replace('/api/shared/','');
     if(key==='nginx/status')return json(res,{running:true,config_path:'/tmp/nginx.conf',root_dir:'/tmp'});
     if(key==='nginx/sites')return json(res,[site,{...site,kind:'subfolder',name:'child',display_name:'example.test/child'}]);
-    if(key==='nginx/settings')return json(res,global);
+    if(key==='nginx/settings'){if(method==='PUT')global=body;return json(res,global);}
     if(key==='nginx/ingress-usage')return json(res,{});
     if(key==='nginx/logs')return json(res,[]);
     if(key==='nginx/objects/domain/example.test/example.test')return json(res,{settings:{},content:'',upstream:'http://127.0.0.1:9000',server_names:[]});
     if(key==='nginx/access-preview') {
       const access=body.settings.access_policy || 'legacy';
+      if(access==='public')await sleep(700);
       return json(res,{...site.effective_access,access_policy:access,allowed_sources:access==='deny'?[]:access==='public'?null:['127.0.0.1/32'],routes:[]});
     }
     if(key==='certificates')return json(res,[]);
@@ -96,13 +97,16 @@ try{
   await click('AdGuard Home');await wait('document.body.innerText.includes("Protection and filtering")');await click('10 min');
   await waitFor(()=>calls.some(c=>c.path.endsWith('/adguard/protection')&&c.body.duration_minutes===10),'timed pause payload');
   await wait('document.body.innerText.includes("Paused · 10m")');await click('Resume');await waitFor(()=>calls.some(c=>c.path.endsWith('/adguard/protection')&&c.body.enabled===true),'resume payload');
-  await click('Manage DNS rewrites');await field('Domain','edited.test');await click('Save rewrites');await waitFor(()=>rewrites[0].domain==='edited.test','edited rewrite');
+  await click('Answer ↕');await click('Manage DNS rewrites');await field('Domain','edited.test');await click('Save rewrites');await waitFor(()=>rewrites[0].domain==='edited.test','edited rewrite');
   await click('Ban Shield');await wait('document.body.innerText.includes("7 / 2")');await click('Add rule');await field('Name','New detection');await field('Log paths','/tmp/new.log');await click('Save rule');await waitFor(()=>policy.rules.some(r=>r.name==='New detection'),'structured rule save');
   await click('Edit security tuning');await click('Load strict preset');await click('Save security tuning');await waitFor(()=>policy.tuning?.ip_failures===3,'strict preset payload');
-  await ev('window.confirm=(message)=>{window.lastConfirm=message;return true}');await click('Show active bans');await click('Unban + allow');await wait('window.lastConfirm.includes("allowlist")');
-  await click('Web');await wait('document.body.innerText.includes("example.test/child")');await click('Edit');await wait('document.body.innerText.includes("Effective access")');await field('Access policy','deny');await wait('document.body.innerText.includes("Allowed sources: Denied")');
+  await ev('window.confirm=(message)=>{window.lastConfirm=message;return true}');assert.equal(calls.some(c=>c.path==='/api/shared/firewall/bans'&&c.method==='GET'),false,'ban details must load on demand');await click('Show active bans');await click('Expires ↕');await click('Unban + allow');await wait('window.lastConfirm.includes("allowlist")');
+  await click('Web');await wait('document.body.innerText.includes("example.test/child")');await click('Edit');await wait('document.body.innerText.includes("Effective access")');await field('Access policy','public');await waitFor(()=>calls.some(c=>c.path.endsWith('/nginx/access-preview')&&c.body?.settings?.access_policy==='public'),'slow public preview requested');await field('Access policy','deny');await wait('document.body.innerText.includes("Allowed sources: Denied")');await sleep(800);assert.ok(await ev('document.body.innerText.includes("Allowed sources: Denied")'),'stale preview must not overwrite current policy');
+  await field('Upstream','http://127.0.0.1:8123');await click('Global settings');await click('Save global settings');await wait('!document.body.innerText.includes("Save global settings")');assert.equal(await ev('[...document.querySelectorAll("label")].find(l=>l.textContent.trim()==="Upstream").querySelector("input").value'),'http://127.0.0.1:8123');
+  await field('Return 404 at domain root','true');await wait('document.body.innerText.includes("Domain container:")');assert.equal(await ev('[...document.querySelectorAll("label")].some(l=>l.textContent.trim()==="Upstream"&&l.getClientRects().length>0)'),false);await field('Return 404 at domain root','false');await field('Transport','sse');assert.equal(await ev('[...document.querySelectorAll("label")].some(l=>l.textContent.trim().startsWith("Connect timeout"))'),false);
   await click('Path access rules and blocked paths');await field('Blocked path','/private');await click('Add blocked path');await waitFor(()=>calls.some(c=>c.path.endsWith('/nginx/access-preview')&&c.body.settings.routes?.some(r=>r.path==='/private/')&&c.body.settings.routes?.some(r=>r.path==='/admin')),'blocked path preserving inherited rules');
   await click('Setup guide');await wait('!!document.querySelector("dialog[open]")');await click('Close guide');
+  await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await click('Open guide');await wait('!!document.querySelector("dialog[open]")');assert.ok(await ev('document.querySelector("dialog[open]").getBoundingClientRect().width<=window.innerWidth'),'guide fits mobile viewport');await click('Close guide');await call('Emulation.clearDeviceMetricsOverride');
   await click('Certificates');await click('Add certificate');assert.equal(await ev('Array.from(document.querySelectorAll("label")).find(l=>l.textContent.trim()==="Auto renew").querySelector("input").checked'),true);
   allowWrites=false;await call('Page.navigate',{url:base+'/#web'});await call('Page.reload');await wait('document.body.innerText.includes("Read only")');await click('Inspect');await wait('document.body.innerText.includes("Inspect site")');assert.equal(await ev('!!document.querySelector("fieldset[disabled]")'),true);
   assert.deepEqual(errors,[],'browser exceptions');console.log('PASS: shared Linux UI workflows (fixture API, no host mutations)');
