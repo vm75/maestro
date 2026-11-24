@@ -367,6 +367,34 @@ Libvirt source implementation and fake-daemon regression tests are present;
 build/fixture execution and native guest acceptance remain pending.
 Stopped-guest disk export belongs to the remaining backup workflow.
 
+### Incus virtual machines
+
+The Incus adapter uses the explicit local daemon, project, storage pool and
+network/bridge bindings. The reference VM profile uses UEFI and Secure Boot,
+a locally available image alias or fingerprint, persistent UUID/MAC identity,
+explicit devices, no implicit profiles, and pool-managed root storage (20 GiB
+by default). QEMU SPICE availability is checked with option help only,
+without starting a guest. The workload account requires access to the local
+Incus daemon; this access is security-sensitive and must be explicitly granted.
+
+Saving defines a stopped VM. Boot autostart is separate from execution.
+Unlike Libvirt, Incus v1 requires the VM to be stopped before hardware or
+native description changes, including Save for next start. A running VM
+receives only boot policy and definition fingerprint updates. Existing
+native volatile settings are retained; the adapter tracks the runtime
+revision loaded by the guest. Graceful stop and restart use a bounded
+shutdown request without force. Logs are bounded and scoped to the managed
+instance. Initial image changes, root shrink, and project/pool moves are
+rejected rather than silently reprovisioning or relocating data.
+
+Removing an existing Incus instance is deliberately unavailable until an
+explicit data-preserving export workflow is implemented. If creation failed
+and no instance exists, only its verified generated definition may be removed.
+New guest identities still need explicit UUID/MAC until reviewed-candidate
+identity preparation is completed. Native provider compilation, fixture
+execution, disposable guest acceptance, export and intermediate artifact
+recovery remain pending.
+
 The File Sharing page summarizes configured Samba and NFS network shares and
 their underlying service configurations. Network shares are declared directly
 within the declarative YAML model (`shares:`) and bound to managed storage
