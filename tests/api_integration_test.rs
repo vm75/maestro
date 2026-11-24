@@ -3487,3 +3487,53 @@ async fn linux_next_start_config_typed_edit_and_revert_share_the_recorded_mode()
     let (_, pending) = tool(&app, &token, "workloads_pending", serde_json::json!({})).await;
     assert!(pending["pending"].is_null());
 }
+
+
+#[cfg(feature = "linux")]
+#[tokio::test]
+async fn linux_generated_host_service_routes_fail_closed() {
+    let (_, mut state, _temp) = setup_test_app().await;
+    let config = std::sync::Arc::make_mut(&mut state.config);
+    config.platform = maestro::config::Platform::Linux;
+    config.test_mode = false;
+    config.system.allow_workload_writes = false;
+    // Even an explicit ordinary-unit grant cannot authorize a stale generated unit.
+    config.services.systemd_user_write_units = vec!["maestro-compose-stale.service".into()];
+    let token = config.server.auth_token.clone();
+    let store = maestro::core::linux_config::store(config).unwrap();
+    store.save(
+        b"version: 1\nservices:\n  stack:\n    kind: container\n    engine: docker\n    backend: compose\n    containers:\n      web: {image: docker.io/library/nginx:alpine}\n",
+        maestro::core::declarative::MISSING_REVISION,
+    ).unwrap();
+    let app = api::app(state).unwrap();
+    for (tool, unit, confirm, expected, code, message) in [
+        ("services_start", "maestro-compose-stack.service", false, StatusCode::FORBIDDEN,
+            "writes_disabled", "Application actions require writes"),
+        ("services_enable", "maestro-compose-stack.service", false, StatusCode::FORBIDDEN,
+            "writes_disabled", "Boot policy requires management writes"),
+        ("services_reload", "maestro-compose-stack.service", true, StatusCode::BAD_REQUEST,
+            "invalid_arguments", "Apply the application definition"),
+        ("services_stop", "maestro-compose-stack.service", false, StatusCode::BAD_REQUEST,
+            "confirmation_required", "confirm=true"),
+        ("services_start", "maestro-compose-stale.service", false, StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable", "Unknown, stale or ambiguous generated unit"),
+    ] {
+        let args = serde_json::json!({"scope":"user","unit":unit,"confirm":confirm});
+        let response = app.clone().oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/tools/{tool}"))
+                .header(header::HOST, "localhost:3030")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(args.to_string()))
+                .unwrap(),
+        ).await.unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status, expected, "{tool}: {value}");
+        assert_eq!(value["error"]["code"], code, "{tool}: {value}");
+        assert!(value["error"]["message"].as_str().unwrap().contains(message), "{tool}: {value}");
+    }
+}
