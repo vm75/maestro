@@ -40,12 +40,18 @@ pub(super) fn router(state: AppState) -> Router<AppState> {
         )
         .route("/shared/nginx/status", get(super::nginx::status))
         .route("/shared/nginx/sites", get(super::nginx::list_objects))
-        .route("/shared/nginx/settings", get(nginx::get_settings).put(nginx::put_settings))
+        .route(
+            "/shared/nginx/settings",
+            get(nginx::get_settings).put(nginx::put_settings),
+        )
         .route("/shared/nginx/access-preview", post(nginx::preview_access))
         .route("/shared/nginx/ingress-usage", get(nginx::ingress_usage))
         .route("/shared/nginx/logs", get(super::nginx::list_logs))
         .route("/shared/nginx/logs/{*path}", get(super::nginx::get_log))
-        .route("/shared/certificates", get(certificates).post(create_certificate))
+        .route(
+            "/shared/certificates",
+            get(certificates).post(create_certificate),
+        )
         .route(
             "/shared/certificates/{id}",
             delete(super::certificates::delete).put(update_certificate),
@@ -58,9 +64,18 @@ pub(super) fn router(state: AppState) -> Router<AppState> {
                 .delete(super::certificates::close_http_access),
         )
         .route("/shared/certificates/lock", get(certificate_lock))
-        .route("/shared/certificates/lock/clear", post(clear_certificate_lock))
-        .route("/shared/certificates/dehydrated/update", post(update_dehydrated))
-        .route("/shared/firewall", get(firewall::status).put(update_firewall))
+        .route(
+            "/shared/certificates/lock/clear",
+            post(clear_certificate_lock),
+        )
+        .route(
+            "/shared/certificates/dehydrated/update",
+            post(update_dehydrated),
+        )
+        .route(
+            "/shared/firewall",
+            get(firewall::status).put(update_firewall),
+        )
         .route("/shared/firewall/capability", get(firewall_capability))
         .route("/shared/firewall/rules", post(firewall::create_rule))
         .route(
@@ -68,22 +83,37 @@ pub(super) fn router(state: AppState) -> Router<AppState> {
             delete(firewall::delete_rule).put(firewall::update_rule),
         )
         .route("/shared/firewall/allowlist", post(firewall::add_allowlist))
-        .route("/shared/firewall/allowlist/{network}", delete(firewall::delete_allowlist))
+        .route(
+            "/shared/firewall/allowlist/{network}",
+            delete(firewall::delete_allowlist),
+        )
         .route("/shared/firewall/bans", post(firewall::manual_ban))
         .route("/shared/firewall/bans/{network}", delete(firewall::unban))
-        .route("/shared/firewall/reset-counts/{network}", post(firewall::reset_counts))
+        .route(
+            "/shared/firewall/reset-counts/{network}",
+            post(firewall::reset_counts),
+        )
         .route("/shared/wol", get(wol::list).post(wol::create))
         .route("/shared/wol/status", get(wol::status))
         .route("/shared/wol/{id}", delete(wol::delete).put(wol::update))
         .route("/shared/wol/{id}/wake", post(wol::wake))
-        .route("/shared/adguard/config", get(adguard::get_config).put(adguard::update_config))
+        .route(
+            "/shared/adguard/config",
+            get(adguard::get_config).put(adguard::update_config),
+        )
         .route("/shared/adguard/status", get(adguard::get_adguard_status))
         .route("/shared/adguard/protection", post(adguard::set_protection))
         .route("/shared/adguard/filtering", post(adguard::set_filtering))
-        .route("/shared/adguard/rewrites", get(adguard::get_rewrites).put(adguard::update_rewrites))
+        .route(
+            "/shared/adguard/rewrites",
+            get(adguard::get_rewrites).put(adguard::update_rewrites),
+        )
         .route("/shared/wireguard/status", get(wireguard_status))
         .route("/shared/wireguard/toggle", post(wireguard_toggle))
-        .route("/shared/wireguard/peers", get(wireguard_peers).put(write_wireguard_peers))
+        .route(
+            "/shared/wireguard/peers",
+            get(wireguard_peers).put(write_wireguard_peers),
+        )
         .route_layer(middleware::from_fn_with_state(state, authorize_mutation))
 }
 
@@ -233,7 +263,9 @@ async fn issue_certificate(
         .map_err(|_| ApiError::conflict("Certificate issuance failed; inspect server logs"))?
         .0;
     if !result.success {
-        return Err(ApiError::conflict("Certificate issuance failed; inspect server logs"));
+        return Err(ApiError::conflict(
+            "Certificate issuance failed; inspect server logs",
+        ));
     }
     Ok(Json(ApiMessage::new("Certificate issued")))
 }
@@ -247,7 +279,9 @@ async fn renew_certificate(
         .map_err(|_| ApiError::conflict("Certificate renewal failed; inspect server logs"))?
         .0;
     if !result.success {
-        return Err(ApiError::conflict("Certificate renewal failed; inspect server logs"));
+        return Err(ApiError::conflict(
+            "Certificate renewal failed; inspect server logs",
+        ));
     }
     Ok(Json(ApiMessage::new("Certificate renewed")))
 }
@@ -265,18 +299,22 @@ async fn update_dehydrated(State(state): State<AppState>) -> Result<Json<ApiMess
 // Enforcement is opt-in through the root-owned helper policy.
 async fn firewall_capability() -> Json<Value> {
     let probe = admin::probe().await;
-    Json(json!({"enforcement":probe.ban_shield,"reason":if probe.ban_shield {
-        "Authorized nftables enforcement"
-    } else {
-        "Install nftables and authorize ban_shield in the root-owned helper policy"
-    }}))
+    Json(
+        json!({"enforcement":probe.ban_shield,"reason":if probe.ban_shield {
+            "Authorized nftables enforcement"
+        } else {
+            "Install nftables and authorize ban_shield in the root-owned helper policy"
+        }}),
+    )
 }
 async fn update_firewall(
     State(state): State<AppState>,
     Json(policy): Json<FirewallPolicy>,
 ) -> Result<Json<FirewallPolicy>, ApiError> {
     if policy.enabled && !policy.observe_only && !admin::probe().await.ban_shield {
-        return Err(ApiError::bad_request("Ban Shield enforcement requires the authorized nftables helper"));
+        return Err(ApiError::bad_request(
+            "Ban Shield enforcement requires the authorized nftables helper",
+        ));
     }
     firewall::update_policy(State(state), Json(policy)).await
 }
@@ -304,16 +342,28 @@ async fn wireguard_status(State(state): State<AppState>) -> Result<Json<Value>, 
 
 async fn wireguard_peers() -> Result<Json<Value>, ApiError> {
     if !admin::probe().await.wireguard_peers {
-        return Err(ApiError::bad_request("WireGuard peer access requires the root-owned wireguard_peers grant"));
+        return Err(ApiError::bad_request(
+            "WireGuard peer access requires the root-owned wireguard_peers grant",
+        ));
     }
-    Ok(Json(admin::network_operation("wireguard_peers_read", json!({})).await.map_err(ApiError::conflict)?))
+    Ok(Json(
+        admin::network_operation("wireguard_peers_read", json!({}))
+            .await
+            .map_err(ApiError::conflict)?,
+    ))
 }
 
 async fn write_wireguard_peers(Json(input): Json<Value>) -> Result<Json<Value>, ApiError> {
     if !admin::probe().await.wireguard_peers {
-        return Err(ApiError::bad_request("WireGuard peer editing requires the root-owned wireguard_peers grant"));
+        return Err(ApiError::bad_request(
+            "WireGuard peer editing requires the root-owned wireguard_peers grant",
+        ));
     }
-    Ok(Json(admin::network_operation("wireguard_peers_write", input).await.map_err(ApiError::conflict)?))
+    Ok(Json(
+        admin::network_operation("wireguard_peers_write", input)
+            .await
+            .map_err(ApiError::conflict)?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -347,12 +397,18 @@ mod tests {
 
     #[test]
     fn wireguard_toggle_rejects_arbitrary_units_and_paths() {
-        assert!(serde_json::from_value::<WireguardToggle>(
-            json!({"enable": true, "unit": "other.service"})
-        ).is_err());
-        assert!(serde_json::from_value::<WireguardToggle>(
-            json!({"enable": true, "config": "/tmp/wg.conf"})
-        ).is_err());
+        assert!(
+            serde_json::from_value::<WireguardToggle>(
+                json!({"enable": true, "unit": "other.service"})
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<WireguardToggle>(
+                json!({"enable": true, "config": "/tmp/wg.conf"})
+            )
+            .is_err()
+        );
         assert!(serde_json::from_value::<WireguardToggle>(json!({"enable": true})).is_ok());
     }
 }

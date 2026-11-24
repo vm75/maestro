@@ -14,10 +14,10 @@ use std::{
 };
 
 use super::{admin_packages, admin_shares};
-#[path = "admin_reference.rs"]
-mod reference;
 #[path = "admin_network.rs"]
 mod network;
+#[path = "admin_reference.rs"]
+mod reference;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -260,9 +260,15 @@ fn checked(response: reference::Response) -> Result<reference::Response> {
     Ok(response)
 }
 
-pub async fn network_operation(operation: &str, arguments: serde_json::Value) -> Result<serde_json::Value> {
+pub async fn network_operation(
+    operation: &str,
+    arguments: serde_json::Value,
+) -> Result<serde_json::Value> {
     ensure!(
-        matches!(operation, "ban_shield_apply" | "wireguard_peers_read" | "wireguard_peers_write"),
+        matches!(
+            operation,
+            "ban_shield_apply" | "wireguard_peers_read" | "wireguard_peers_write"
+        ),
         "invalid network operation"
     );
     checked(call(operation, arguments, Duration::from_secs(20)).await?)?

@@ -641,11 +641,15 @@ mod tests {
         assert!(is_generated_fallback_subject(
             "    Issuer: CN = maestro-default.invalid\n    Subject: CN = maestro-default.invalid"
         ));
-        assert!(is_generated_fallback_subject("Subject: CN=maestro-default.invalid"));
+        assert!(is_generated_fallback_subject(
+            "Subject: CN=maestro-default.invalid"
+        ));
         assert!(!is_generated_fallback_subject(
             "Issuer: CN = maestro-default.invalid\nSubject: CN = example.test"
         ));
-        assert!(!is_generated_fallback_subject("Subject: CN = maestro-default.invalid.example.test"));
+        assert!(!is_generated_fallback_subject(
+            "Subject: CN = maestro-default.invalid.example.test"
+        ));
         assert!(!is_generated_fallback_subject("Subject: CN = example.test"));
     }
 

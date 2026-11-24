@@ -185,10 +185,15 @@ impl FirewallManager {
             && candidate.enabled
             && !candidate.observe_only
         {
-            anyhow::ensure!(crate::platforms::admin::probe().await.ban_shield,
-                "Ban Shield enforcement requires nftables and the root-owned ban_shield grant");
             anyhow::ensure!(
-                candidate.rules.iter().any(|rule| rule.enabled && !rule.log_paths.is_empty()),
+                crate::platforms::admin::probe().await.ban_shield,
+                "Ban Shield enforcement requires nftables and the root-owned ban_shield grant"
+            );
+            anyhow::ensure!(
+                candidate
+                    .rules
+                    .iter()
+                    .any(|rule| rule.enabled && !rule.log_paths.is_empty()),
                 "Enforcement requires at least one enabled detection rule with a log path"
             );
         }
@@ -216,11 +221,13 @@ impl FirewallManager {
         if self.config.platform == crate::config::Platform::Linux {
             let previous = self.stores.firewall_policy.read().await.clone();
             let previous_enforced = previous.enabled && !previous.observe_only;
-            let next_enforced = policy.enabled && !policy.observe_only && !ban_config.files.is_empty();
+            let next_enforced =
+                policy.enabled && !policy.observe_only && !ban_config.files.is_empty();
 
             // Apply ordinary rule/allowlist changes without restarting the worker.
             if previous.observe_only == policy.observe_only
-                && policy.enabled && !ban_config.files.is_empty()
+                && policy.enabled
+                && !ban_config.files.is_empty()
             {
                 if let Some(engine) = inner.as_ref() {
                     engine.handle().update_config(ban_config)?;
@@ -245,7 +252,8 @@ impl FirewallManager {
                     *inner = Some(self.start_engine(ban_config)?);
                 }
                 Ok::<(), anyhow::Error>(())
-            }.await;
+            }
+            .await;
             if let Err(error) = result {
                 // Recover the previous backend and reconcile its persisted bans.
                 if previous.enabled {
@@ -395,7 +403,9 @@ impl FirewallManager {
                 Arc::new(crate::platforms::admin::HelperBanBackend::default()),
             );
             #[cfg(not(feature = "linux"))]
-            return Err(crate::ban_attack::Error::Config("Linux helper unavailable".into()));
+            return Err(crate::ban_attack::Error::Config(
+                "Linux helper unavailable".into(),
+            ));
         } else {
             BanEngine::start(config)
         }
