@@ -746,6 +746,11 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
         })
         .collect();
 
+    tools.extend([
+        {"name":"managed_storage_create","module":"managed_storage","title":"Provision new storage","description":"Create a reviewed empty directory or new sparse raw/qcow2 disk, optionally cloned from its configured image as a job. Never overwrites data, restores backups, creates parents, changes ownership or starts workloads.","readOnly":false,"destructive":true,"inputSchema":{"additionalProperties":false,"properties":{"confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."},"purpose":{"type":"string","description":"Explicitly authorize new data, never replacement of missing restored data","enum":["new_data"]},"reviewToken":{"type":"string","description":"Token from the reviewed provisioning plan","minLength":1,"maxLength":64},"revision":{"type":"string","description":"Current configuration revision","minLength":1,"maxLength":64},"sizeGiB":{"type":"integer","description":"New disk capacity in GiB; omit or use zero for a directory","minimum":0,"maximum":4096},"storage":{"type":"string","description":"Existing storage reference ID","minLength":1,"maxLength":63}},"required":["confirm","purpose","reviewToken","revision","storage"],"type":"object"}},
+        {"name":"managed_storage_plan","module":"managed_storage","title":"Review new storage","description":"Inspect an absent owned path and stopped consumers without creating data. Existing parents must be owned real directories. Private paths require management writes.","readOnly":true,"destructive":false,"inputSchema":{"additionalProperties":false,"properties":{"revision":{"type":"string","description":"Current configuration revision","minLength":1,"maxLength":64},"sizeGiB":{"type":"integer","description":"New disk capacity in GiB; omit or use zero for a directory","minimum":0,"maximum":4096},"storage":{"type":"string","description":"Existing storage reference ID","minLength":1,"maxLength":63}},"required":["revision","storage"],"type":"object"}},
+    ]);
+
     // Keep the reference's individual lifecycle contracts on the existing provider path.
     tools.extend([
         json!({"name":"managed_service_logs","module":"managed_logs","title":"Read managed application logs","description":"Explicitly read bounded recent logs for one configured managed application. Runtime logs may contain private application data. This never starts a workload or reads another application.","readOnly":true,"destructive":false,"inputSchema":{"additionalProperties":false,"properties":{"service":{"type":"string","description":"Managed application ID","minLength":1,"maxLength":63},"tail":{"type":"integer","description":"Most recent entries per native log reader; default 200","minimum":1,"maximum":2000}},"required":["service"],"type":"object"}}),
@@ -931,6 +936,7 @@ pub async fn execute_tool(
             | "managed_service_start"
             | "managed_service_stop"
             | "managed_service_restart"
+            | "managed_storage_create"
     ) {
         if let Err(error) = crate::core::linux_config::mutation_ready(&state.config, store) {
             return (
@@ -1195,6 +1201,62 @@ pub async fn execute_tool(
     }
 
     match name {
+        "managed_storage_plan" | "managed_storage_create" => {
+            if !writes_allowed(state) {
+                return (StatusCode::FORBIDDEN, json_err("writes_disabled",
+                    "Private storage provisioning requires management writes."));
+            }
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Input {
+                storage: String,
+                revision: String,
+                #[serde(default, rename = "sizeGiB")]
+                size_gib: u64,
+                review_token: Option<String>,
+                purpose: Option<String>,
+                confirm: Option<bool>,
+            }
+            let create = name == "managed_storage_create";
+            let keys_valid = if create {
+                arguments.keys().all(|key| matches!(key.as_str(),
+                    "storage" | "revision" | "sizeGiB" | "reviewToken" | "purpose" | "confirm"))
+            } else {
+                arguments.keys().all(|key| matches!(key.as_str(), "storage" | "revision" | "sizeGiB"))
+            };
+            let input = serde_json::from_value::<Input>(Value::Object(arguments));
+            let Ok(input) = input else {
+                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Invalid provisioning arguments."));
+            };
+            if !keys_valid || !crate::core::declarative::id_valid(&input.storage)
+                || input.revision.len() != 64 || input.size_gib > 4096
+                || (create && (input.confirm != Some(true) || input.purpose.as_deref() != Some("new_data")
+                    || input.review_token.as_ref().is_none_or(|token| token.len() != 64))) {
+                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Provide storage, revision, and an explicit reviewed new-data authorization for creation."));
+            }
+            if !create {
+                return match provider.storage.provision_plan(state, store, provider,
+                    &input.storage, &input.revision, input.size_gib).await {
+                    Ok(plan) => (StatusCode::OK, json!(plan)),
+                    Err(error) => (StatusCode::BAD_REQUEST, json_err("provision_unavailable", &error.to_string())),
+                };
+            }
+            let state = state.clone();
+            let store = store.clone();
+            let provider = provider.clone();
+            start_job_value(jobs, "managed_storage_create", move |running| async move {
+                if *running.cancellation().borrow() {
+                    running.finish(Outcome::Cancelled);
+                    return;
+                }
+                let result = provider.storage.provision_create(&state, &store, &provider,
+                    &input.storage, &input.revision, input.size_gib, input.review_token.as_deref().unwrap_or_default()).await;
+                match result {
+                    Ok(plan) => running.finish(Outcome::Succeeded(json!(plan))),
+                    Err(error) => running.finish(Outcome::Failed(error.to_string())),
+                }
+            }).await
+        }
         "managed_directory_browse" => {
             #[derive(serde::Deserialize)]
             #[serde(default, deny_unknown_fields)]
