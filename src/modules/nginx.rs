@@ -903,7 +903,7 @@ pub(crate) fn ensure_no_symlink_ancestors(base: &Path, target: &Path) -> Result<
         current.push(component);
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
-                bail!("path traverses a symlink")
+                bail!("path traverses a symlink: {}", current.display())
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

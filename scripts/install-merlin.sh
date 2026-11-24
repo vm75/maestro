@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+PATH=/opt/bin:/opt/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 
 SCRIPT_DIR=$(dirname "$0")
 REPO_DIR=$(dirname "$SCRIPT_DIR")

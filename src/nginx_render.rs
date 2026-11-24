@@ -2,7 +2,7 @@
 //! Policy templates are compiled into the binary; deployment data cannot shadow them.
 use std::collections::BTreeMap;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use minijinja::{Environment, UndefinedBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -1181,12 +1181,9 @@ pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
         .or_insert_with(|| var_dir.to_string_lossy().into_owned().into());
     let mut files = shared_files(config, &global)?;
     let previous_main = backup_file(&config.nginx.config_path)?;
-    if previous_main
+    let main_unchanged = previous_main
         .as_ref()
-        .is_some_and(|previous| previous.bytes == files[&config.nginx.config_path].as_bytes())
-    {
-        return Ok(false);
-    }
+        .is_some_and(|previous| previous.bytes == files[&config.nginx.config_path].as_bytes());
     for (name, content) in [
         ("mime.types", include_str!("../config/nginx/mime.types")),
         ("dhparams.pem", include_str!("../config/nginx/dhparams.pem")),
@@ -1219,14 +1216,40 @@ pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
             .and_then(Value::as_str)
             .unwrap_or("certs/default"),
     );
+    let relative = certificate_dir
+        .strip_prefix(root)
+        .context("fallback certificate directory must be inside the nginx root")?;
+    if relative
+        .components()
+        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        bail!("fallback certificate directory must not contain path traversal");
+    }
     let key = certificate_dir.join("privkey.pem");
     let certificate = certificate_dir.join("fullchain.pem");
-    nginx::ensure_no_symlink_ancestors(root, &key)?;
-    nginx::ensure_no_symlink_ancestors(root, &certificate)?;
-    if !key.exists() || !certificate.exists() {
-        if key.exists() || certificate.exists() {
+    // Existing certificates are read-only inputs and may live behind directory
+    // or file symlinks (for example, a dehydrated certificate store).
+    let existing_file = |path: &std::path::Path| -> Result<bool> {
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => Ok(true),
+            Ok(_) => bail!("certificate path is not a regular file: {}", path.display()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error)
+                .with_context(|| format!("failed to inspect certificate path {}", path.display())),
+        }
+    };
+    let key_exists = existing_file(&key)?;
+    let certificate_exists = existing_file(&certificate)?;
+    if main_unchanged && key_exists && certificate_exists {
+        return Ok(false);
+    }
+    if !key_exists || !certificate_exists {
+        if key_exists || certificate_exists {
             bail!("fallback certificate is incomplete; supply both fullchain.pem and privkey.pem");
         }
+        // Generation still requires paths owned by the managed nginx tree.
+        nginx::ensure_no_symlink_ancestors(root, &key)?;
+        nginx::ensure_no_symlink_ancestors(root, &certificate)?;
         fs::create_dir_all(&certificate_dir)?;
         let nonce = uuid::Uuid::new_v4().simple().to_string();
         let temporary_key = certificate_dir.join(format!(".{nonce}.key"));
@@ -1274,7 +1297,7 @@ pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
     }
     // Save the original before atomically replacing it. Keeping the original
     // path present also lets FileTransaction roll it back on any write failure.
-    let backup = if let Some(previous) = previous_main {
+    let backup = if let Some(previous) = previous_main.filter(|_| !main_unchanged) {
         let mut name = config
             .nginx
             .config_path
@@ -1303,9 +1326,6 @@ pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
         None
     };
     let transaction = FileTransaction::apply(config, files)?;
-    if key.exists() {
-        fs::set_permissions(key, fs::Permissions::from_mode(0o600))?;
-    }
     transaction.commit();
     if let Some(backup) = backup {
         println!("previous nginx configuration saved to {}", backup.display());
@@ -1356,6 +1376,112 @@ mod tests {
                 & 0o777,
             0o640
         );
+    }
+
+    #[tokio::test]
+    async fn bootstrap_preserves_existing_certificates_through_directory_and_file_symlinks() {
+        use std::{
+            fs,
+            os::unix::fs::{PermissionsExt, symlink},
+        };
+        for link_directory in [true, false] {
+            let temp = tempfile::tempdir().unwrap();
+            let config = bootstrap_config(temp.path());
+            let certificates = config.nginx.root_dir.join("certs/default");
+            let external = temp.path().join("external-certificates");
+            fs::rename(&certificates, &external).unwrap();
+            let key = external.join("privkey.pem");
+            fs::set_permissions(&key, fs::Permissions::from_mode(0o640)).unwrap();
+            if link_directory {
+                fs::remove_dir(config.nginx.root_dir.join("certs")).unwrap();
+                let store = temp.path().join("certificate-store");
+                fs::create_dir(&store).unwrap();
+                fs::rename(&external, store.join("default")).unwrap();
+                symlink(&store, config.nginx.root_dir.join("certs")).unwrap();
+            } else {
+                fs::create_dir(&certificates).unwrap();
+                for name in ["privkey.pem", "fullchain.pem"] {
+                    symlink(external.join(name), certificates.join(name)).unwrap();
+                }
+            }
+            assert!(bootstrap(&config).await.unwrap());
+            assert_eq!(
+                fs::read_to_string(certificates.join("privkey.pem")).unwrap(),
+                "test key"
+            );
+            assert_eq!(
+                fs::read_to_string(certificates.join("fullchain.pem")).unwrap(),
+                "test certificate"
+            );
+            assert_eq!(
+                fs::metadata(certificates.join("privkey.pem"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o640
+            );
+            let link = if link_directory {
+                config.nginx.root_dir.join("certs")
+            } else {
+                certificates.join("privkey.pem")
+            };
+            assert!(fs::symlink_metadata(link).unwrap().file_type().is_symlink());
+        }
+    }
+
+    #[tokio::test]
+    async fn bootstrap_rejects_certificate_generation_through_symlinks() {
+        use std::{fs, os::unix::fs::symlink};
+        for dangling_file in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let config = bootstrap_config(temp.path());
+            let certificates = config.nginx.root_dir.join("certs/default");
+            fs::remove_dir_all(&certificates).unwrap();
+            let outside = temp.path().join("outside");
+            fs::create_dir(&outside).unwrap();
+            let rejected = if dangling_file {
+                fs::create_dir(&certificates).unwrap();
+                let key = certificates.join("privkey.pem");
+                symlink(outside.join("missing-key.pem"), &key).unwrap();
+                key
+            } else {
+                symlink(&outside, &certificates).unwrap();
+                certificates
+            };
+            let error = bootstrap(&config).await.unwrap_err().to_string();
+            assert!(error.contains("path traverses a symlink"), "{error}");
+            assert!(error.contains(&rejected.display().to_string()), "{error}");
+            assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn bootstrap_rejects_incomplete_and_non_regular_certificate_pairs() {
+        use std::fs;
+        for directory in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let config = bootstrap_config(temp.path());
+            let certificate = config.nginx.root_dir.join("certs/default/fullchain.pem");
+            fs::remove_file(&certificate).unwrap();
+            if directory {
+                fs::create_dir(&certificate).unwrap();
+            }
+            let error = bootstrap(&config).await.unwrap_err().to_string();
+            assert!(
+                error.contains(if directory {
+                    "not a regular file"
+                } else {
+                    "incomplete"
+                }),
+                "{error}"
+            );
+            assert_eq!(
+                fs::read_to_string(config.nginx.root_dir.join("certs/default/privkey.pem"))
+                    .unwrap(),
+                "test key"
+            );
+        }
     }
 
     #[tokio::test]

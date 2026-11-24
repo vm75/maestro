@@ -478,6 +478,7 @@ mod tests {
         config.apply_test_mode(&config_path).unwrap();
         config.test_mode = false;
         config.platform = crate::config::Platform::Linux;
+        config.commands.tar = "/bin/tar".into();
         crate::backup::run(&config, &config_path, None)
             .await
             .unwrap();

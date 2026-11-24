@@ -508,7 +508,11 @@ restarts dnsmasq through the configured service command and arguments.
   daemon mode and temporary parent are saved inputs rather than edits to generated
   nginx text. The effective UID determines whether a worker-user directive is
   emitted: non-root omits it; root uses the configured user or `nobody`. Temporary
-  subfolder names are fixed, and directory creation rejects symlink traversal. Relative fallback certificate paths resolve below the nginx root.
+  subfolder names are fixed, and directory creation rejects symlink traversal.
+  Relative fallback certificate paths resolve below the nginx root. Initialization
+  follows certificate symlinks only for an existing pair of regular files,
+  preserving their contents and permissions; certificate generation retains
+  managed-path symlink protections.
   Custom server text is
   not rendered as Jinja and is preserved when defaults change.
 - `nginx.inputs_dir` defaults to `/opt/etc/maestro/nginx`; all persistent

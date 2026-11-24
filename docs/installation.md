@@ -8,6 +8,7 @@ For a router installation:
 
 - Asuswrt-Merlin with JFFS custom scripts/configuration enabled.
 - Entware mounted at `/opt`.
+- Entware GNU tar (`opkg install tar`) for backups and automatic upgrades.
 - A binary built for the router CPU and libc/ABI.
 - nginx, dehydrated, OpenSSL, ipset, iptables, and related utilities only for
   the features that use them.
@@ -103,11 +104,24 @@ an existing configuration file is required. Configured root symlink targets are
 included, while symlinks inside archived directories are preserved without following
 them. Archives use paths relative to `/` for manual extraction and restore.
 
-The command uses `commands.tar` (default `/bin/tar`) with gzip support and a
+The command uses `commands.tar` (router default `/opt/bin/tar`, native system
+tar on Linux) with gzip and GNU exclusion support and a
 five-minute timeout. Archives have mode `0600` because they contain tokens and
 private keys. Failed archives are removed, existing archives are never overwritten,
 and prior `maestro-backup-*.tar.gz` archives are excluded to prevent recursive
 backups. A second backup in the same second fails rather than replacing the first.
+
+Router backups use Entware `/opt/bin/tar`.
+The router setup scripts also prefer `/opt/bin` and `/opt/sbin` for Unix tools.
+`mount`, `umount`, and `ping` use `/bin`; OpenSSL uses `/usr/sbin/openssl`.
+Router-specific service, NVRAM and firewall commands retain their firmware paths.
+Explicit `commands` values in existing YAML take precedence; update old paths
+there when upgrading.
+
+Before using `maestro upgrade` from 0.12.0, install Entware tar and explicitly
+set `commands.tar: /opt/bin/tar` in the existing YAML. The installed version
+creates its backup before the new package and its dependencies are installed.
+
 Test mode only prints the planned destination and does not create an archive.
 
 Backups read files without stopping services or freezing writes. Avoid editing

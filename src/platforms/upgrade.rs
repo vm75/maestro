@@ -268,6 +268,7 @@ mod tests {
         config.apply_test_mode(&path).unwrap();
         config.test_mode = false;
         config.platform = Platform::Linux;
+        config.commands.tar = "/bin/tar".into();
         // Missing configuration must block upgrading unless explicitly skipped.
         let error = prepare_backup(&config, &path, false).await.unwrap_err();
         assert!(error.to_string().contains("no installation was attempted"));

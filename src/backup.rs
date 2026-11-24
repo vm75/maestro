@@ -203,6 +203,7 @@ mod tests {
             platform: Platform::Linux,
             ..AppConfig::default()
         };
+        config.commands.tar = PathBuf::from("/bin/tar");
         config.paths.data_dir = config_dir.join("state");
         config.nginx.root_dir = base.join("nginx");
         config.nginx.inputs_dir = config_dir.join("nginx");

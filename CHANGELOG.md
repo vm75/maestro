@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.12.1
+
+### Fixed
+
+- Repair missing fallback certificate pairs during `init-nginx` even when the main nginx configuration is already current.
+- Allow `init-nginx` to use existing certificate pairs through directory or file symlinks without modifying the certificates; keep symlink protections for generated files and identify rejected paths.
+- Use Entware tar for router backups and require its package, avoiding unsupported BusyBox exclusion options. Prefer Entware utilities in router setup and DNS hook scripts while retaining native Linux commands.
+
 ## 0.12.0
 
 ### Changed

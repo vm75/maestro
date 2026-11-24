@@ -43,6 +43,7 @@ install -m 0644 config/firewall-policy.example.json "$DATA/opt/share/maestro/fir
 cat > "$CONTROL/control" <<EOF
 Package: maestro
 Conflicts: router-hub
+Depends: tar
 Version: ${VERSION}-1
 Architecture: ${ARCH}
 Maintainer: Maestro contributors

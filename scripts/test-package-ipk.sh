@@ -22,6 +22,7 @@ tar -xzOf "$PACKAGE_DIR/$NAME" ./control.tar.gz > "$TMP/control.tar.gz"
 tar -xzOf "$PACKAGE_DIR/$NAME" ./data.tar.gz > "$TMP/data.tar.gz"
 tar -xOzf "$TMP/control.tar.gz" ./control | grep -Fx 'Architecture: aarch64-3.10'
 tar -xOzf "$TMP/control.tar.gz" ./control | grep -Fx 'Conflicts: router-hub'
+tar -xOzf "$TMP/control.tar.gz" ./control | grep -Fx 'Depends: tar'
 tar -tzf "$TMP/control.tar.gz" | grep -Fx './postinst'
 tar -tzf "$TMP/control.tar.gz" | grep -Fx './prerm'
 # Installation consumes YAML only; no transitional migration commands.

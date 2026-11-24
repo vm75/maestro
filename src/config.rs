@@ -541,7 +541,7 @@ pub struct CommandsConfig {
 impl Default for CommandsConfig {
     fn default() -> Self {
         Self {
-            tar: "/bin/tar".into(),
+            tar: "/opt/bin/tar".into(),
             mount: "/bin/mount".into(),
             umount: "/bin/umount".into(),
             nginx: "/opt/sbin/nginx".into(),

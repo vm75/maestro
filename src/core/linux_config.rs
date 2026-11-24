@@ -181,6 +181,10 @@ pub fn load(path: &Path) -> Result<AppConfig> {
             .find(|path| path.is_file())
             .unwrap_or_else(|| Path::new("/usr/bin").join(name))
     };
+    config.commands.tar = native("tar");
+    config.commands.mount = native("mount");
+    config.commands.umount = native("umount");
+    config.commands.ping = native("ping");
     config.commands.nginx = native("nginx");
     config.commands.openssl = native("openssl");
     config.commands.ip = native("ip");
@@ -385,6 +389,17 @@ mod tests {
         assert_eq!(config.platform, Platform::Linux);
         assert_eq!(config.server.port, 8080);
         assert!(config.linux_authority.is_some());
+        for path in [
+            &config.commands.tar,
+            &config.commands.mount,
+            &config.commands.umount,
+            &config.commands.openssl,
+            &config.commands.ping,
+        ] {
+            assert!(
+                path.starts_with("/usr") || path.starts_with("/bin") || path.starts_with("/sbin")
+            );
+        }
     }
 
     #[test]

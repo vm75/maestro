@@ -285,6 +285,14 @@ async fn bootstrap_installs_current_format_and_backs_up_existing_main_configurat
     assert!(main.contains("daemon on;"));
     assert!(!main.contains("{{"));
     assert!(root.join("certs/default/fullchain.pem").is_file());
+    // A current nginx.conf must not prevent repairing a missing fallback pair.
+    fs::remove_file(root.join("certs/default/fullchain.pem")).unwrap();
+    fs::remove_file(root.join("certs/default/privkey.pem")).unwrap();
+    assert!(nginx_render::bootstrap(&config).await.unwrap());
+    assert_eq!(fs::read_to_string(&config.nginx.config_path).unwrap(), main);
+    assert!(root.join("certs/default/fullchain.pem").is_file());
+    assert!(root.join("certs/default/privkey.pem").is_file());
+    assert!(!nginx_render::bootstrap(&config).await.unwrap());
     assert!(root.join("mime.types").is_file());
     assert!(!root.join("templates").exists());
     assert!(nginx_render::global_path(&config).is_file());

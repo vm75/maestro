@@ -18,7 +18,7 @@ paths:
   jffs_scripts_dir: /jffs/scripts
   wireguard_conf: /opt/etc/wireguard/wgs1.conf
 commands:
-  tar: /bin/tar
+  tar: /opt/bin/tar
   mount: /bin/mount
   umount: /bin/umount
   nginx: /opt/sbin/nginx

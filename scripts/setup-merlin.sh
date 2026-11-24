@@ -1,6 +1,8 @@
 #!/bin/sh
 # Shared first-install/upgrade configuration for tarball and Entware IPK installs.
 set -eu
+PATH=/opt/bin:/opt/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 
 EXAMPLES_DIR="${1:?Usage: setup-merlin.sh EXAMPLES_DIR}"
 CONFIG_DIR="/opt/etc/maestro"

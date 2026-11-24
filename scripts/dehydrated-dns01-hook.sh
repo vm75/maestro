@@ -11,6 +11,10 @@
 
 set -euo pipefail
 
+if [[ -x /opt/bin/opkg ]]; then
+  export PATH="/opt/bin:/opt/sbin:${PATH}"
+fi
+
 : "${DNS_PROVIDER:?DNS_PROVIDER is not set (duckdns, namesilo, or cloudflare)}"
 
 deploy_challenge() {
