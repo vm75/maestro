@@ -423,18 +423,21 @@ fn verify_nfs(old: &BTreeMap<Key,Export>, next: &BTreeMap<Key,Export>, actual: &
     Ok(())
 }
 
-async fn apply_nfs(before: &[Definition], after: &[Definition], active: &[Export], output: &mut Tail) -> Result<()> {
+async fn apply_nfs(before: &[Definition], after: &[Definition], active: &[Export], output: &mut Tail, cancel: &watch::Receiver<bool>) -> Result<()> {
     let old = pairs(before);
     let next = pairs(after);
     let current = export_map(active);
     for e in next.values() {
+        ensure!(!*cancel.borrow(), "context canceled");
         export(e,false,output).await.map_err(|_| anyhow::anyhow!("NFS export apply failed"))?;
     }
     for (key,e) in &old {
         if !next.contains_key(key) && current.contains_key(key) {
+            ensure!(!*cancel.borrow(), "context canceled");
             export(e,true,output).await.map_err(|_| anyhow::anyhow!("NFS export removal failed"))?;
         }
     }
+    ensure!(!*cancel.borrow(), "context canceled");
     let actual = nfs_active().await.map_err(|_| anyhow::anyhow!("NFS runtime verification failed"))?;
     verify_nfs(&old,&next,&actual)
 }
@@ -506,13 +509,15 @@ async fn replace_definitions(protocol: &str, old: &Snapshot, previous: &[Definit
     }
     // Once a rename succeeds, cancellation is an activation failure, not an
     // instruction to drop the transaction. Rollback gets its own deadline.
-    let result = tokio::select! {
-        biased;
-        _ = cancelled(&mut cancel) => Err(anyhow::anyhow!("context canceled")),
-        result = async {
-            if protocol == "samba" { reload_samba().await }
-            else { apply_nfs(previous,next,&prepared.active,output).await }
-        } => result,
+    // Let each short native command finish or hit its own deadline before
+    // restoring the export table. Dropping an in-flight mutator on signal
+    // could race its side effects against the rollback.
+    let result = if *cancel.borrow() {
+        Err(anyhow::anyhow!("context canceled"))
+    } else if protocol == "samba" {
+        reload_samba().await
+    } else {
+        apply_nfs(previous,next,&prepared.active,output,&cancel).await
     };
     if result.is_err() || *cancel.borrow() {
         append(output,"Apply failed; restoring previous configuration and runtime entries…\n");
