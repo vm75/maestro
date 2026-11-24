@@ -1,7 +1,7 @@
 //! Native Compose adapter translated from Server Man compose_adapter.go and
 //! compose_render.go. Both engines share the same lifecycle and ownership path.
 use super::*;
-use crate::core::declarative::{ApplyMode, Operation, composite::ManagedLogs, plan::service_fingerprint, quadlet::ContainerMemberStatus, revision};
+use crate::core::declarative::{ApplyMode, composite::ManagedLogs, plan::service_fingerprint, quadlet::ContainerMemberStatus, revision};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
@@ -138,7 +138,7 @@ fn expected_member(config: &Config,id: &str,member: &Member) -> bool {
 }
 
 fn properties(bytes: &[u8]) -> Result<BTreeMap<String,String>> {
-    let result=BTreeMap::from_iter(std::str::from_utf8(bytes)?.lines().filter_map(|line|line.split_once('=')).map(|(k,v)|(k.into(),v.into())));
+    let result: BTreeMap<String,String>=BTreeMap::from_iter(std::str::from_utf8(bytes)?.lines().filter_map(|line|line.split_once('=')).map(|(k,v)|(k.into(),v.into())));
     ensure!(result.contains_key("LoadState") && result.contains_key("ActiveState"),"cannot inspect Compose boot unit");
     Ok(result)
 }
@@ -256,11 +256,11 @@ impl ComposeProvider {
         let by_owner=format!("label=io.server-man.service={id}");
         let project=project(id);
         let by_project=format!("label=com.docker.compose.project={project}");
-        let mut members=parse_inventory(&self.engine_command(&["ps","--all","--filter",&by_owner,"--format","json"],5,256*1024,false).await?.stdout,id)?;
+        let mut members=parse_inventory(&self.engine_command(&["ps","--all","--filter",&by_owner,"--format","json"],None,5,256*1024,false).await?.stdout,id)?;
         let mut filters=vec![by_project];
         if self.engine=="podman"{filters.push(format!("label=io.podman.compose.project={project}"));}
         for filter in filters {
-            let rows=parse_inventory(&self.engine_command(&["ps","--all","--filter",&filter,"--format","json"],5,256*1024,false).await?.stdout,id)?;
+            let rows=parse_inventory(&self.engine_command(&["ps","--all","--filter",&filter,"--format","json"],None,5,256*1024,false).await?.stdout,id)?;
             for (name,member) in rows{
                 if let Some(old)=members.get(&name){ensure!(old==&member,"native Compose inventory changed during inspection");}
                 else{members.insert(name,member);}
@@ -276,11 +276,11 @@ impl ComposeProvider {
         Ok(())
     }
     pub async fn check_prerequisites(&self)->Result<()>{
-        self.engine_command(&["compose","version"],4,64*1024,false).await?;
+        self.engine_command(&["compose","version"],None,4,64*1024,false).await?;
         if self.engine=="podman"{
-            let info=self.engine_command(&["info","--format","{{.Host.Security.Rootless}}"],4,64*1024,false).await?;
+            let info=self.engine_command(&["info","--format","{{.Host.Security.Rootless}}"],None,4,64*1024,false).await?;
             ensure!(String::from_utf8_lossy(&info.stdout).trim()=="true","local rootless Podman is unavailable");
-        }else{self.engine_command(&["info","--format","json"],4,256*1024,false).await?;}
+        }else{self.engine_command(&["info","--format","json"],None,4,256*1024,false).await?;}
         self.user_command(&["show","--property=Version"],4).await?;
         Ok(())
     }
