@@ -121,13 +121,35 @@ install_toolchains() {
     python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ required"; import jinja2, yaml'
 }
 
+init_helper() {
+    if ! command -v mise >/dev/null && ! check_rust && command -v rustup >/dev/null; then
+        export RUSTUP_TOOLCHAIN=stable
+    fi
+    check_rust || fail 'Run make init-linux to install Rust 1.85+.'
+    # Keep the locally built artifact at a known path even with CARGO_TARGET_DIR.
+    local target="$repo_root/target"
+    rust_command cargo build --locked --no-default-features --features linux --bin maestro-admin --target-dir "$target"
+    sudo -- /bin/bash "$repo_root/scripts/linux-helper.sh" install "$target/debug/maestro-admin"
+    if ! sudo -n -l -u root -- /usr/local/libexec/maestro-admin; then
+        fail 'Helper installed but exact sudo authorization is not available. Check sudoers includes.'
+    fi
+    printf 'Enable server.allow_writes and server.privileged_operations in data/linux/maestro.yaml (legacy: system.allow_workload_writes, system.allow_share_writes, system.allow_package_writes).\n'
+    printf 'Restart with make run-linux and check Agent access > Capabilities.\n'
+}
+
 main() {
-    [[ $# == 1 && ( $1 == init || $1 == run ) ]] || fail 'Usage: scripts/linux-dev.sh init|run'
-    [[ $(id -u) != 0 ]] || fail 'Run make init-linux/run-linux as your non-root development account; package installation uses sudo.'
+    [[ $# == 1 && ( $1 == init || $1 == run || $1 == init-helper || $1 == remove-helper ) ]] || fail 'Usage: scripts/linux-dev.sh init|run|init-helper|remove-helper'
+    [[ $(id -u) != 0 ]] || fail 'Run Linux development targets as your non-root development account; privileged installation uses sudo.'
     # Shared by initialization and runtime, including the Python nginx renderer.
     export PATH="$tools_dir/python/bin:$tools_dir/node/bin:${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
     cd "$repo_root"
     case "$1" in
+        init-helper)
+            init_helper
+            ;;
+        remove-helper)
+            sudo -- /bin/bash "$repo_root/scripts/linux-helper.sh" remove
+            ;;
         init)
             install_system_dependencies
             install_toolchains

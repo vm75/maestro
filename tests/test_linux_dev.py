@@ -201,6 +201,28 @@ class LinuxDevTest(unittest.TestCase):
         self.assertIn("linux-ui", serve)
         self.assertNotIn("--test-mode", serve)
 
+    def test_helper_build_before_sudo_and_without_ui(self):
+        self.program("id", "print('1000')")
+        self.program("mise", "if 'rustc' in sys.argv: print('rustc 1.85.0 (fixture)')")
+        self.run_shell("main init-helper")
+        commands = self.commands()
+        build = next(c for c in commands if "build" in c)
+        install = next(c for c in commands if c[0] == "sudo" and "install" in c)
+        self.assertIn("maestro-admin", build)
+        self.assertIn("linux", build)
+        self.assertNotIn("linux-ui", build)
+        self.assertLess(commands.index(build), commands.index(install))
+        self.assertEqual(install, ["sudo", "--", "/bin/bash", str(self.root / "scripts/linux-helper.sh"),
+                                   "install", str(self.root / "target/debug/maestro-admin")])
+        self.assertIn(["sudo", "-n", "-l", "-u", "root", "--", "/usr/local/libexec/maestro-admin"], commands)
+        self.assertFalse(any("npm" in c for c in commands))
+
+    def test_remove_helper_does_not_build_or_install_packages(self):
+        self.program("id", "print('1000')")
+        self.run_shell("main remove-helper")
+        self.assertEqual(self.commands(), [["id", "-u"], ["sudo", "--", "/bin/bash",
+                         str(self.root / "scripts/linux-helper.sh"), "remove"]])
+
     def test_root_is_rejected_before_any_changes(self):
         self.program("id", "print('0')")
         result = self.run_shell("main init", success=False)

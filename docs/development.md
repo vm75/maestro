@@ -54,6 +54,40 @@ and existing Maestro configuration are preserved. Both init and run select the
 same tools without requiring shell activation. Each run rebuilds the Svelte UI
 before compiling and starting Maestro. See the [Linux integration guide](linux.md).
 
+### Optional privileged helper for development
+
+On a disposable Linux development host, stop the foreground Maestro process and run:
+
+```sh
+make init-linux-helper
+```
+
+This builds only `maestro-admin` as your normal account, then uses sudo to
+review and install the root-owned executable and exact no-argument sudoers
+rule. On first installation the proposed policy enables package writes,
+Samba password changes, share publication and the distribution's Samba/NFS
+setup units; review the displayed grants before approving. Existing root-owned
+policy contents for the same workload UID are preserved. No packages,
+Samba/NFS shares or systemd service installation are performed by this target.
+
+In the existing `data/linux/maestro.yaml`, enable `server.allow_writes: true`
+and `server.privileged_operations: true` in the native Linux format. For the
+legacy layout use `system.allow_workload_writes`, `system.allow_package_writes`
+and `system.allow_share_writes`. The helper target intentionally does not
+rewrite this workload-owned configuration. Restart with `make run-linux`
+and check Agent access > Capabilities. Use `sudoedit /etc/maestro/admin-policy.json`
+to narrow or change the reviewed grants.
+
+```sh
+make remove-linux-helper
+```
+
+This removes the exact sudoers rule and helper executable after confirmation;
+it preserves the policy, configuration and native services/shares. Restart
+Maestro to test helper-free behavior. These targets affect fixed host paths
+and must not be used on a production host or concurrently with the production
+installer. Normal `make init-linux` remains helper-free.
+
 QEMU router mode runs the real AArch64 router binary with Entware and mocked
 ASUS firmware interfaces in an Alpine guest. Setup builds the release IPK,
 downloads guest media and runs the guest installer; it requires the AArch64

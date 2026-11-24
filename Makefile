@@ -1,11 +1,13 @@
 .DEFAULT_GOAL := check
 
-.PHONY: help check test test-linux test-podman test-quadlet test-nginx test-ipk test-ui test-router test-lab run run-linux run-router run-simulated init-linux init-router fmt clippy release ipk init-lab run-lab
+.PHONY: help check test test-linux test-podman test-quadlet test-nginx test-ipk test-ui test-router test-lab run run-linux run-router run-simulated init-linux init-linux-helper remove-linux-helper init-router fmt clippy release ipk init-lab run-lab
 
 help:
 	@echo 'Development environments (run one at a time; all use API port 3030):'
 	@echo '  make run-simulated  Run fixture-backed router simulation (no setup required)'
 	@echo '  make init-linux    Install Arch/Debian dependencies and prepare native Linux'
+	@echo '  make init-linux-helper    Build and install the optional reviewed development helper'
+	@echo '  make remove-linux-helper  Remove the helper and its sudo authorization'
 	@echo '  make run-linux     Build the Linux UI and run real Linux operations as non-root'
 	@echo '  make init-router   Build the IPK and install the AArch64 QEMU router guest'
 	@echo '  make run-router    Boot the installed QEMU router guest'
@@ -49,6 +51,12 @@ run-simulated:
 
 init-linux:
 	bash scripts/linux-dev.sh init
+
+init-linux-helper:
+	bash scripts/linux-dev.sh init-helper
+
+remove-linux-helper:
+	bash scripts/linux-dev.sh remove-helper
 
 run-linux:
 	bash scripts/linux-dev.sh run

@@ -48,7 +48,7 @@ uses compatible Node/npm or an official, checksum-verified Node 22 binary under
 `.dev-tools/node` (x86_64/AArch64). Without uv it installs distro Python, Jinja2
 and PyYAML and requires Python 3.11+. The wrapper selects these tools for both
 init and run without changing your global tool defaults or requiring activation.
-No privileged Maestro helper is installed. Each run builds the UI and starts
+No privileged Maestro helper is installed by `make init-linux`. For explicit\nreviewed development helper installation/removal, see\n[the optional helper targets](development.md#optional-privileged-helper-for-development).\nEach run builds the UI and starts
 the Linux-feature server as your account. See the
 [development environments](development.md#run-locally) for the equivalent
 simulated-router and QEMU-router commands.
