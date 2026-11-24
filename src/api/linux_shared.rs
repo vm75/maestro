@@ -87,7 +87,10 @@ pub(super) fn router(state: AppState) -> Router<AppState> {
             "/shared/firewall/allowlist/{network}",
             delete(firewall::delete_allowlist),
         )
-        .route("/shared/firewall/bans", post(firewall::manual_ban))
+        .route(
+            "/shared/firewall/bans",
+            get(firewall::list_bans).post(firewall::manual_ban),
+        )
         .route("/shared/firewall/bans/{network}", delete(firewall::unban))
         .route(
             "/shared/firewall/reset-counts/{network}",

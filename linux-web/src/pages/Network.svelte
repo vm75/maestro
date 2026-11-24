@@ -21,6 +21,13 @@
   let password = $state('')
   let rewrites = $state<Rewrite[]>([])
   let rewriteDraft = $state<Rewrite[] | null>(null)
+  let rewriteSort = $state<'domain'|'answer'>('domain')
+  let rewriteDirection = $state(1)
+  function sortRewrites(key: typeof rewriteSort) { if (rewriteSort===key) rewriteDirection *= -1; else {rewriteSort=key; rewriteDirection=1} }
+  const sortedRewrites = $derived(rewrites.map((rewrite,index)=>({rewrite,index})).sort((a,b)=>rewriteDirection*a.rewrite[rewriteSort].localeCompare(b.rewrite[rewriteSort],undefined,{numeric:true})))
+  let notesDialog = $state<HTMLDialogElement>()
+  let notesMachine = $state<Machine | null>(null)
+  function showNotes(item:Machine) {notesMachine=item;notesDialog?.showModal()}
   let pollError = $state('')
   let pollController: AbortController | undefined
   let polling = false
@@ -126,9 +133,10 @@
     <div class="shared-table"><table><thead><tr><th>Machine</th><th>MAC address</th><th>Reachability</th><th>Actions</th></tr></thead><tbody>
       {#each machines as item (item.id)}
         {@const reach = machineStatus.find(s => s.id === item.id)}
-        <tr><td>{item.name}<small>{item.notes}</small></td><td class="mono">{item.mac}</td><td>{reach?.status || 'unknown'} {reach?.ip || ''}</td><td>
+        <tr><td>{item.name}</td><td class="mono">{item.mac}</td><td>{reach?.status || 'unknown'} {reach?.ip || ''}</td><td>
           <button disabled={!allowWrites || busy} onclick={() => mutate('wol/' + item.id + '/wake', 'POST')}>Wake</button>
           <button disabled={!allowWrites || busy} onclick={() => machine = {...item}}>Edit</button>
+          <button type="button" onclick={()=>showNotes(item)}>Notes</button>
           <button disabled={!allowWrites || busy} onclick={() => { if (confirm('Delete ' + item.name + '?')) void mutate('wol/' + item.id, 'DELETE') }}>Delete</button>
         </td></tr>
       {/each}
@@ -160,7 +168,7 @@
     {#each ['protection', 'filtering'] as kind}
       {@const enabled = kind === 'protection' ? adStatus.protection_enabled : adStatus.filtering_enabled}
       {@const seconds = kind === 'protection' ? adStatus.protection_remaining_seconds : adStatus.filtering_remaining_seconds}
-      <h3>DNS {kind}</h3><p>{enabled ? 'Enabled' : 'Paused · ' + remaining(seconds)}</p>
+      <h3>DNS {kind}</h3><p>{enabled ? 'Enabled' : seconds != null && seconds > 0 ? 'Paused · ' + remaining(seconds) : 'Disabled'}</p>
       {#if enabled}
         {#each pauseMinutes as duration}
           <button disabled={!allowWrites || busy} onclick={() => mutate('adguard/' + kind, 'POST', {enabled: false, duration_minutes: duration})}>{duration} min</button>
@@ -169,8 +177,8 @@
     {/each}
   </section>{/if}
   {#if ad?.enabled && !errors['DNS rewrites'] && !loading}<section class="panel"><h2>DNS rewrites</h2><p>{rewrites.length} editable rewrites. Nginx-managed names are excluded.</p>
-    <div class="shared-table"><table><thead><tr><th>Domain</th><th>Answer</th><th>Action</th></tr></thead><tbody>
-      {#each rewrites as rewrite, index}<tr><td>{rewrite.domain}</td><td>{rewrite.answer}</td><td><button disabled={!allowWrites || busy || !!rewriteDraft} onclick={() => { if (confirm('Remove this DNS rewrite?')) void mutate('adguard/rewrites', 'PUT', rewrites.filter((_, i) => i !== index)) }}>Remove</button></td></tr>{/each}
+    <div class="shared-table"><table><thead><tr>{#each ['domain','answer'] as key}<th aria-sort={rewriteSort===key?(rewriteDirection===1?'ascending':'descending'):'none'}><button type="button" onclick={()=>sortRewrites(key as typeof rewriteSort)}>{key==='domain'?'Domain':'Answer'} {rewriteSort===key?(rewriteDirection===1?'↑':'↓'):'↕'}</button></th>{/each}<th>Action</th></tr></thead><tbody>
+      {#each sortedRewrites as {rewrite,index}}<tr><td>{rewrite.domain}</td><td>{rewrite.answer}</td><td><button disabled={!allowWrites || busy || !!rewriteDraft} onclick={() => { if (confirm('Remove this DNS rewrite?')) void mutate('adguard/rewrites', 'PUT', rewrites.filter((_, i) => i !== index)) }}>Remove</button></td></tr>{/each}
     </tbody></table></div>
     {#if allowWrites}
       {#if rewriteDraft}
@@ -216,6 +224,7 @@
   {:else if wg && !wg.peers_writable}<p class="policy-note">To enable peer management, authorize wireguard_peers in the root-owned helper policy.</p>{/if}
 {/if}
 
+<dialog bind:this={notesDialog} class="confirm-dialog" aria-label="Machine notes"><h2>{notesMachine?.name} — Notes</h2><p style="white-space:pre-wrap;overflow-wrap:anywhere">{notesMachine?.notes || 'No notes'}</p><button type="button" onclick={()=>notesDialog?.close()}>Close notes</button></dialog>
 <style>
   .shared-table { overflow-x: auto; margin-top: 1rem; }
   table { width: 100%; border-collapse: collapse; text-align: left; }

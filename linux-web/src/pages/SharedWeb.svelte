@@ -5,7 +5,7 @@
   import type { SharedDiscovery } from '../lib/shared'
   import NginxGlobalEditor from '../lib/NginxGlobalEditor.svelte'
   import NginxPolicyEditor from '../lib/NginxPolicyEditor.svelte'
-  import {normalizeGlobal,clone,type GlobalSettings,type Settings,type EffectiveAccess,type Usage} from '../lib/nginx-config'
+  import {normalizeGlobal,clone,type GlobalSettings,type Settings,proxyActive, type EffectiveAccess,type Usage} from '../lib/nginx-config'
 
   let { discovery, allowWrites, initialSection = 'nginx' }: { discovery: SharedDiscovery; allowWrites: boolean; initialSection?: 'nginx'|'certificates' } = $props()
   const hasNginx = $derived(discovery.modules.some(m => m.id === 'nginx' && m.availability === 'ready'))
@@ -172,7 +172,8 @@
   }
   $effect(() => {
     const payload = JSON.stringify({kind:siteKind,domain:siteDomain,settings:siteSettings})
-    const shouldPreview = section === 'nginx' && siteEditorOpen && !!siteDomain.trim() && !customSite && !!settings
+    const savedGlobal = settings
+    const shouldPreview = section === 'nginx' && siteEditorOpen && !!siteDomain.trim() && !customSite && !!savedGlobal
     const canPreview = allowWrites
     const stored = editingSite?.effective_access
     previewController?.abort(); preview = null; previewError = ''; previewBusy = false
@@ -248,7 +249,7 @@
             <label>Kind <select bind:value={siteKind} disabled={!!editingSite} onchange={event=>{if(event.currentTarget.value==='subfolder'){const next={...siteSettings};delete next.listener_profile;siteSettings=next}preview=null;previewController?.abort();previewBusy=false}}><option value="domain">Domain</option><option value="subdomain">Subdomain</option><option value="subfolder">Subfolder</option></select></label>
             {#if siteKind==='domain' || editingSite}<label>Domain <input bind:value={siteDomain} required disabled={!!editingSite} /></label>{:else}<label>Parent domain <select bind:value={siteDomain} required><option value="">Choose a domain</option>{#each sites.filter(s=>s.kind==='domain') as parent}<option value={parent.domain}>{parent.domain}{parent.enabled?'':' (disabled)'}</option>{/each}</select></label>{/if}
             {#if siteKind !== 'domain'}<label>Name <input bind:value={siteName} required disabled={!!editingSite} /></label>{/if}
-            <label>Upstream <input bind:value={siteUpstream} placeholder="http://127.0.0.1:8080" /></label>
+            {#if customSite || proxyActive(siteKind,siteSettings,settings?.site_defaults ?? {})}<label>Upstream <input bind:value={siteUpstream} placeholder="http://127.0.0.1:8080" /></label>{/if}
             {#if siteKind!=='subfolder'}<label>Server names (optional, space separated) <textarea rows="2" bind:value={siteServerNames}></textarea></label>{/if}
             <label><input type="checkbox" bind:checked={customSite} disabled={!!editingSite} /> Custom Nginx configuration</label>
             {#if customSite}<label>Configuration <textarea bind:value={siteContent} rows="8" required></textarea></label>
@@ -264,7 +265,7 @@
                 <p>{preview.inherited_from ? 'The parent domain restricts allowed sources and controls the listener; proxy settings and routes inherit global defaults.' : ''}</p>
                 <p>HTTPS: {preview.https.map(e=>e.address+':'+e.port).join(', ') || 'None'} · HTTP: {preview.http.map(e=>e.address+':'+e.port).join(', ') || 'None'}</p>
                 <p>Allowed sources: {preview.allowed_sources === null ? 'Public' : preview.allowed_sources.join(', ') || 'Denied'}</p>{#if siteKind!=='domain' && sites.some(s=>s.kind==='domain' && s.domain===siteDomain && !s.enabled)}<p class="form-error">Containing domain is disabled.</p>{/if}
-                {#each preview.routes as route}<p><code>{route.path}</code> · {route.access_policy} · {route.allowed_sources === null ? 'Public' : route.allowed_sources.join(', ') || 'Denied'}</p>{/each}
+                {#each (proxyActive(siteKind,siteSettings,settings?.site_defaults ?? {})?preview.routes:[]) as route}<p><code>{route.path}</code> · {route.access_policy} · {route.allowed_sources === null ? 'Public' : route.allowed_sources.join(', ') || 'Denied'}</p>{/each}
               </div>{/if}
             {:else}<p class="form-error">Load global settings before editing managed sites.</p>{/if}
             {#if !editingSite}<label><input type="checkbox" bind:checked={siteEnabled}/> Enable after creating</label>{/if}

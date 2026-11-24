@@ -1,10 +1,11 @@
 <script lang="ts">
   import NginxFields from './NginxFields.svelte'
-  import {accessNames,listenerNames,accessValue,setAccess,setField,policyFields,type GlobalSettings,type Settings} from './nginx-config'
+  import {accessNames,listenerNames,accessValue,setAccess,setField,policyFields,proxyActive,visiblePolicyFields,type GlobalSettings,type Settings} from './nginx-config'
   let { value = $bindable({}), global, kind = 'domain', defaults = false, disabled = false }:
     {value: Settings; global: GlobalSettings; kind?: string; defaults?: boolean; disabled?: boolean} = $props()
   const inherited = $derived(defaults ? {} : global.site_defaults)
-  const fields = $derived(policyFields.filter(f => !f.domainOnly || kind === 'domain').map(f => f.key === 'limit_policy' ? {...f, options:['default',...Object.keys(global.limit_policies)]} : f))
+  const proxy = $derived(defaults || proxyActive(kind,value,inherited))
+  const fields = $derived((defaults ? policyFields : visiblePolicyFields(kind,value,inherited)).map(f => f.key === 'limit_policy' ? {...f, options:['default',...Object.keys(global.limit_policies)]} : f))
   let routeText = $state('')
   let routeError = $state('')
   let rawOpen = $state(false)
@@ -76,13 +77,13 @@
     {#each accessNames(global) as name}<option value={name}>{name}</option>{/each}
     {#if accessValue(value) && !accessNames(global).includes(accessValue(value))}<option value={accessValue(value)}>Missing saved choice: {accessValue(value)}</option>{/if}
   </select></label>
-  <label>Restricted Sessions access policy<select disabled={disabled} value={String(value.restricted_sessions_policy ?? '')} onchange={e => value=setField(value,'restricted_sessions_policy',e.currentTarget.value || undefined)}>
+  {#if proxy}<label>Restricted Sessions access policy<select disabled={disabled} value={String(value.restricted_sessions_policy ?? '')} onchange={e => value=setField(value,'restricted_sessions_policy',e.currentTarget.value || undefined)}>
     <option value="">Inherit ({String(inherited.restricted_sessions_policy ?? 'legacy')})</option>
     {#each accessNames(global) as name}<option value={name}>{name}</option>{/each}
-  </select></label>
+  </select></label>{/if}
 </div>
 <NginxFields {fields} bind:value {inherited} {disabled} />
-<details>
+{#if proxy}<details>
   <summary>Path access rules and blocked paths</summary>
   <p class="muted">{value.routes === undefined ? 'Inheriting default routes (editing creates an override)' : routes.length + ' explicit route policies'}. Child rules cannot loosen parent access restrictions.</p>
   {#each displayedRoutes as route,i}
@@ -107,7 +108,7 @@
     <button type="button" disabled={disabled} onclick={editRoutes}>Apply route JSON to draft</button>
   </details>
   {#if routeError}<p class="form-error" role="alert">{routeError}</p>{/if}
-</details>
+</details>{:else}<p class="muted">Domain container: root returns 404; configure an application on a subdomain or subfolder, or enable root proxying.</p>{/if}
 <details open={rawOpen} ontoggle={e => { if (e.currentTarget.open && !rawOpen) openRaw(); else if (!e.currentTarget.open) rawOpen=false }}>
   <summary>Advanced managed settings JSON</summary>
   <textarea aria-label="Managed settings JSON" bind:value={raw} rows="8" disabled={disabled}></textarea>

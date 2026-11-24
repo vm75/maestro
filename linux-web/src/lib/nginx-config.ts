@@ -114,6 +114,23 @@ export const sharedFields: Field[] = [
   {key:'pwa_shell_cache_control',label:'PWA shell Cache-Control',type:'text',fallback:'no-cache, no-store, must-revalidate'},
   {key:'pwa_asset_cache_control',label:'PWA asset Cache-Control',type:'text',fallback:'public, max-age=31536000, immutable'}
 ].map(field => ({...field,help:settingHelp[field.key]})) as Field[]
+export function proxyActive(kind: string, value: Settings, inherited: Settings): boolean { return kind !== 'domain' || !(value.disable_root ?? inherited.disable_root ?? true) }
+export function visiblePolicyFields(kind: string, value: Settings, inherited: Settings): Field[] {
+  const effective = (key:string) => value[key] ?? inherited[key] ?? policyFields.find(f=>f.key===key)?.fallback
+  const proxy=proxyActive(kind,value,inherited), large=effective('enable_large_upload'), sse=effective('proxy_transport')==='sse'
+  const routes=value.routes ?? inherited.routes, routeDefaults=Array.isArray(routes)&&routes.length>0
+  return policyFields.filter(f=>{
+    if(f.domainOnly)return kind==='domain'
+    if(!proxy)return false
+    if(['large_upload_max_body_size','client_upload_timeout'].includes(f.key))return !!large||routeDefaults
+    if(f.key==='client_max_body_size')return !large||routeDefaults
+    if(f.key==='proxy_session_timeout')return !sse&&!!(effective('enable_longlived')||large||routeDefaults)
+    if(f.key==='proxy_connect_timeout')return !sse
+    if(f.key==='enable_longlived')return (!sse&&!large)||routeDefaults
+    if(f.key==='enable_streaming')return !sse||routeDefaults
+    return true
+  })
+}
 export const lines = (value: string) => value.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
 export const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value))
 export function normalizeGlobal(value: GlobalSettings): GlobalSettings {

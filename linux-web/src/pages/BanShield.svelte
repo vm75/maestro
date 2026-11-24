@@ -18,13 +18,28 @@
   let error = $state('')
   let filter = $state('')
   let controller: AbortController | undefined
-  const bans = $derived(status?.bans.filter(b => (b.network + ' ' + b.reason).toLowerCase().includes(filter.toLowerCase())) ?? [])
+  let banRows = $state<Ban[]>([])
+  let bansOpen = $state(false)
+  let bansLoading = $state(false)
+  let bansError = $state('')
+  let bansController: AbortController | undefined
+  let banSort = $state<'network'|'reason'|'expires_at'|'hit_count'>('network')
+  let banDirection = $state(1)
+  function sortBans(key:typeof banSort){if(banSort===key)banDirection*=-1;else{banSort=key;banDirection=1}}
+  const bans = $derived(banRows.filter(b=>(b.network+' '+b.reason).toLowerCase().includes(filter.toLowerCase())).sort((a,b)=>banDirection*(banSort==='hit_count'?a.hit_count-b.hit_count:String(a[banSort]).localeCompare(String(b[banSort]),undefined,{numeric:true}))))
+  async function loadBans(){
+    bansController?.abort();const active=new AbortController();bansController=active;bansLoading=true;bansError=''
+    try{const value=await request<Ban[]>('/api/shared/firewall/bans',{signal:active.signal});if(!active.signal.aborted)banRows=value}
+    catch(e){if(!active.signal.aborted)bansError=String(e)}
+    finally{if(!active.signal.aborted)bansLoading=false}
+  }
+  function toggleBans(){bansOpen=!bansOpen;if(bansOpen)void loadBans();else{bansController?.abort();bansLoading=false;banRows=[]}}
   async function refresh() {
     controller?.abort(); const active = new AbortController(); controller = active
     loading = true; error = ''
-    try { const [value, grant] = await Promise.all([request<Firewall>('/api/shared/firewall', { signal: active.signal }), request<{enforcement: boolean; reason: string}>('/api/shared/firewall/capability', {signal: active.signal})]); if (!active.signal.aborted) { status = value; capability = grant; policyText = JSON.stringify(value.policy, null, 2) } }
+    try { const [value, grant] = await Promise.all([request<Firewall>('/api/shared/firewall?include_bans=false', { signal: active.signal }), request<{enforcement: boolean; reason: string}>('/api/shared/firewall/capability', {signal: active.signal})]); if (!active.signal.aborted) { status = value; capability = grant; policyText = JSON.stringify(value.policy, null, 2) } }
     catch (failure) { if (!active.signal.aborted) error = failure instanceof Error ? failure.message : 'Ban Shield unavailable' }
-    finally { if (!active.signal.aborted) loading = false }
+    finally { if (!active.signal.aborted) {loading = false;if(bansOpen)await loadBans()} }
   }
   let busy = $state(false)
   let actionMessage = $state('')
@@ -64,7 +79,7 @@
     try { const policy = JSON.parse(policyText); if (policy.enabled && !policy.observe_only && (!capability?.enforcement || !confirm('Enable host firewall enforcement? Verify your management IP is allowlisted.'))) return; void mutate('', 'PUT', policy) }
     catch (failure) { error = String(failure) }
   }
-  onMount(() => { void refresh(); return () => controller?.abort() })
+  onMount(() => { void refresh(); return () => {controller?.abort();bansController?.abort()} })
 </script>
 
 <p class="policy-note">{capability?.reason ?? 'Checking helper authorization…'}. Observation does not block traffic. Enforcement manages only Maestro's dedicated nftables input table.</p>
@@ -88,11 +103,14 @@
     <button disabled={busy || !capability?.enforcement || (status.policy.enabled && !status.policy.observe_only)} onclick={() => { if (status && confirm('Enable firewall enforcement? Verify your management IP is allowlisted.')) void mutate('', 'PUT', {...status.policy, enabled: true, observe_only: false}) }}>Enable enforcement</button>
     {#if status.policy.enabled && !status.policy.observe_only}<button disabled={busy} onclick={() => { if (status && confirm('Switch to observation and remove Maestro firewall hooks?')) void mutate('', 'PUT', {...status.policy, observe_only: true}) }}>Switch to observation</button>{/if}{/if}
   </section>
-  <section class="panel"><div class="resource-heading"><h2>Active bans</h2><span>{status.bans.length} entries</span></div>
+  <section class="panel"><div class="resource-heading"><h2>Active bans</h2><span>{status.snapshot.active_ban_count} entries</span><button type="button" onclick={toggleBans}>{bansOpen?'Hide active bans':'Show active bans'}</button></div>
+    {#if bansOpen}
+    {#if bansLoading}<p role="status">Loading active bans…</p>{/if}{#if bansError}<p class="form-error" role="alert">{bansError}</p>{/if}
     <label for="ban-filter">Filter bans</label><input id="ban-filter" type="search" bind:value={filter} placeholder="Network or reason…" />
-    <div class="shared-table"><table><thead><tr><th>Network</th><th>Reason</th><th>Hits</th><th>Expires</th><th>Actions</th></tr></thead><tbody>
+    <div class="shared-table"><table><thead><tr>{#each [{key:'network',label:'Network'},{key:'reason',label:'Reason'},{key:'hit_count',label:'Hits'},{key:'expires_at',label:'Expires'}] as col}<th aria-sort={banSort===col.key?(banDirection===1?'ascending':'descending'):'none'}><button type="button" onclick={()=>sortBans(col.key as typeof banSort)}>{col.label} {banSort===col.key?(banDirection===1?'↑':'↓'):'↕'}</button></th>{/each}<th>Actions</th></tr></thead><tbody>
       {#each bans as ban (ban.network)}<tr><td class="mono">{ban.network}</td><td>{ban.reason}<small>{ban.source} · offense {ban.offense_count}</small></td><td>{ban.hit_count}</td><td>{new Date(ban.expires_at).toLocaleString()}</td><td><button disabled={!allowWrites || busy} onclick={() => { if (confirm('Unban, clear history and add ' + ban.network + ' to the allowlist?')) void mutate('/bans/' + encodeURIComponent(ban.network), 'DELETE') }}>Unban + allow</button><button disabled={!allowWrites || busy} onclick={() => { if (confirm('Reset failure counts?')) void mutate('/reset-counts/' + encodeURIComponent(ban.network), 'POST') }}>Reset counts</button></td></tr>{/each}
-    </tbody></table></div>{#if !bans.length}<p class="muted">No matching bans.</p>{/if}
+    </tbody></table></div>{#if !bansLoading && !bansError && !bans.length}<p class="muted">No matching bans.</p>{/if}
+    {/if}
     {#if allowWrites}<form onsubmit={e => { e.preventDefault(); void mutate('/bans', 'POST', {network: banNetwork, seconds, reason}) }}><label>Network (CIDR) <input bind:value={banNetwork} required /></label><label>Duration (seconds) <input type="number" min="60" bind:value={seconds} required /></label><label>Reason <input bind:value={reason} required /></label><button disabled={busy || !status.policy.enabled}>Record manual ban</button></form>{/if}
   </section>
   <section class="panel"><div class="resource-heading"><h2>Detection rules</h2>{#if allowWrites}<button disabled={busy} onclick={() => editRule()}>Add rule</button>{/if}</div>
