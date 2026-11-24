@@ -139,7 +139,10 @@
 
   async function runAction(id: string, action: string) {
     if (!writable || !applications.some(app => app.id === id && app.lifecycle) || !recoveryChecked || pending || actionPending || applying) return
-    if (action !== 'start' && !window.confirm(`${action === 'stop' ? 'Stop' : 'Restart'} ${id}?`)) return
+    const boot = action === 'enable' || action === 'disable'
+    if (action !== 'start' && !window.confirm(boot
+      ? `${action === 'enable' ? 'Enable' : 'Disable'} automatic startup for ${id}? Running workloads will not be restarted or stopped.`
+      : `${action === 'stop' ? 'Stop' : 'Restart'} ${id}?`)) return
     actionPending = `${id}:${action}`
     appError = ''
     try {
@@ -148,11 +151,16 @@
         await new Promise(r => setTimeout(r, 600))
         job = await invokeTool<Job>('jobs_get', { id: job.id })
       }
-      if (job.state === 'failed') {
-        appError = `Action ${action} on ${id} failed`
+      if (job.state !== 'succeeded') {
+        appError = job.error ?? `Action ${action} on ${id} did not complete`
       } else {
         await loadApplications()
+        if (boot) {
+          reviewedDraft = null
+          await Promise.all([loadWorkloads(), loadHistory()])
+        }
       }
+      if (boot) await loadPending()
     } catch (e) {
       appError = e instanceof Error ? e.message : `Action ${action} failed`
     } finally {
@@ -334,6 +342,7 @@
                 <span>Engine: <strong>{app.engine}</strong></span>
               {/if}
               <span>Containers: <strong>{app.containerCount}</strong></span>
+              <span>Boot policy: <strong>{app.enabled ? 'Enabled' : 'Disabled'}</strong></span>
             </div>
             {#if app.restartRequired}
               <p role="status">Running containers differ from the saved configuration. Restart to apply the current definitions.</p>
@@ -357,6 +366,12 @@
               >
                 Restart
               </button>
+              {#if app.backend === 'quadlet'}
+                <button type="button" disabled={actionPending !== null || applying || !recoveryChecked || !!pending}
+                  onclick={() => runAction(app.id, app.enabled ? 'disable' : 'enable')}>
+                  {app.enabled ? 'Disable boot startup' : 'Enable boot startup'}
+                </button>
+              {/if}
               {/if}
               {#if app.logs}<button type="button" onclick={() => showLogs(app.id)}>Logs</button>{/if}
             </div>
