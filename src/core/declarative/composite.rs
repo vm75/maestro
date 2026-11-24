@@ -376,6 +376,26 @@ impl CompositeProvider {
             .collect()
     }
 
+    /// Incus cannot defer live hardware changes. Match the reference's
+    /// read-only transition guard at review, without touching other adapters.
+    pub async fn review_incus_changes(&self, store: &super::Store, bytes: &[u8], plan: &super::Plan) -> Result<()> {
+        if self.simulated || !plan.changes.iter().any(|change|change.backend=="incus") {
+            return Ok(());
+        }
+        let current=store.read()?;
+        let base=current.as_ref().map_or(super::MISSING_REVISION,|s|s.revision.as_str());
+        ensure!(base==plan.base_revision,"configuration revision changed; review again");
+        let previous=match current {
+            Some(snapshot)=>snapshot.config()?,
+            None=>Config{version:1,..Default::default()},
+        };
+        let desired=super::parse(bytes)?;
+        for change in plan.changes.iter().filter(|change|change.backend=="incus") {
+            self.incus.review_transition(change,&previous,&desired).await?;
+        }
+        Ok(())
+    }
+
     fn check_native_scope(&self, change: &Change) -> Result<()> {
         ensure!(
             change.backend != "storage/disk",
