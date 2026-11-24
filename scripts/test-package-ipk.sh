@@ -24,13 +24,13 @@ tar -xOzf "$TMP/control.tar.gz" ./control | grep -Fx 'Architecture: aarch64-3.10
 tar -xOzf "$TMP/control.tar.gz" ./control | grep -Fx 'Conflicts: router-hub'
 tar -tzf "$TMP/control.tar.gz" | grep -Fx './postinst'
 tar -tzf "$TMP/control.tar.gz" | grep -Fx './prerm'
-# The post-install helper may migrate Maestro's nginx input format, but never imports Router Hub automatically.
+# Installation consumes YAML only; no transitional migration commands.
 tar -xzOf "$TMP/control.tar.gz" ./postinst | grep -F 'setup-merlin.sh'
 setup=scripts/setup-merlin.sh
-migration_line=$(grep -nF 'migrate-nginx-inputs' "$setup" | tail -1 | cut -d: -f1)
+init_line=$(grep -nF 'init-nginx' "$setup" | tail -1 | cut -d: -f1)
 start_line=$(grep -nF '/opt/etc/init.d/S99maestro restart' "$setup" | tail -1 | cut -d: -f1)
-! grep -qF 'LEGACY_CONFIG=' "$setup"
-test -n "$migration_line" && test -n "$start_line" && test "$migration_line" -lt "$start_line"
+! grep -Eq 'migrate-config|migrate-nginx-inputs|--no-check-certificate|curl .* -k ' "$setup"
+test -n "$init_line" && test -n "$start_line" && test "$init_line" -lt "$start_line"
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/bin/maestro'
 tar -xzOf "$TMP/data.tar.gz" ./opt/bin/maestro > "$TMP/packaged-maestro"
 cmp "$BINARY" "$TMP/packaged-maestro"
@@ -74,5 +74,4 @@ if sh "$TMP/init" check; then
     echo "Init script reported a stopped service as running" >&2
     exit 1
 fi
-bash tests/test_one_time_migration.sh
 echo "IPK package structure and checksum passed"

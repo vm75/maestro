@@ -62,7 +62,7 @@ python3 "$repo_root/scripts/render-nginx-config.py" \
     "$repo_root/config/nginx" "$lab/nginx" \
     --inputs-dir "$lab/nginx-inputs" \
     --var-dir "$lab/var" --pid-path "$lab/run/nginx.pid" \
-    --error-log-path "$lab/var/log/nginx/error.log" \
+    --error-log-path "$lab/logs/nginx/error.log" \
     --acme-directory "$lab/certificates/acme-challenge" \
     --http-port "$nginx_port" --https-port "$nginx_tls_port"
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=localhost \
@@ -196,7 +196,7 @@ curl --silent --show-error --fail-with-body -X PUT \
 get /api/nginx/objects/domain/linux.test/linux.test | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["settings"]["client_max_body_size"] == "3M" and x["settings"]["enable_lanonly"] is False and "include snippets/restrict.conf;" not in x["content"], x'
 # The bundle intentionally drops scanner user agents, including curl's default.
 code=$(curl --silent --show-error --insecure --noproxy '*' \
-    --user-agent 'RouterHub-Linux-Smoke/1.0' \
+    --user-agent 'Maestro-Linux-Smoke/1.0' \
     --resolve "linux.test:$nginx_tls_port:127.0.0.1" \
     --output /dev/null --write-out '%{http_code}' "https://linux.test:$nginx_tls_port/")
 [[ "$code" == 404 ]] || { echo "Expected managed site HTTP 404, got $code" >&2; exit 1; }

@@ -148,7 +148,7 @@ fn read_token(path: &Path) -> Result<String> {
 }
 
 pub fn load(path: &Path) -> Result<AppConfig> {
-    Store::at_path(path)?.ensure_directory()?;
+    Store::at_path(path)?.read()?.ok_or_else(|| anyhow::anyhow!("Linux configuration is missing"))?;
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| anyhow::anyhow!("HOME is required for Linux defaults"))?;
@@ -171,9 +171,17 @@ pub fn load(path: &Path) -> Result<AppConfig> {
     config.server.port = listen.port();
     config.server.auth_token = token;
     config.server.daemonize = false;
-    config.commands.nginx = "/usr/sbin/nginx".into();
-    config.commands.openssl = "/usr/bin/openssl".into();
-    config.commands.ip = "/usr/sbin/ip".into();
+    // Resolve native binaries from the normal Linux system directories.
+    let native = |name: &str| {
+        ["/usr/bin", "/usr/sbin", "/bin", "/sbin"]
+            .iter()
+            .map(|dir| Path::new(dir).join(name))
+            .find(|path| path.is_file())
+            .unwrap_or_else(|| Path::new("/usr/bin").join(name))
+    };
+    config.commands.nginx = native("nginx");
+    config.commands.openssl = native("openssl");
+    config.commands.ip = native("ip");
     config.commands.dehydrated = root.join("dehydrated");
     config.server.allowed_origins = vec![if settings.public_origin.is_empty() {
         format!("http://{}", settings.listen)

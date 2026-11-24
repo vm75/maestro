@@ -892,7 +892,7 @@ mod tests {
     #[test]
     fn test_apply_test_mode() {
         let mut config = AppConfig::default();
-        let dummy_path = Path::new("/some/dir/config.toml");
+        let dummy_path = Path::new("/some/dir/config.yaml");
         config.apply_test_mode(dummy_path).unwrap();
 
         assert!(config.test_mode);

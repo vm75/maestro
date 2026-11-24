@@ -24,18 +24,24 @@ api_port=3030
 nginx_port=8080
 nginx_tls_port=8443
 umask 077
-mkdir -p "$lab"/{run,logs/nginx,nginx/conf.d,nginx/domains-available,nginx/domains-enabled,nginx/snippets,init.d,wireguard,certs}
+mkdir -p "$lab"/{run,logs/nginx,nginx/conf.d,nginx/domains-available,nginx/domains-enabled,nginx/snippets,init.d,wireguard,certificates}
 mkdir -p "$lab/tmp" "$lab/nginx/logs"
 
-nginx_bin=$(command -v nginx)
-dehydrated_bin=$(command -v dehydrated || true)
-if [[ -z "$dehydrated_bin" ]]; then
-    dehydrated_bin="$lab/certificates/dehydrated"
-    if curl -fsSL "https://raw.githubusercontent.com/dehydrated-io/dehydrated/master/dehydrated" -o "$dehydrated_bin" 2>/dev/null; then
-        chmod 0700 "$dehydrated_bin"
-        echo "Downloaded latest dehydrated to $dehydrated_bin."
+# Use the same private executable path as the Linux runtime adapter.
+if [[ ! -e "$lab/dehydrated" ]]; then
+    if command -v dehydrated >/dev/null 2>&1; then
+        install -m 0700 "$(command -v dehydrated)" "$lab/dehydrated"
     else
-        echo "Dehydrated is not installed. Use Certificates > Update dehydrated after setup."
+        temporary=$(mktemp "$lab/.dehydrated.XXXXXX")
+        if curl -fsSL "https://raw.githubusercontent.com/dehydrated-io/dehydrated/master/dehydrated" -o "$temporary" &&
+            head -n 1 "$temporary" | grep -q '^#!' &&
+            grep -q dehydrated "$temporary"; then
+            chmod 0700 "$temporary"
+            mv -f "$temporary" "$lab/dehydrated"
+        else
+            rm -f "$temporary"
+            echo "Dehydrated is not installed. Use Certificates > Update dehydrated after setup."
+        fi
     fi
 fi
 if [[ ! -e "$lab/dehydrated-dns01-hook.sh" && -f "$repo_root/scripts/dehydrated-dns01-hook.sh" ]]; then
@@ -50,7 +56,7 @@ if [[ ! -e "$lab/nginx/nginx.conf" && ! -L "$lab/nginx/nginx.conf" ]]; then
         "$repo_root/config/nginx" "$lab/nginx" \
         --inputs-dir "$lab/nginx-inputs" \
         --var-dir "$lab/var" --pid-path "$lab/run/nginx.pid" \
-        --error-log-path "$lab/var/log/nginx/error.log" \
+        --error-log-path "$lab/logs/nginx/error.log" \
         --acme-directory "$lab/certificates/acme-challenge" \
         --http-port "$nginx_port" --https-port "$nginx_tls_port"
     openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=localhost \

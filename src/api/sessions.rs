@@ -106,7 +106,7 @@ pub(super) async fn mode(Extension(sessions): Extension<Sessions>) -> Json<Value
 }
 
 fn session_scope(token: &str, admin: Option<&(String, String)>) -> String {
-    // Preserve existing token sessions in legacy Linux layout.
+    // Token-only sessions use the bearer token scope until administrator setup.
     admin.map_or_else(
         || token.to_owned(),
         |credentials| serde_json::to_string(&(token, credentials)).expect("serializable scope"),

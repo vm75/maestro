@@ -57,7 +57,7 @@ struct Cli {
     #[arg(long, global = true)]
     test_mode: bool,
 
-    /// Run native Linux services without Asuswrt integration or command simulation.
+    /// Require a native Linux configuration (never reinterpret router YAML).
     #[arg(long, global = true, conflicts_with = "test_mode")]
     linux_mode: bool,
 
@@ -159,7 +159,11 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
-    let mut config = AppConfig::load(&cli.config)?;
+    let mut config = if cli.test_mode && !cli.config.exists() {
+        AppConfig::default()
+    } else {
+        AppConfig::load(&cli.config)?
+    };
     anyhow::ensure!(
         !cli.linux_mode || config.platform == Platform::Linux,
         "--linux-mode requires a native Linux YAML authority"
@@ -335,8 +339,9 @@ fn main() -> Result<()> {
 }
 
 fn validate_nginx_inputs(config: &AppConfig) -> Result<()> {
-    nginx_render::load_global(config)?;
-    nginx_sites::load(config)?;
+    let global = nginx_render::load_global(config)?;
+    let sites = nginx_sites::load(config)?;
+    crate::nginx_ingress::validate_tree(&global, &sites)?;
     Ok(())
 }
 

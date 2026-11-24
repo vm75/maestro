@@ -251,7 +251,7 @@ AUTH_TOKEN="0123456789abcdef0123456789abcdef"
 sed -e "s|__AUTH_TOKEN__|$AUTH_TOKEN|" \
     -e "s|__OPENSSL_BIN__|/usr/bin/openssl|" \
     -e "s|__IP_BIN__|/sbin/ip|" \
-    lab/aarch64/files/maestro.toml.template > "$TMP/maestro.toml"
+    lab/aarch64/files/maestro.yaml.template > "$TMP/maestro.yaml"
 
 # Run check-config subcommand using target/release/maestro or target/debug/maestro
 MAESTRO=""
@@ -266,14 +266,14 @@ if [[ -n "$MAESTRO" ]]; then
     # Create test directories needed for validation
     mkdir -p "$TMP/certs" "$TMP/nginx" "$TMP/www" "$TMP/var/wwwext"
     cp lab/aarch64/files/menuTree.js "$TMP/www/menuTree.js"
-    sed -i "s|/www/require/modules/menuTree.js|$TMP/www/menuTree.js|" "$TMP/maestro.toml"
-    sed -i "s|/tmp/var/wwwext/user20.asp|$TMP/var/wwwext/user20.asp|" "$TMP/maestro.toml"
+    sed -i "s|/www/require/modules/menuTree.js|$TMP/www/menuTree.js|" "$TMP/maestro.yaml"
+    sed -i "s|/tmp/var/wwwext/user20.asp|$TMP/var/wwwext/user20.asp|" "$TMP/maestro.yaml"
 
-    "$MAESTRO" --config "$TMP/maestro.toml" check-config >/dev/null
+    "$MAESTRO" --config "$TMP/maestro.yaml" check-config >/dev/null
     echo "Configuration template check-config passed."
 
     echo "=== 9. Testing ASUS UI mounting and rendering with lab fixtures ==="
-    "$MAESTRO" --config "$TMP/maestro.toml" mount-ui >/dev/null
+    "$MAESTRO" --config "$TMP/maestro.yaml" mount-ui >/dev/null
     test -f "$TMP/var/wwwext/user20.asp"
     grep -F "user20.asp" "$TMP/www/menuTree.js" >/dev/null
     grep -F "$AUTH_TOKEN" "$TMP/var/wwwext/user20.asp" >/dev/null
