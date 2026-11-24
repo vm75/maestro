@@ -231,7 +231,13 @@ async fn discover_deployed_certificates(config: &AppConfig) -> Result<Vec<Certif
         };
         let domains = parse_certificate_domains(&result.stdout);
         if domains.is_empty() {
-            warn!(path = %inspect_path.display(), "deployed certificate has no DNS subject names");
+            // init-nginx creates a self-signed, CN-only fallback for unknown
+            // hosts. It is not a certificate definition to import or renew.
+            if is_generated_fallback_subject(&result.stdout) {
+                tracing::debug!(path = %inspect_path.display(), "skipping generated nginx fallback certificate");
+            } else {
+                warn!(path = %inspect_path.display(), "deployed certificate has no DNS subject names");
+            }
             continue;
         }
         let method = if domains.iter().any(|domain| domain.starts_with("*.")) {
@@ -252,6 +258,17 @@ async fn discover_deployed_certificates(config: &AppConfig) -> Result<Vec<Certif
         });
     }
     Ok(specs)
+}
+
+fn is_generated_fallback_subject(output: &str) -> bool {
+    output.lines().any(|line| {
+        line.trim()
+            .strip_prefix("Subject:")
+            .and_then(|subject| subject.trim().split_once('='))
+            .is_some_and(|(attribute, value)| {
+                attribute.trim() == "CN" && value.trim() == "maestro-default.invalid"
+            })
+    })
 }
 
 fn parse_certificate_domains(output: &str) -> Vec<String> {
@@ -617,6 +634,19 @@ mod tests {
             certificates[0].hook_env.get("NAMESILO_API_KEY"),
             Some(&"api-key".to_string())
         );
+    }
+
+    #[test]
+    fn generated_fallback_subject_is_distinct_from_other_certificates() {
+        assert!(is_generated_fallback_subject(
+            "    Issuer: CN = maestro-default.invalid\n    Subject: CN = maestro-default.invalid"
+        ));
+        assert!(is_generated_fallback_subject("Subject: CN=maestro-default.invalid"));
+        assert!(!is_generated_fallback_subject(
+            "Issuer: CN = maestro-default.invalid\nSubject: CN = example.test"
+        ));
+        assert!(!is_generated_fallback_subject("Subject: CN = maestro-default.invalid.example.test"));
+        assert!(!is_generated_fallback_subject("Subject: CN = example.test"));
     }
 
     #[tokio::test]

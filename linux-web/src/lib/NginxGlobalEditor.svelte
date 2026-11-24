@@ -1,19 +1,22 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import NginxFields from './NginxFields.svelte'
   import NginxPolicyEditor from './NginxPolicyEditor.svelte'
   import { clone, lines, sharedFields, listenerNames, type GlobalSettings, type Endpoint, type Usage, type Listener, type HttpAccess } from './nginx-config'
   let { initial, usage, disabled = false, onSave, onCancel }:
     {initial: GlobalSettings; usage: Usage; disabled?: boolean; onSave: (value: GlobalSettings) => Promise<void>; onCancel: () => void} = $props()
-  // The editor is mounted only when a new saved snapshot is opened.
-  let draft = $state<GlobalSettings>(clone(initial))
+  // Capture the saved configuration once per editor mount, without resetting
+  // unsaved edits when the parent refreshes.
+  const snapshot = untrack(() => clone(initial))
+  let draft = $state<GlobalSettings>(snapshot)
   let listenerName = $state('')
   let accessName = $state('')
   let limitName = $state('')
   let error = $state('')
-  let http = $state<HttpAccess>(clone(initial.http_access ?? {mode:'renewal_only',window_seconds:3600,listener_profile:'legacy',wan:null,externally_managed_wan:false}))
-  let manageHttp = $state(initial.http_access !== undefined)
-  let allowed = $state(initial.allowed_ips.join('\n'))
-  let suffixes = $state(initial.free_subdomains.join('\n'))
+  let http = $state<HttpAccess>(clone(snapshot.http_access ?? {mode:'renewal_only',window_seconds:3600,listener_profile:'legacy',wan:null,externally_managed_wan:false}))
+  let manageHttp = $state(snapshot.http_access !== undefined)
+  let allowed = $state(snapshot.allowed_ips.join('\n'))
+  let suffixes = $state(snapshot.free_subdomains.join('\n'))
   const used = (kind: string, name: string) => usage[kind+':'+name] || []
   function add(kind: 'listener' | 'access' | 'limit') {
     error=''
@@ -48,7 +51,7 @@
     <h3>Public HTTP / certificate validation</h3>
     <p class="muted">Linux firewall and upstream NAT are externally managed. The router-specific firmware WAN gate is not available on Linux. Listener and HTTP lifecycle settings are identical.</p>
     {#if http.wan}<p class="form-error">This configuration contains a router-only WAN gate. Saving removes it; release existing router-owned rules before migration.</p>{/if}
-    <label><input type="checkbox" bind:checked={manageHttp} disabled={initial.http_access !== undefined} /> Configure HTTP access lifecycle</label>
+    <label><input type="checkbox" bind:checked={manageHttp} disabled={snapshot.http_access !== undefined} /> Configure HTTP access lifecycle</label>
     {#if manageHttp}
       <div class="editor-grid">
         <label>HTTP mode<select bind:value={http.mode}><option value="off">Off</option><option value="renewal_only">Certificate validation only</option><option value="always">Always on with redirects</option></select></label>

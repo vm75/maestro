@@ -182,7 +182,7 @@ async fn create_certificate(
         updated_at: chrono::Utc::now(),
     };
     input.apply(&mut spec);
-    super::certificates::create(State(state), Json(spec)).await?;
+    let _ = super::certificates::create(State(state), Json(spec)).await?;
     Ok(Json(ApiMessage::new("Certificate definition created")))
 }
 
@@ -201,7 +201,7 @@ async fn update_certificate(
         .cloned()
         .ok_or_else(|| ApiError::not_found("certificate not found"))?;
     input.apply(&mut spec);
-    super::certificates::update(State(state), Path(id), Json(spec)).await?;
+    let _ = super::certificates::update(State(state), Path(id), Json(spec)).await?;
     Ok(Json(ApiMessage::new("Certificate definition updated")))
 }
 
@@ -235,12 +235,12 @@ async fn renew_certificate(
 }
 
 async fn clear_certificate_lock(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    super::certificates::clear_dehydrated_lock(State(state.clone())).await?;
+    let _ = super::certificates::clear_dehydrated_lock(State(state.clone())).await?;
     certificate_lock(State(state)).await
 }
 
 async fn update_dehydrated(State(state): State<AppState>) -> Result<Json<ApiMessage>, ApiError> {
-    super::certificates::update_dehydrated(State(state)).await?;
+    let _ = super::certificates::update_dehydrated(State(state)).await?;
     Ok(Json(ApiMessage::new("Dehydrated updated")))
 }
 
