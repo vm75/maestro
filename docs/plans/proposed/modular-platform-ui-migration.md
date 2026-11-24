@@ -238,13 +238,27 @@ Do not start porting the Go Server Man capabilities until acceptance.
 
 ## Phase 2 — port Server Man features into Maestro
 
-Keep the Go implementation available as the behavior/specification reference. Implement vertical slices, each with Rust domain tests, API contract tests, frontend integration and native Linux acceptance. Do not translate Go line by line or erase its native recovery guarantees. **Deliver all existing reference features, not a subset.**
+**Implementation strategy (user-directed, 2026-11-23): direct port first, integration second, refinement later.** Server Man is a functional prototype and the implementation source, not merely a requirements document. Reuse as much of the pinned working implementation as possible. Prefer a faithful, mechanical Go-to-Rust translation of complete modules over a new design or a fresh implementation inferred from feature descriptions. **Deliver all existing reference features, not a subset.**
+
+### Mandatory direct-port workflow
+
+1. **Read the complete working reference module first.** Include its supporting types, shared utilities, caller/coordinator, native adapters, tests, fixtures and Svelte workflow. Follow the actual dependency graph and control flow in the pinned source; do not reconstruct behavior from the parity ledger, README or tool descriptions alone.
+2. **Translate the whole cohesive module.** Retain the reference algorithms, branching, validation order, state transitions, native command arguments, ownership checks, output parsing, recovery and error handling. Keep analogous function names and file/module boundaries where useful for review. Mechanical changes for Rust ownership, types, errors, async execution and standard-library APIs are expected; a literal line-for-line translation is acceptable when it preserves working behavior. Reuse shared reference helpers rather than implementing a new variant in each adapter.
+3. **Prefer direct reuse of language-independent assets.** Port the existing Svelte/TypeScript screens, components, editor and client workflows with the smallest integration changes; reuse shell installer logic, templates, fixtures and sample configuration where compatible. Do not redesign the Linux UI or invent an alternative workflow just to integrate it with Maestro.
+4. **Integrate at the existing Maestro boundaries.** Adapt the translated module to the Rust command runner, job/registry, authoritative Linux YAML, authentication, module discovery, Linux-only optional privileged helper and platform feature flags. Keep the existing router modules, UI, behavior and build footprint intact. No Go runtime, Go binary, sidecar or second configuration authority is required.
+5. **Review and replace incomplete Rust work when necessary.** Existing work on `feature/linux-phase2` is not a design constraint. Keep it where it is already equivalent; replace incomplete, divergent or unnecessarily complicated code with the direct translation whenever that is the faster and safer path to parity. Do not discard verified working behavior or strengthen a gate by permanently disabling a reference feature. Retain stricter safety controls where needed, and adapt the reference operation to satisfy them.
+6. **Port the reference tests alongside implementation.** Translate existing positive, negative, malformed-input, permission, drift, interruption and recovery cases; reuse golden fixtures wherever possible. Add targeted integration tests only for the differences introduced by Maestro. Record the source paths, corresponding Rust/Svelte paths, any material deviations and their rationale in the parity ledger.
+7. **Finish the first-pass port before optional refinement.** Avoid speculative abstractions, generic frameworks, premature optimization, unrelated dependency changes, style-only rewrites and expanding beyond the frozen feature set. Fix correctness, security and compatibility problems during the port; defer nonessential Rust-idiomatic cleanup and improvements until functional parity and native validation. Do not defer required safety guarantees or privilege separation.
+
+**Exception rule:** a fresh implementation is justified only by a concrete incompatibility, a security/correctness defect in the reference, an unavoidable language/platform constraint, or an already equivalent Maestro facility. Document the reason and preserve the reference's externally observable behavior. A different Rust design preference is not sufficient.
+
+**Execution on the current branch:** complete coherent implementation batches without stopping for user validation after each small translation. The operator will compile and test the accumulated changes locally, and the implementation agent should fix the reported findings. Continue source implementation while local validation is pending; maintain the distinction between implemented, compiled, fixture-verified, native-verified and accepted. All M2 gates remain mandatory before merge or release. Never enable unverified native mutations just to make a partial implementation appear complete.
 
 ## Phase 2 Linux 100% Server Man parity contract
 
 **Non-negotiable product decision (2026-11-23; optional-helper clarification):** Maestro's Linux process runs **unprivileged** as the selected workload account **whether or not a helper is installed**. Maestro's router process continues to run as **root**; router behavior is unchanged. Linux has an **optional-to-install**, separately packaged, root-owned **Maestro privileged helper** for specifically authorized host changes; the Linux web/API process must never elevate itself. The helper's implementation is **mandatory in Phase 2** so a full-capability deployment can achieve **100% of the features actually implemented in Server Man** at the frozen reference baseline. A deliberately helper-free installation is an explicitly supported *reduced-permission deployment*, **not** an excuse to omit capabilities from the product. This section supersedes earlier optional-port wording anywhere in this plan.
 
-**Reference snapshot:** `vm75/server-man` `main` commit `c1a9f32f5898146ae7ac339043b910b8e2a2c438` (2026-11-19). Keep that repository unchanged as the specification/fixture reference. A newer Server Man commit is not silently added to scope: explicitly review any desired re-baseline. Trace all features, tools, UI paths, backend behavior and tests from this **specific commit** before declaring the inventory complete. “100%” means feature and safety-semantic parity, not a literal Go→Rust translation, identical source structure, or installing Go alongside Rust. Retain existing Maestro features in addition to these Linux features.
+**Reference snapshot:** `vm75/server-man` `main` commit `c1a9f32f5898146ae7ac339043b910b8e2a2c438` (2026-11-19). Keep that repository unchanged as the specification/fixture reference. A newer Server Man commit is not silently added to scope: explicitly review any desired re-baseline. Trace all features, tools, UI paths, backend behavior and tests from this **specific commit** before declaring the inventory complete. “100%” means feature and safety-semantic parity. A close Go-to-Rust translation is the preferred implementation method, but identical source structure is not an acceptance requirement. Maestro remains a Rust application; installing Go alongside Rust is not part of deployment. Retain existing Maestro features in addition to these Linux features.
 
 ### Scope clarification: shipped behavior vs future aspirations
 
@@ -260,7 +274,7 @@ Create and maintain `docs/plans/proposed/server-man-phase2-parity-matrix.md` (or
 For **each distinct capability and important error/recovery case**, record:
 1. Stable reference ID, exact Server Man source/test paths and relevant reference test names.
 2. Expected behavior (inputs, outputs, permissions, state, boot vs current-run semantics, safety failures and recovery); whether baseline behavior is partial or fully operational.
-3. Maestro Rust module, tool/API, Linux Svelte view and test/evidence links (or `missing`); notes for intentionally different internals.
+3. Maestro Rust module, tool/API, Linux Svelte view and test/evidence links (or `missing`); record direct translation, reuse of an equivalent existing module, or an explicitly justified adaptation. Map source functions/tests to their destinations and explain material deviations.
 4. Status: `not started` / `modeled` / `gated` / `implemented` / `fixture verified` / `native verified` / `accepted`. “Present in code” and simulated/mock success never equal `accepted`.
 5. Tests: Go contract comparison, Rust unit/API/schema parity, browser flow, **helper-free read-only/rootless acceptance and helper-enabled privileged acceptance**, native disposable-host test when a host mutation is involved, cold boot/restart and recovery/fault test as relevant.
 6. Explicit blockers, ownership/risk, and any user-approved exception with rationale and source commit.
@@ -359,7 +373,7 @@ The branch continued beyond the initial privilege increment. See the [living par
 
 The non-root systemd service template was corrected so the explicitly authorized `sudo -n` helper is not accidentally blocked by `NoNewPrivileges`/empty capability bounding settings. It still runs the main daemon as the chosen workload owner and requires the restricted root-owned sudoers/policy boundary. This is a design correction **pending native security acceptance**, not a privilege-boundary signoff. Lazy Linux UI assets are explicitly embedded only in the `linux-ui` build.
 
-**No build or native acceptance was executed for the continued source commits in this connector-only session.** Phase 2 checkboxes remain unchecked. Resume with an actual Rust/npm/disposable Linux test environment, fix compilation and source-level contract errors, then complete the still-missing operations in reference dependency order. Do not merge/release or change CI triggers.
+**No build or native acceptance was executed for the continued source commits in this connector-only session.** Phase 2 checkboxes remain unchecked. Under the subsequent direct-port instruction, continue the still-missing source implementation in reference dependency order while the operator handles local compilation and testing; incorporate findings and execute the full acceptance gates before M2. Do not merge/release or change CI triggers.
 
 ### Step 4 prerequisite — Platform builds and router resource baseline
 
@@ -460,7 +474,7 @@ acceptance and Steps 7–10 in their existing order.
 
 ### Step 8 — Applications providers, one tab
 
-Port in small, native-tested increments:
+Port complete reference adapters in dependency order, sharing translated helpers (native inventory/identity, artifact publication, launcher/boot, dependency ordering, validation and recovery). Translate each provider's full working behavior before optional redesign; test in coherent batches. The ordered provider list is:
 
 1. **Podman Quadlet:** generated owned user definitions, rootless readiness, boot activation.
 2. **Podman Compose:** explicit user-scope startup launcher and networking prerequisites.
