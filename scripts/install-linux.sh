@@ -215,13 +215,18 @@ if [[ "$helper_mode" == install ]]; then
   if [[ ! -e "$policy" ]]; then
     staged_policy=$(mktemp /etc/maestro/.maestro-policy.XXXXXX)
     printf '{"version":1,"workload_uid":%s,"system_units":[],"package_writes":false,"samba_password":false,"share_writes":false}\n' "$uid" > "$staged_policy"
-    chmod 0600 "$staged_policy"
+    chgrp "$gid" "$staged_policy"
+    chmod 0640 "$staged_policy"
     mv -n -- "$staged_policy" "$policy"
   fi
   [[ -f "$policy" && ! -L "$policy" && $(stat -c %u -- "$policy") == 0 ]] ||
     { echo "Root policy is unsafe" >&2; exit 1; }
   policy_mode=$(stat -c %a -- "$policy")
-  (( (8#$policy_mode & 077) == 0 )) || { echo "Root policy must be private" >&2; exit 1; }
+  (( (8#$policy_mode & 037) == 0 )) || { echo "Root policy is writable or exposed to other users" >&2; exit 1; }
+  # Nonsecret grants are readable by the workload group, but only root can
+  # change them. This replaces the old private helper probe.
+  chgrp "$gid" "$policy"
+  chmod 0640 "$policy"
   rule=/etc/sudoers.d/maestro
   if [[ -e "$rule" ]]; then
     [[ -f "$rule" && ! -L "$rule" ]] || { echo "Unsafe sudoers path" >&2; exit 1; }
