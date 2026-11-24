@@ -60,7 +60,7 @@ fn render_boot(config: &Config,id: &str,binary: &Path,file: &Path) -> Result<Vec
     let service = config.services.get(id).ok_or_else(|| anyhow!("unknown Compose service"))?;
     ensure!(binary.is_absolute() && file.is_absolute(),"Compose bootstrap paths must be absolute");
     let directory = file.parent().and_then(Path::to_str).ok_or_else(|| anyhow!("invalid Compose directory"))?;
-    ensure!(!directory.chars().any(|c| c.is_whitespace() || c.is_control() || matches!(c,'\\'|'"'|'\''|'%')),"Compose working directory contains unsupported whitespace or path escapes");
+    ensure!(directory.trim()==directory && !directory.chars().any(|c| c.is_control() || matches!(c,'\\'|'"'|'\'')),"Compose working directory contains unsupported whitespace or path escapes");
     let mut result = format!("{HEADER}\n[Unit]\nDescription=Maestro Compose boot startup\n");
     if service.engine == "podman" {
         result.push_str("Wants=podman-user-wait-network-online.service\nAfter=podman-user-wait-network-online.service\n");
@@ -78,7 +78,7 @@ fn render_boot(config: &Config,id: &str,binary: &Path,file: &Path) -> Result<Vec
         !line.strip_prefix("UnsetEnvironment=").is_some_and(|key| env(&service.engine).iter().any(|(k,_)| *k==key))
     }).map(|line| format!("{line}\n")).collect();
     for (key,value) in env(&service.engine) { result.push_str(&format!("Environment={}\n",unit_arg(&format!("{key}={value}"))?)); }
-    result.push_str(&format!("WorkingDirectory={directory}\nExecStart="));
+    result.push_str(&format!("WorkingDirectory={}\nExecStart=",directory.replace('%',"%%")));
     let mut argv = vec![binary.to_str().ok_or_else(|| anyhow!("invalid engine path"))?.to_owned()];
     if service.engine == "podman" { argv.push("--remote=false".into()); }
     argv.extend(args(file,id,&["up","--detach","--no-build"])?);
@@ -284,6 +284,18 @@ impl ComposeProvider {
         self.user_command(&["show","--property=Version"],4).await?;
         Ok(())
     }
+    pub async fn check_autostart(&self)->Result<()> {
+        if self.engine=="podman" {
+            let out=self.user_command(&["show","podman-user-wait-network-online.service","--property=LoadState","--value"],3).await?;
+            ensure!(String::from_utf8_lossy(&out).trim()=="loaded","Podman's boot network wait unit is unavailable");
+        } else {
+            let out=self.runner.capture_status(&self.systemctl,&["--no-pager","--no-ask-password","show","docker.socket","--property=LoadState,UnitFileState"],Duration::from_secs(3),64*1024).await?;
+            ensure!(out.status.success(),"Docker boot socket could not be checked");
+            let text=String::from_utf8_lossy(&out.stdout);
+            ensure!(text.lines().any(|line|line=="LoadState=loaded")&&text.lines().any(|line|line=="UnitFileState=enabled"),"Docker's system socket is missing or not persistently enabled for boot");
+        }
+        Ok(())
+    }
     fn check_members(&self,id:&str,previous:&Config,desired:&Config,members:&BTreeMap<String,Member>)->Result<()>{
         for member in members.values(){
             ensure!(expected_member(previous,id,member)||expected_member(desired,id,member),"unknown or foreign native Compose member");
@@ -307,6 +319,14 @@ impl ComposeProvider {
         // An entirely new definition cannot claim pre-existing containers.
         ensure!(before.is_some()||members.is_empty()||compose.as_deref()==after.as_ref().map(|a|a.compose.as_slice()),"pre-existing project has no owned prior definition");
         if after.is_none(){ensure!(mode==ApplyMode::Now,"removal requires immediate apply");}
+        if mode==ApplyMode::NextStart {
+            if let (Some(old),Some(next))=(previous.services.get(id),desired.services.get(id)) {
+                ensure!(old.containers.keys().all(|name|next.containers.contains_key(name)),"removing containers requires immediate apply");
+            }
+        }
+        if desired.services.get(id).is_some_and(|service|service.enabled) {
+            self.check_autostart().await?;
+        }
         for member in members.values(){
             if !desired.services.get(id).is_some_and(|s|s.containers.contains_key(&member.name)){
                 ensure!(mode==ApplyMode::Now,"removing containers requires immediate apply");
@@ -453,7 +473,9 @@ mod tests {
         assert!(boot.contains("\"--project-name\""));
         assert!(boot.contains("\"--env-file\" \"/dev/null\""));
         assert!(boot.contains("DOCKER_HOST=unix:///var/run/docker.sock"));
-        assert!(render_boot(&c,"app",Path::new("/usr/bin/docker"),Path::new("/home/user/has space/compose.yaml")).is_err());
+        let spaced=String::from_utf8(render_boot(&c,"app",Path::new("/usr/bin/docker"),Path::new("/home/user/has space %percent/compose.yaml")).unwrap()).unwrap();
+        assert!(spaced.contains("WorkingDirectory=/home/user/has space %%percent\n"));
+        assert!(render_boot(&c,"app",Path::new("/usr/bin/docker"),Path::new("/home/user/bad\npath/compose.yaml")).is_err());
     }
     #[test]
     fn parses_docker_lines_and_podman_arrays_without_claiming_foreign_projects(){
@@ -467,6 +489,81 @@ mod tests {
         assert!(parse_inventory(serde_json::json!([row.clone(),row]).to_string().as_bytes(),"app").is_err());
         assert!(parse_inventory(br#"{"Names":"foreign","State":"running","Labels":"com.docker.compose.project=wrong"}"#,"app").is_err());
     }
+    #[tokio::test]
+    async fn reference_define_toggle_and_remove_do_not_start_workloads() {
+        use std::os::unix::fs::PermissionsExt;
+        for engine in ["docker","podman"] {
+            let temp=tempfile::tempdir().unwrap();
+            fs::set_permissions(temp.path(),fs::Permissions::from_mode(0o700)).unwrap();
+            let log=temp.path().join("commands");
+            let unit_link=temp.path().join("unit-link");
+            let enabled=temp.path().join("enabled");
+            let binary=temp.path().join(engine);
+            let systemctl=temp.path().join("systemctl");
+            let script=format!(r#"#!/bin/sh
+printf '%s\n' "$*" >> '{}'
+[ "$1" != '--remote=false' ] || shift
+case "$1" in
+ps) printf '[]\n';;
+info) if [ "$3" = '{{{{.Host.Security.Rootless}}}}' ]; then printf 'true\n'; else printf '{{}}\n'; fi;;
+compose) exit 0;;
+*) exit 1;;
+esac
+"#,log.display());
+            fs::write(&binary,script).unwrap();
+            let script=format!(r#"#!/bin/sh
+printf '%s\n' "$*" >> '{log}'
+if [ "$1" = --user ]; then shift; fi
+[ "$1" != --no-pager ] || shift
+[ "$1" != --no-ask-password ] || shift
+case "$1" in
+show)
+ case "$2" in
+ --property=Version) echo Version=255;;
+ docker.socket) printf 'LoadState=loaded\nUnitFileState=enabled\n';;
+ podman-user-wait-network-online.service) echo loaded;;
+ *)
+  if [ -f '{link}' ] && [ -f "$(cat '{link}')" ]; then
+   printf 'LoadState=loaded\nActiveState=inactive\nNeedDaemonReload=no\nDropInPaths=\nFragmentPath=%s\n' "$(cat '{link}')"
+   if [ -f '{enabled}' ]; then echo UnitFileState=enabled; else echo UnitFileState=linked; fi
+  else printf 'LoadState=not-found\nActiveState=inactive\n'; fi;;
+ esac;;
+link) printf '%s' "$2" > '{link}';;
+enable) : > '{enabled}';;
+disable) rm -f '{enabled}';;
+stop|daemon-reload) :;;
+*) exit 1;;
+esac
+"#,log=log.display(),link=unit_link.display(),enabled=enabled.display());
+            fs::write(&systemctl,script).unwrap();
+            for path in [&binary,&systemctl]{fs::set_permissions(path,fs::Permissions::from_mode(0o700)).unwrap();}
+            let provider=ComposeProvider::new(engine,binary,temp.path().join("generated"),temp.path().into(),CommandRunner::new(false)).native_paths(systemctl);
+            let text=format!("version: 1\nservices:\n  app: {{kind: container, engine: {engine}, backend: compose, enabled: false, containers: {{web: {{image: alpine}}}}}}\n");
+            let mut desired=super::super::super::parse(text.as_bytes()).unwrap();
+            let empty=Config::default();
+            let change=Change{resource:"service/app".into(),backend:format!("{engine}/compose"),operation:super::super::super::Operation::Create,before:None,after:Some(service_fingerprint(&desired,"app").unwrap())};
+            provider.native_apply(&change,&empty,&desired,ApplyMode::NextStart).await.unwrap();
+            assert!(provider.compose_file("app").is_file());
+            assert!(provider.unit_file("app").is_file());
+            assert_eq!(provider.status_details(&desired,"app").await.unwrap().state,"stopped");
+            let previous=desired.clone();
+            desired.services.get_mut("app").unwrap().enabled=true;
+            let toggle=Change{resource:change.resource.clone(),backend:change.backend.clone(),operation:super::super::super::Operation::Update,before:Some(service_fingerprint(&previous,"app").unwrap()),after:Some(service_fingerprint(&desired,"app").unwrap())};
+            provider.native_apply(&toggle,&previous,&desired,ApplyMode::NextStart).await.unwrap();
+            assert!(enabled.exists());
+            let commands=fs::read_to_string(&log).unwrap();
+            assert!(!commands.lines().any(|line|line.contains(" up ")));
+            assert!(commands.contains("--env-file /dev/null --file"));
+            let remove=Change{resource:change.resource,backend:change.backend,operation:super::super::super::Operation::Remove,before:toggle.after,after:None};
+            provider.native_apply(&remove,&desired,&empty,ApplyMode::Now).await.unwrap();
+            assert!(!provider.compose_file("app").exists());
+            assert!(!provider.unit_file("app").exists());
+            let commands=fs::read_to_string(&log).unwrap();
+            assert!(commands.lines().any(|line|line.ends_with(" down")));
+            assert!(!commands.contains("--volumes"));
+        }
+    }
+
     #[test]
     fn artifact_drift_is_not_overwritten(){
         assert!(check_bytes(Some(b"old"),Some(b"old"),Some(b"new")).is_ok());
