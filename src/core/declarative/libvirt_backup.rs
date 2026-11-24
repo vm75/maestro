@@ -1,12 +1,16 @@
 //! Basic stopped-domain XML export and standalone declared disk verification.
 use super::*;
 use crate::core::declarative::{backup_capture::{self as capture,NativeObject,NativeExport},storage};
-use std::{path::Path,time::Instant,fs::File,os::unix::fs::MetadataExt};
+use std::{time::Instant,fs::File,os::unix::fs::MetadataExt};
 
 impl LibvirtProvider{
     pub(crate) async fn backup_dependency(&self,c:&Config,id:&str)->Result<NativeObject>{
-        let (_,obs)=self.verified(c,id).await?;
+        let (want,obs)=self.verified(c,id).await?;
         ensure!(matches!(obs.state.as_str(),"running"|"shut off"),"Libvirt guest state is not stable for capture");
+        // Metadata-only discovery uses ordinary inactive XML; private XML and
+        // physical disk inspection occur only during confirmed capture.
+        let raw=self.command(&["dumpxml","--domain",&want.uuid,"--inactive"],5,super::super::MAX_CONFIG_BYTES,false).await?;
+        xml::validate_backup_xml(&raw,&want)?;
         Ok(NativeObject{backend:"libvirt".into(),name:xml::domain_name(id),project:String::new(),pool:String::new(),content_type:String::new()})
     }
     pub(crate) async fn validate_backup(&self,c:&Config,id:&str,object:&NativeObject,stopped:bool)->Result<Vec<u8>>{
