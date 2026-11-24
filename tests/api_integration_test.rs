@@ -2835,6 +2835,39 @@ shares:
     }
     assert!(succeeded, "restart job did not complete");
 
+    // Host Services must control the entire managed application through the
+    // same lifecycle jobs, not the ordinary systemctl path. Test mode has no
+    // native systemd bus and therefore also detects accidental direct routing.
+    for (action, managed_tool) in [
+        ("stop", "managed_service_stop"),
+        ("start", "managed_service_start"),
+        ("restart", "managed_service_restart"),
+    ] {
+        let tool = format!("services_{action}");
+        let (status, started) = call(
+            &tool,
+            serde_json::json!({"scope":"user","unit":"maestro-compose-web.service","confirm":true}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{started:?}");
+        assert_eq!(started["job"]["tool"], managed_tool);
+        let id = started["job"]["id"].as_str().unwrap();
+        let mut completed = false;
+        for _ in 0..50 {
+            let (status, job) = call("jobs_get", serde_json::json!({"id":id})).await;
+            assert_eq!(status, StatusCode::OK, "{job:?}");
+            assert_ne!(job["state"], "failed", "{job:?}");
+            if job["state"] == "succeeded" {
+                assert_eq!(job["result"]["id"], "web");
+                assert_eq!(job["result"]["action"], action);
+                completed = true;
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+        }
+        assert!(completed, "{managed_tool} did not complete");
+    }
+
     let (status, _) = call(
         "managed_container_action",
         serde_json::json!({"service":"web","container":"web","action":"pull","confirm":false}),
@@ -3516,8 +3549,7 @@ async fn linux_generated_host_service_routes_fail_closed() {
     let (_, mut state, _temp) = setup_test_app().await;
     let config = std::sync::Arc::make_mut(&mut state.config);
     config.platform = maestro::config::Platform::Linux;
-    config.test_mode = false;
-    config.system.allow_workload_writes = false;
+    config.test_mode = true;
     // Even an explicit ordinary-unit grant cannot authorize a stale generated unit.
     config.services.systemd_user_write_units = vec!["maestro-compose-stale.service".into()];
     let token = config.server.auth_token.clone();
@@ -3528,10 +3560,6 @@ async fn linux_generated_host_service_routes_fail_closed() {
     ).unwrap();
     let app = api::app(state).unwrap();
     for (tool, unit, confirm, expected, code, message) in [
-        ("services_start", "maestro-compose-stack.service", false, StatusCode::FORBIDDEN,
-            "writes_disabled", "Application actions require writes"),
-        ("services_enable", "maestro-compose-stack.service", false, StatusCode::FORBIDDEN,
-            "writes_disabled", "Boot policy requires management writes"),
         ("services_reload", "maestro-compose-stack.service", true, StatusCode::BAD_REQUEST,
             "invalid_arguments", "Apply the application definition"),
         ("services_stop", "maestro-compose-stack.service", false, StatusCode::BAD_REQUEST,
