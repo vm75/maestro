@@ -181,6 +181,23 @@ impl CommandRunner {
         tail: bool,
         environment: &[(&str, &str)],
     ) -> Result<CapturedOutput> {
+        self.capture_scoped(program,args,deadline,limit,tail,environment,None,&[]).await
+    }
+
+    /// Fixed working directory and environment for local native adapters.
+    /// A zero tail limit drains without retaining potentially private output.
+    #[cfg(feature = "linux")]
+    pub(crate) async fn capture_scoped(
+        &self,
+        program: &Path,
+        args: &[&str],
+        deadline: Duration,
+        limit: usize,
+        tail: bool,
+        environment: &[(&str, &str)],
+        directory: Option<&Path>,
+        remove_environment: &[&str],
+    ) -> Result<CapturedOutput> {
         use std::collections::VecDeque;
         use tokio::io::AsyncReadExt;
 
@@ -188,6 +205,8 @@ impl CommandRunner {
             bail!("command capture is unavailable in simulation");
         }
         let mut command = Command::new(program);
+        for key in remove_environment { command.env_remove(key); }
+        if let Some(directory) = directory { command.current_dir(directory); }
         command
             .args(args)
             .env("LC_ALL", "C")
@@ -197,14 +216,14 @@ impl CommandRunner {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         #[cfg(unix)]
-        if !environment.is_empty() {
+        if !environment.is_empty() || directory.is_some() || !remove_environment.is_empty() {
             command.process_group(0);
         }
         let mut child = command
             .spawn()
             .with_context(|| format!("failed to start {}", program.display()))?;
         #[cfg(unix)]
-        let mut group_guard = ProcessGroupGuard(if environment.is_empty() {
+        let mut group_guard = ProcessGroupGuard(if environment.is_empty() && directory.is_none() && remove_environment.is_empty() {
             None
         } else {
             child.id()
