@@ -525,6 +525,7 @@ async fn backend_prerequisites(
     state: &crate::state::AppState,
     quadlet_available: bool,
     backend: &str,
+    config: &Config,
 ) -> Vec<Issue> {
     let commands = &state.config.commands;
     let mut issues = Vec::new();
@@ -593,8 +594,12 @@ async fn backend_prerequisites(
             issues.push(backend_issue(backend, "unknown", "provider_checks_pending",
                 "QEMU, project, pool, network and native guest prerequisites are not yet verified."));
         }
-        "samba" | "nfs" => issues.push(backend_issue(backend, "unknown",
-            "provider_checks_pending", "Native share publication prerequisites are not yet verified.")),
+        "samba" | "nfs" => {
+            let provider = super::shares::ShareProvider::from_config(&state.config,state.runner.is_test_mode());
+            if let Err(error) = provider.check_prerequisites(backend,config).await {
+                issues.push(backend_issue(backend,"error","share_setup",&error.to_string()));
+            }
+        },
         _ => issues.push(backend_issue(backend, "unknown", "check_unavailable",
             "Backend prerequisite checks are not implemented.")),
     }
@@ -706,7 +711,7 @@ impl ReadinessCache {
         use futures_util::{StreamExt, stream};
         let mut checks = stream::iter(targets)
             .map(|backend| async move {
-                backend_prerequisites(state, quadlet_available, &backend).await
+                backend_prerequisites(state, quadlet_available, &backend, config).await
             }).buffer_unordered(4);
         let mut native = Vec::new();
         while let Some(mut issues) = checks.next().await {
