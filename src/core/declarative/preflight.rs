@@ -307,6 +307,7 @@ pub fn check_files(
         }
         if let Some(vm) = &service.vm {
             writable.extend(vm.disks.iter().map(String::as_str));
+            writable.extend(vm.mounts.iter().filter(|m|!m.read_only).map(|m|m.storage.as_str()));
         }
     }
     for share in config.shares.values() {
@@ -425,6 +426,7 @@ pub fn check_files(
         }
         if let Some(vm) = &service.vm {
             refs.extend(vm.disks.iter().map(|disk| format!("storage/{disk}")));
+            refs.extend(vm.mounts.iter().map(|mount| format!("storage/{}",mount.storage)));
         }
         for input in &initial {
             if refs.contains(&input.resource) {
@@ -587,7 +589,7 @@ async fn backend_prerequisites(
         }
         "incus" => {
             let provider = super::incus::IncusProvider::new(commands.incus.clone(),state.runner.clone())
-                .native_paths(state.config.paths.applications_dir.clone());
+                .native_paths(state.config.paths.applications_dir.clone()).storage_root(state.config.paths.storage_dir.clone());
             if let Err(error) = provider.check_daemon().await {
                 issues.push(issue("error","backend/incus","runtime","incus_unavailable",
                     error.to_string(),"Check local daemon and workload account permissions."));

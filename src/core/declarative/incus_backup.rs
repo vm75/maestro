@@ -20,17 +20,24 @@ fn portable_path(path: &str) -> bool {
     super::super::path_valid(path, false)
 }
 
-fn guest_disks(devices: &Devices) -> Result<GuestDisks> {
+fn guest_disks(devices: &Devices, permitted: &Devices) -> Result<GuestDisks> {
     ensure!(devices.len() <= 64, "Incus device limit exceeded");
     let mut root = None;
     let mut volumes = BTreeSet::new();
-    for device in devices.values() {
+    for (name,device) in devices {
         let get = |key: &str| device.get(key).map(String::as_str).unwrap_or("");
         if get("type") == "nic" { continue; }
         ensure!(get("type") == "disk" && get("project").is_empty(), "unsupported Incus native device");
         let pool = get("pool");
         let source = get("source");
-        ensure!(binding_name(pool), "Incus host/external disk is not covered");
+        if pool.is_empty() {
+            // Host data is captured through declared storage, never through
+            // native export. Reject undeclared/changed historical host disks.
+            ensure!(permitted.get(name)==Some(device)&&get("source").starts_with('/')&&get("path")!="/",
+                "Incus host/external disk is not covered by declared storage");
+            continue;
+        }
+        ensure!(binding_name(pool), "invalid Incus disk pool");
         if get("path") == "/" {
             ensure!(source.is_empty() && root.replace(pool.to_owned()).is_none(), "ambiguous Incus root disk");
         } else {
@@ -42,7 +49,7 @@ fn guest_disks(devices: &Devices) -> Result<GuestDisks> {
     Ok(GuestDisks { root: root.ok_or_else(|| anyhow!("Incus root disk missing"))?, volumes })
 }
 
-fn metadata_disks(guest: &Value) -> Result<GuestDisks> {
+fn metadata_disks(guest: &Value, permitted: &Devices) -> Result<GuestDisks> {
     let profiles = guest.get("profiles").filter(|v| !v.is_null());
     let expanded = guest.get("expanded_devices").filter(|v| !v.is_null());
     if let Some(p) = profiles {
@@ -50,7 +57,7 @@ fn metadata_disks(guest: &Value) -> Result<GuestDisks> {
         ensure!(p.as_array().is_some_and(Vec::is_empty) || expanded.is_some(), "Incus expanded profile devices unavailable");
     }
     let devices: Devices = serde_json::from_value(expanded.unwrap_or(&guest["devices"]).clone())?;
-    guest_disks(&devices)
+    guest_disks(&devices,permitted)
 }
 
 fn owned(guest: &Value, c: &Config, id: &str) -> Result<()> {
@@ -60,7 +67,7 @@ fn owned(guest: &Value, c: &Config, id: &str) -> Result<()> {
     Ok(())
 }
 
-fn snapshot_records(rows: &[Value], c: &Config, id: &str) -> Result<(BTreeSet<String>, References)> {
+fn snapshot_records(rows: &[Value], c: &Config, id: &str, permitted:&Devices) -> Result<(BTreeSet<String>, References)> {
     ensure!(rows.len() <= 2048, "Incus snapshot limit exceeded");
     let mut names = BTreeSet::new();
     let mut references = BTreeSet::new();
@@ -68,7 +75,7 @@ fn snapshot_records(rows: &[Value], c: &Config, id: &str) -> Result<(BTreeSet<St
         let name = row["name"].as_str().filter(|s| binding_name(s)).ok_or_else(|| anyhow!("invalid Incus snapshot name"))?;
         ensure!(names.insert(name.to_owned()), "duplicate Incus snapshot");
         owned(row, c, id)?;
-        references.extend(metadata_disks(row)?.volumes);
+        references.extend(metadata_disks(row,permitted)?.volumes);
         ensure!(references.len() <= 2048, "Incus historical dependency limit exceeded");
     }
     Ok((names, references))
@@ -114,7 +121,6 @@ impl IncusProvider {
     // Backup observes native ownership rather than reconciling hardware. A native
     // disk attachment must not be silently removed when a quiesced VM is resumed.
     async fn backup_local(&self, c: &Config, id: &str) -> Result<Instance> {
-        ensure!(!vm(c,id)?.is_system_container(), "Incus system-container filesystem export is not yet verified; capture blocked");
         let server: Value = self.get(None, "/1.0").await?;
         let env = &server["environment"];
         let server_name = env["server_name"].as_str().filter(|s| !s.is_empty())
@@ -149,17 +155,18 @@ impl IncusProvider {
     async fn discover(&self, c: &Config, id: &str) -> Result<Discovery> {
         let actual = self.backup_local(c, id).await?;
         let scope = project(c, id)?;
-        let want = render(c, id)?;
+        let want = render(c, id,&self.storage_root)?;
+        self.check_host_disks(&want)?;
         let devices = if actual.expanded_devices.is_empty() { &actual.definition.devices } else { &actual.expanded_devices };
-        let current = guest_disks(devices)?;
-        let declared = guest_disks(&actual.definition.devices)?;
+        let current = guest_disks(devices,&want.devices)?;
+        let declared = guest_disks(&actual.definition.devices,&want.devices)?;
         ensure!(declared.root==current.root && declared.volumes.is_subset(&current.volumes), "Incus expanded devices omit native disks");
         ensure!(current.root == want.devices["root"]["pool"], "Incus current root pool differs from authoritative binding");
         let snapshot_rows: Vec<Value> = self.get(Some(scope), &format!("{}/snapshots?recursion=1", instance_path(id))).await?;
-        let (snapshots, historical) = snapshot_records(&snapshot_rows, c, id)?;
+        let (snapshots, historical) = snapshot_records(&snapshot_rows, c, id,&want.devices)?;
         let references: References = current.volumes.union(&historical).cloned().collect();
         let instance = NativeObject { backend: "incus".into(), name: instance_name(id),
-            project: scope.into(), pool: current.root, content_type: "block".into() };
+            project: scope.into(), pool: current.root, content_type: if vm(c,id)?.is_system_container() {"filesystem".into()}else{"block".into()} };
         let mut volumes = BTreeMap::new();
         if !references.is_empty() {
             let info: Value = self.get(None, &format!("/1.0/projects/{scope}")).await?;
@@ -271,7 +278,7 @@ impl IncusProvider {
         self.runner.stream_backup(&self.binary, &args, file, end.saturating_duration_since(Instant::now()), budget).await?;
         ensure!(before == self.checked_graph(c, reviewed, true).await?, "Incus dependencies changed during export");
         let export = capture::native_export(root, &path, reviewed.kind, reviewed.resources.clone(), object.clone(), end)?;
-        let archive = inspect_archive(c, &export, capture::read_export(root, &path)?, end)?;
+        let archive = inspect_archive(c, &export, capture::read_export(root, &path)?, &self.storage_root,end)?;
         if reviewed.kind == "incus_instance_export" {
             let id = reviewed.resources[0].strip_prefix("service/").ok_or_else(|| anyhow!("invalid Incus resource"))?;
             let live = &before[id];
@@ -288,11 +295,11 @@ struct ArchiveCoverage {
 }
 
 // Inspect without extracting; retain the portable payload for every indexed generation.
-fn inspect_archive(c: &Config, export: &NativeExport, file: File, end: Instant) -> Result<ArchiveCoverage> {
+fn inspect_archive(c: &Config, export: &NativeExport, file: File, storage_root:&Path,end: Instant) -> Result<ArchiveCoverage> {
     let object = &export.native;
     let instance = export.kind == "incus_instance_export";
     ensure!(object.backend == "incus" && binding_name(&object.name) && binding_name(&object.pool) && binding_name(&object.project)
-        && if instance { object.content_type == "block" && export.resources.len() == 1 }
+        && if instance { matches!(object.content_type.as_str(),"block"|"filesystem") && export.resources.len() == 1 }
         else { export.kind == "incus_custom_volume" && matches!(object.content_type.as_str(), "block" | "filesystem" | "iso") },
         "invalid Incus archive identity");
     if object.content_type == "iso" {
@@ -348,7 +355,7 @@ fn inspect_archive(c: &Config, export: &NativeExport, file: File, end: Instant) 
     let x = serde_json::to_value(index.ok_or_else(|| anyhow!("Incus archive index missing"))?)?;
     let cfg = &x["config"];
     let volume = &cfg["volume"];
-    let volume_type = if instance { "virtual-machine" } else { "custom" };
+    let volume_type = if instance { if object.content_type=="block" {"virtual-machine"} else {"container"} } else { "custom" };
     ensure!(x["name"].as_str() == Some(object.name.as_str()) && x["pool"].as_str() == Some(object.pool.as_str())
         && x["type"].as_str() == Some(volume_type) && x["optimized"].as_bool() == Some(false)
         && x["optimized_header"].as_bool() == Some(false)
@@ -378,21 +385,27 @@ fn inspect_archive(c: &Config, export: &NativeExport, file: File, end: Instant) 
     if instance {
         let id = export.resources[0].strip_prefix("service/").ok_or_else(|| anyhow!("invalid Incus resource"))?;
         let guest = &cfg["container"];
+        let want=render(c,id,storage_root)?;
         ensure!(object.name == instance_name(id) && object.project == project(c, id)?
-            && object.pool == render(c, id)?.devices["root"]["pool"]
-            && guest["name"].as_str() == Some(object.name.as_str()) && guest["type"].as_str() == Some("virtual-machine"),
+            && object.pool == want.devices["root"]["pool"]
+            && volume_type==instance_kind(c,id)?
+            && guest["name"].as_str() == Some(object.name.as_str()) && guest["type"].as_str() == Some(volume_type),
             "Incus archive guest differs");
         owned(guest, c, id)?;
-        let current = metadata_disks(guest)?;
+        let current = metadata_disks(guest,&want.devices)?;
         ensure!(current.root == object.pool, "Incus archive root pool differs");
-        let (names, historical) = snapshot_records(rows(&cfg["snapshots"])?, c, id)?;
+        let (names, historical) = snapshot_records(rows(&cfg["snapshots"])?, c, id,&want.devices)?;
         ensure!(names == coverage.snapshots, "Incus guest snapshot metadata incomplete");
         coverage.references = current.volumes.union(&historical).cloned().collect();
     } else {
         ensure!(cfg["container"].is_null() && empty_rows(&cfg["snapshots"])?, "custom volume archive contains guest data");
     }
 
-    let (prefix, snapshot_prefix) = if instance { ("virtual-machine", "virtual-machine-snapshots") } else { ("volume", "volume-snapshots") };
+    let (prefix, snapshot_prefix) = match volume_type {
+        "virtual-machine"=>("virtual-machine","virtual-machine-snapshots"),
+        "container"=>("container","snapshots"),
+        _=>("volume","volume-snapshots"),
+    };
     let block = object.content_type == "block";
     let mut roots = BTreeSet::new();
     let mut blocks = BTreeSet::new();
@@ -406,6 +419,9 @@ fn inspect_archive(c: &Config, export: &NativeExport, file: File, end: Instant) 
         }
         if !block || instance {
             ensure!(members.get(&base).is_some_and(|(kind, _, _)| kind.is_dir()), "Incus filesystem payload missing");
+            if volume_type=="container" {
+                ensure!(members.get(&format!("{base}/rootfs")).is_some_and(|(kind,_,_)|kind.is_dir()),"Incus system-container rootfs missing");
+            }
             roots.insert(base);
         }
     }
@@ -436,7 +452,7 @@ fn empty_rows(value: &Value) -> Result<bool> { Ok(rows(value)?.is_empty()) }
 
 // Offline bundle verification: every disk in each guest generation resolves
 // to exactly one separately captured volume, with an exact consumer set.
-pub(crate) fn verify_bundle_dependencies(c: &Config, exports: &[NativeExport], root: &File, end: Instant) -> Result<()> {
+pub(crate) fn verify_bundle_dependencies(c: &Config, exports: &[NativeExport], root: &File, storage_root:&Path,end: Instant) -> Result<()> {
     let mut volumes: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
     let mut identities = BTreeSet::new();
     for (at, export) in exports.iter().enumerate().filter(|(_, e)| e.backend == "incus" && e.kind == "incus_custom_volume") {
@@ -444,7 +460,7 @@ pub(crate) fn verify_bundle_dependencies(c: &Config, exports: &[NativeExport], r
         volumes.insert(at, BTreeSet::new());
     }
     for export in exports.iter().filter(|e| e.backend == "incus") {
-        let coverage = inspect_archive(c, export, capture::read_export(root, &export.bundle_path)?, end)?;
+        let coverage = inspect_archive(c, export, capture::read_export(root, &export.bundle_path)?,storage_root,end)?;
         if export.kind != "incus_instance_export" { continue; }
         resolve_references(exports, &mut volumes, export, coverage.references, end)?;
     }
@@ -478,7 +494,7 @@ fn verify_archive(c: &Config, id: &str, object: &NativeObject, file: File, end: 
     let export = NativeExport { resources: vec![format!("service/{id}")], backend: "incus".into(),
         kind: "incus_instance_export".into(), bundle_path: "native/incus/test.tar".into(), size_bytes: file.metadata()?.len(),
         sha256: String::new(), native: object.clone() };
-    inspect_archive(c, &export, file, end).map(|_| ())
+    inspect_archive(c, &export, file,Path::new("/storage"),end).map(|_| ())
 }
 #[cfg(test)]
 mod tests{
@@ -491,12 +507,12 @@ mod tests{
             "data":{"type":"disk","pool":"data-pool","source":"volume/subdir","path":"/data"},
             "alias":{"type":"disk","pool":"data-pool","source":"volume","path":"/alias"}
         })).unwrap();
-        let disks = guest_disks(&devices).unwrap();
+        let disks = guest_disks(&devices,&Devices::new()).unwrap();
         assert_eq!(disks.root, "root-pool");
         assert_eq!(disks.volumes, BTreeSet::from([("data-pool".into(), "volume".into())]));
         let mut bad = devices;
         bad.get_mut("data").unwrap().remove("pool");
-        assert!(guest_disks(&bad).is_err());
+        assert!(guest_disks(&bad,&Devices::new()).is_err());
     }
     #[test]
     fn portable_archive_must_contain_reviewed_guest_and_root_disk(){
@@ -520,7 +536,7 @@ services:
       project: project
 "#).unwrap();
         let object=NativeObject{backend:"incus".into(),name:"maestro-guest".into(),project:"managed".into(),pool:"default".into(),content_type:"block".into()};
-        let want=render(&config,"guest").unwrap();
+        let want=render(&config,"guest",Path::new("/storage")).unwrap();
         let index=serde_json::json!({
             "name":"maestro-guest","pool":"default","backend":"dir","type":"virtual-machine",
             "optimized":false,"optimized_header":false,"snapshots":[],
@@ -547,15 +563,40 @@ services:
         let end=Instant::now()+Duration::from_secs(10);
         assert!(verify_archive(&config,"guest",&object,make(true,&index),end).is_ok());
         assert!(verify_archive(&config,"guest",&object,make(false,&index),end).is_err());
+        let mut container=config.clone();
+        container.services.get_mut("guest").unwrap().vm.as_mut().unwrap().instance_type="container".into();
+        let want=render(&container,"guest",Path::new("/storage")).unwrap();
+        let mut filesystem=object.clone();filesystem.content_type="filesystem".into();
+        let mut metadata=index.clone();
+        metadata["type"]=serde_json::json!("container");
+        metadata["config"]["container"]["type"]=serde_json::json!("container");
+        metadata["config"]["container"]["config"]=serde_json::json!(want.config);
+        metadata["config"]["container"]["devices"]=serde_json::json!(want.devices);
+        metadata["config"]["volume"]["type"]=serde_json::json!("container");
+        metadata["config"]["volume"]["content_type"]=serde_json::json!("filesystem");
+        let make_container=|rootfs:bool|{
+            let mut archive=tar::Builder::new(tempfile::tempfile().unwrap());
+            let yaml=serde_yaml::to_string(&metadata).unwrap();
+            let mut h=tar::Header::new_gnu();h.set_size(yaml.len() as u64);h.set_mode(0o600);h.set_cksum();
+            archive.append_data(&mut h,"backup/index.yaml",yaml.as_bytes()).unwrap();
+            for path in ["backup/container","backup/container/rootfs"].into_iter().take(if rootfs{2}else{1}) {
+                let mut h=tar::Header::new_gnu();h.set_entry_type(tar::EntryType::Directory);h.set_size(0);h.set_mode(0o700);h.set_cksum();
+                archive.append_data(&mut h,path,std::io::empty()).unwrap();
+            }
+            let mut file=archive.into_inner().unwrap();file.seek(SeekFrom::Start(0)).unwrap();file
+        };
+        assert!(verify_archive(&container,"guest",&filesystem,make_container(true),end).is_ok());
+        assert!(verify_archive(&container,"guest",&filesystem,make_container(false),end).is_err());
+        assert!(verify_archive(&config,"guest",&filesystem,make_container(true),end).is_err());
         let mut historical=index.clone();
         let mut snapshot=historical["config"]["container"].clone();
         snapshot["name"]=serde_json::json!("before");
         snapshot["devices"]["root"]["pool"]=serde_json::json!("previous-root");
         snapshot["devices"]["old-data"]=serde_json::json!({"type":"disk","pool":"data","source":"removed/subpath","path":"/data"});
-        let (names, refs)=snapshot_records(&[snapshot.clone()],&config,"guest").unwrap();
+        let (names, refs)=snapshot_records(&[snapshot.clone()],&config,"guest",&Devices::new()).unwrap();
         assert_eq!(names,BTreeSet::from(["before".into()]));
         assert_eq!(refs,BTreeSet::from([("data".into(),"removed".into())]));
-        assert!(snapshot_records(&[snapshot.clone(),snapshot.clone()],&config,"guest").is_err());
+        assert!(snapshot_records(&[snapshot.clone(),snapshot.clone()],&config,"guest",&Devices::new()).is_err());
         historical["snapshots"]=serde_json::json!(["before"]);
         historical["config"]["snapshots"]=serde_json::json!([snapshot]);
         historical["config"]["volume_snapshots"]=serde_json::json!([{"name":"before","content_type":"block","project":"managed"}]);

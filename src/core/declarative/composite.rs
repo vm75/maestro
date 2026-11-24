@@ -128,7 +128,7 @@ impl CompositeProvider {
         ).native_paths(config.commands.systemctl.clone());
 
         let incus = IncusProvider::new(config.commands.incus.clone(), runner.clone())
-            .native_paths(config.paths.applications_dir.clone());
+            .native_paths(config.paths.applications_dir.clone()).storage_root(config.paths.storage_dir.clone());
         let mut libvirt = LibvirtProvider::new(config.commands.virsh.clone(), runner.clone())
             .native_paths(config.paths.applications_dir.clone(),config.paths.storage_dir.clone());
         if let Some(authority) = config.linux_authority.as_ref() {

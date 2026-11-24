@@ -368,7 +368,7 @@ impl StorageProvider {
         for (service_id, service) in &config.services {
             let uses_storage = service.containers.values().any(|container| {
                 container.mounts.iter().any(|mount| mount.storage == id)
-            }) || service.vm.as_ref().is_some_and(|vm| vm.disks.iter().any(|disk| disk == id));
+            }) || service.vm.as_ref().is_some_and(|vm| vm.disks.iter().any(|disk| disk == id)||vm.mounts.iter().any(|mount|mount.storage==id));
             if !uses_storage { continue; }
             consumers.push(format!("service/{service_id}"));
             providers.verify_storage_consumer_stopped(&config, service_id).await?;

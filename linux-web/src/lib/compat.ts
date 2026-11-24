@@ -30,7 +30,7 @@ export function convertDefinition(kind: string, value: unknown, native: boolean)
     let result = field
     if (kind === 'service' && key === 'containers') result = mapResources(field, 'container', native)
     if (kind === 'service' && key === 'vm') result = convertDefinition('vm', field, native)
-    if (kind === 'container' && key === 'mounts' && Array.isArray(field)) result = field.map(m => convertDefinition('mount', m, native))
+    if ((kind === 'container' || kind === 'vm') && key === 'mounts' && Array.isArray(field)) result = field.map(m => convertDefinition('mount', m, native))
     if (kind === 'container' && key === 'healthcheck') result = convertDefinition('health', field, native)
     return [names[key] ?? key, result]
   }))

@@ -59,6 +59,17 @@
   let advancedText = $state('{}')
   const advancedKeys = ['entrypoint', 'workingDir', 'uidMaps', 'gidMaps', 'groupAdd', 'dependsOn', 'devices', 'capAdd', 'capDrop', 'securityOpt', 'init', 'tty', 'tmpfs', 'shmSize', 'stopGracePeriod', 'pullPolicy', 'logDriver', 'logOptions', 'healthcheck'] as const
   let vmDisks = $state('')
+  let guestEnvironment = $state('')
+  let guestMountPath = $state('')
+  let guestMountStorage = $state('')
+  let guestMountTarget = $state('/data')
+  let guestMountReadOnly = $state(false)
+  function addGuestMount() {
+    if (!service.vm || (!guestMountStorage && !guestMountPath.trim()) || !guestMountTarget.trim()) return
+    service.vm.mounts ??= []
+    service.vm.mounts.push({storage:guestMountStorage,path:guestMountStorage?'':guestMountPath.trim(),kind:'directory',target:guestMountTarget.trim(),readOnly:guestMountReadOnly})
+    guestMountPath='';guestMountStorage='';guestMountTarget='/data';guestMountReadOnly=false
+  }
   let plan = $state<ImpactPlan | null>(null)
   let reviewDefinition = $state('')
   let blockedResources = $state<string[]>([])
@@ -220,7 +231,21 @@
         }
       }
       candidate.dependsOn = splitList(dependencyText)
-      if (candidate.vm) candidate.vm.disks = splitList(vmDisks)
+      if (candidate.vm) {
+        candidate.vm.disks = splitList(vmDisks)
+        if (candidate.vm.instanceType === 'container') {
+          const env: Record<string,string> = Object.create(null)
+          for (const line of guestEnvironment.split('\n').filter(Boolean)) {
+            const at=line.indexOf('=')
+            if (at<1) throw new Error('Environment entries need NAME=value.')
+            const value=line.slice(at+1)
+            env[line.slice(0,at)]=value.startsWith('"') ? JSON.parse(value) as string : value
+          }
+          candidate.vm.environment=env
+        } else {
+          delete candidate.vm.mounts; delete candidate.vm.environment
+        }
+      }
       return candidate
     }
     if (kind === 'storage') return storage
@@ -318,6 +343,7 @@
         }
         dependencyText = (service.dependsOn ?? []).join(', ')
         vmDisks = (service.vm?.disks ?? []).join(', ')
+        guestEnvironment=Object.entries(service.vm?.environment ?? {}).map(([k,v])=>`${k}=${JSON.stringify(v)}`).join('\n')
         const names = Object.keys(service.containers ?? {})
         selectContainer(initialContainer && names.includes(initialContainer) ? initialContainer : names[0] ?? 'app')
       } else if (kind === 'storage') storage = structuredClone(result.config.storage?.[resourceID] ?? storage)
@@ -537,7 +563,19 @@
           </fieldset>
         {:else if service.vm}
           <label>Guest backend <select aria-label="VM backend" bind:value={service.backend} disabled={!!resourceID} onchange={(e) => { if (e.currentTarget.value !== 'incus' && service.vm) delete service.vm.instanceType }}><option value="libvirt">KVM/libvirt</option><option value="incus">Incus</option></select></label>
-          {#if service.backend === 'incus'}<label>Incus instance type <select aria-label="Incus instance type" value={service.vm.instanceType ?? ''} disabled={!!resourceID} onchange={(e) => { if (service.vm) service.vm.instanceType = e.currentTarget.value === 'container' ? 'container' : '' }}><option value="">Virtual machine</option><option value="container">Unprivileged system container</option></select></label><p>{incusEditNotice}</p>{#if service.vm.instanceType === 'container'}<p role="status">System-container backup/export is not yet supported; full backup capture will be blocked.</p>{/if}{/if}
+          {#if service.backend === 'incus'}<label>Incus instance type <select aria-label="Incus instance type" value={service.vm.instanceType ?? ''} disabled={!!resourceID} onchange={(e) => { if (service.vm) service.vm.instanceType = e.currentTarget.value === 'container' ? 'container' : '' }}><option value="">Virtual machine</option><option value="container">Unprivileged system container</option></select></label><p>{incusEditNotice}</p>{#if service.vm.instanceType === 'container'}
+            <fieldset><legend>System-container environment and host directories</legend>
+              <label>Non-secret environment (NAME=value per line)<textarea bind:value={guestEnvironment}></textarea></label>
+              <p>Host directories use existing storage references or a new directory reference; nothing is created automatically.</p>
+              <ul>{#each service.vm.mounts ?? [] as mount,index}<li>{mount.storage || mount.path} → {mount.target} ({mount.readOnly ? 'read-only' : 'read-write'}) <button type="button" onclick={() => {service.vm?.mounts?.splice(index,1)}}>Remove mount</button></li>{/each}</ul>
+              <label>Existing directory storage<select bind:value={guestMountStorage}><option value="">Enter directory path</option>{#each directoryStorageChoices as [storageID,st]}<option value={storageID}>{storageID} ({st.path})</option>{/each}</select></label>
+              {#if !guestMountStorage}<label>Host directory path<input bind:value={guestMountPath} placeholder="/mnt/data" /></label>{/if}
+              <label>Guest mount target<input bind:value={guestMountTarget} /></label>
+              <label><input type="checkbox" bind:checked={guestMountReadOnly} /> Read-only</label>
+              <button type="button" disabled={!guestMountStorage&&!guestMountPath.trim()} onclick={addGuestMount}>Add directory mount</button>
+            </fieldset>
+            <p>Native backup captures the guest root filesystem and snapshots; host directories must also be covered by declared storage. External or changed historical data blocks full capture.</p>
+          {/if}{/if}
           <p class="field-hint">Persistent guest UUID and MAC address are generated automatically and retained on edits.</p>
           <label>Virtual CPUs <input required type="number" min="1" max="1024" bind:value={service.vm.cpus} /></label><label>Memory in MiB <input required type="number" min="128" bind:value={service.vm.memoryMiB} /></label>
           <label>Network binding <select aria-label="Network binding" required bind:value={service.vm.network}><option value="">Choose network</option>{#each bindingChoices.filter(([,b]) => b.kind === 'network' || b.kind === 'bridge') as [bindingID,b]}<option value={bindingID}>{bindingID} ({b.name})</option>{/each}</select></label>

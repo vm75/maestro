@@ -954,7 +954,6 @@ fn verify_bundle(root:&File,checksum:&str,revision:&str,source_root:&Path,storag
     let mut yaml=Vec::new();(&config_file).take(super::MAX_CONFIG_BYTES as u64+1).read_to_end(&mut yaml)?;
     ensure!(yaml.len()<=super::MAX_CONFIG_BYTES&&same(&config_meta,&config_file.metadata()?),"capture configuration changed or exceeds limit");
     let config=super::parse(&yaml)?;
-    ensure!(!config.services.values().any(|s|s.vm.as_ref().is_some_and(|v|v.is_system_container())), "system-container capture verification is not implemented");
     ensure!(super::revision(&yaml)==revision,"captured configuration revision differs");
     // Validate coverage against the captured authoritative definition, not
     // against paths supplied by a manifest author.
@@ -991,7 +990,7 @@ fn verify_bundle(root:&File,checksum:&str,revision:&str,source_root:&Path,storag
             _=>return Err(anyhow!("unsupported native capture")),
         }
     }
-    super::incus::verify_bundle_dependencies(&config,&manifest.native_exports,root,end)?;
+    super::incus::verify_bundle_dependencies(&config,&manifest.native_exports,root,storage_root,end)?;
     ensure!(config.services.iter().filter(|(_,s)|s.kind=="vm").all(|(id,_)|native_ids.contains(id.as_str())),"native guest capture is missing");
     Ok(manifest)
 }

@@ -199,6 +199,9 @@ fn resources(config: &Config) -> Result<Vec<Resource>> {
             }
         }
         if let Some(vm) = &service.vm {
+            for mount in &vm.mounts {
+                storage.insert(&mount.storage,&config.storage[&mount.storage]);
+            }
             for disk in &vm.disks {
                 storage.insert(disk, &config.storage[disk]);
             }

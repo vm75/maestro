@@ -98,6 +98,9 @@ pub fn edit(store: &Store, input: &EditInput) -> Result<Vec<u8>> {
                         resolve_mount_storage(&mut config, &input.id, mount)?;
                     }
                 }
+                if let Some(guest)=value.vm.as_mut() {
+                    for mount in &mut guest.mounts {resolve_mount_storage(&mut config,&input.id,mount)?;}
+                }
                 prepare_identity(
                     store,
                     actual,
