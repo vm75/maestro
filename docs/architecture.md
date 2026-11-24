@@ -34,7 +34,7 @@ Maestro owns `MAESTRO_INPUT`/`MAESTRO_FORWARD` firewall chains and rules tagged 
 | `src/backup.rs` | Private CLI tar.gz backups, configured input selection, platform-specific destination, atomic publication without replacement | `config`, `CommandRunner`, configured tar |
 | `src/restore.rs` | Configuration-independent CLI recovery, complete archive staging and validation, descriptor-relative writes without following symlink parents, atomic file replacement | tar/gzip readers, rustix filesystem descriptors |
 | `src/platforms/upgrade.rs` (crate-root `upgrade`) | Router-only release verification, mandatory pre-install backup unless skipped, Entware process replacement | GitHub HTTPS, `backup`, opkg |
-| `src/platforms/nginx_upgrade.rs` (crate-root `nginx_upgrade`) | Router-only custom NGINX release verification, channel selection, mandatory backup, multi-IPK installation, post-test & service restart | GitHub HTTPS, `backup`, opkg, nginx config test, init script |
+| `src/platforms/toolbox.rs` (crate-root `toolbox`) | Router-only Toolbox release discovery, verified multi-IPK installation, backup and NGINX-specific activation/recovery | GitHub HTTPS, `backup`, opkg, nginx configuration test |
 | `src/nginx_render.rs` | Embedded Jinja policies, validated shared/site settings, shared-tree rendering and rollback | nginx settings YAML and rendered runtime files |
 | `src/nginx_ingress.rs` | Typed listener/source rules, validation, inherited access resolution, geo/default-server output and preview | `nginx_render`, `nginx_sites` |
 | `src/nginx_mutation.rs` | Object mutation snapshot and rollback of inputs, generated outputs, modes and enabled links | `nginx`, `nginx_render` |

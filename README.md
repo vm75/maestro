@@ -76,16 +76,20 @@ It creates a backup first; use `--no-backup` to skip it.
 Use `--download-only` to stage a verified package under `/tmp` and print a
 manual install command. Upgrade is unavailable in Linux and test modes.
 
-Similarly, `/opt/bin/maestro upgrade-nginx` (or `update-nginx`) checks the
-latest custom Entware NGINX IPK release bundle on GitHub, verifies checksums,
-and installs the matching packages (`nginx-ssl`, `nginx-mod-brotli`,
-`nginx-mod-stream`, and `nginx-mod-headers-more`). By default it selects the
-`stable` channel; specify `--channel mainline` to upgrade to mainline releases,
-or pass `--tag <tag>` / `--version <version>`. Use `--check` to inspect available
-updates, or `--download-only` to verify and stage packages under `/tmp`.
-Selecting an older release requires `--allow-downgrade`. Successful router
-upgrades activate the new NGINX master using NGINX's live binary-upgrade signals,
-and preserve prior binary/module files in a private `/tmp` recovery directory.
+Toolbox builds and publishes custom Entware packages separately. On a live
+router, list compatible releases and select an exact release tag:
+
+```sh
+/opt/bin/maestro toolbox list
+/opt/bin/maestro toolbox install toolbox-nginx-entware-1.30.8-99_aarch64
+```
+
+The installer verifies and installs **every IPK** in the selected release,
+including all four matching NGINX packages. Use `--download-only` to stage
+the bundle, or `--allow-downgrade` to permit older versions. See
+[Toolbox installation](docs/installation.md#router-only-toolbox-packages).
+Maestro's own `upgrade` command remains separate.
+
 
 Create a backup separately with `maestro backup`; see
 [backup instructions](docs/installation.md#backups). Use
@@ -140,7 +144,7 @@ security, nginx settings, and firewall tuning.
 | [Development](docs/development.md) | Prerequisites, local checks, certificate tests, API overview |
 | [Linux integration](docs/linux.md) | Real-service lab setup and smoke tests |
 | [Architecture](docs/architecture.md) | Components, data flows, persistence, invariants |
-| [CI and releases](docs/releases.md) | Maestro publishing and manual NGINX IPK build/release workflow |
+| [CI and releases](docs/releases.md) | Maestro publishing and external Toolbox packages |
 | [Nginx bundle](config/nginx/README.md) | Site options, route policies, templates, validation |
 | [Changelog](CHANGELOG.md) | Release history |
 

@@ -1,11 +1,10 @@
-//! Router-only, command-line Entware NGINX upgrades from GitHub Releases.
-//! No HTTP route exposes this operation.
+//! Router-only installation of complete Toolbox Entware release bundles.
+//! No HTTP route exposes package installation.
 
 use std::{
     collections::HashMap,
     ffi::CString,
     fs,
-    io::Read,
     os::{
         fd::AsRawFd,
         unix::{
@@ -29,199 +28,158 @@ use crate::{
     config::{AppConfig, Platform},
 };
 
-pub const RELEASES_API: &str = "https://api.github.com/repos/vm75/maestro/releases?per_page=100";
+const RELEASES_API: &str = "https://api.github.com/repos/vm75/toolbox/releases?per_page=100";
+const TAG_API_BASE: &str = "https://api.github.com/repos/vm75/toolbox/releases/tags";
+const RELEASE_BASE: &str = "https://github.com/vm75/toolbox/releases/download";
+const ARCH: &str = "aarch64-3.10";
+const OPKG: &str = "/opt/bin/opkg";
 const MAX_RELEASE_PAGES: usize = 10;
+const MAX_IPK_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_CHECKSUM_BYTES: u64 = 64 * 1024;
+const MAX_RELEASE_BYTES: u64 = 8 * 1024 * 1024;
 const OPKG_TIMEOUT: Duration = Duration::from_secs(300);
 const RELOAD_TIMEOUT: Duration = Duration::from_secs(20);
 const MIN_FREE_HEADROOM_BYTES: u64 = 16 * 1024 * 1024;
 const MODULES_DIR: &str = "/opt/lib/nginx/modules";
 const MODULE_CONFIG_DIR: &str = "/opt/etc/nginx/module.d";
-const MODULE_FILES: [&str; 4] = [
-    "ngx_http_brotli_filter_module.so",
-    "ngx_http_brotli_static_module.so",
-    "ngx_stream_module.so",
-    "ngx_http_headers_more_filter_module.so",
-];
-pub const TAG_API_BASE: &str = "https://api.github.com/repos/vm75/maestro/releases/tags";
-pub const RELEASE_BASE: &str = "https://github.com/vm75/maestro/releases/download";
-pub const ARCH: &str = "aarch64-3.10";
-pub const OPKG: &str = "/opt/bin/opkg";
-pub const MAX_IPK_BYTES: u64 = 64 * 1024 * 1024;
-pub const MAX_CHECKSUM_BYTES: u64 = 64 * 1024;
-
-pub const REQUIRED_PACKAGES: [&str; 4] = [
+const NGINX_PACKAGES: [&str; 4] = [
     "nginx-ssl",
     "nginx-mod-brotli",
     "nginx-mod-stream",
     "nginx-mod-headers-more",
 ];
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Default,
-    clap::ValueEnum,
-    serde::Serialize,
-    serde::Deserialize,
-)]
-#[serde(rename_all = "lowercase")]
-pub enum NginxChannel {
-    #[default]
-    Stable,
-    Mainline,
-}
-
-impl std::fmt::Display for NginxChannel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Stable => write!(f, "stable"),
-            Self::Mainline => write!(f, "mainline"),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct UpgradeNginxOptions {
-    pub channel: NginxChannel,
-    pub tag: Option<String>,
-    pub version: Option<String>,
-    pub download_only: bool,
-    pub no_backup: bool,
-    pub force: bool,
-    pub check: bool,
-    pub allow_downgrade: bool,
+#[derive(Debug, clap::Subcommand)]
+pub enum ToolboxCommand {
+    /// List published Toolbox releases compatible with this router.
+    List,
+    /// Verify and install every IPK in the selected release.
+    Install {
+        /// Exact release tag shown by toolbox list.
+        tag: String,
+        /// Stage the verified bundle without installing.
+        #[arg(long)]
+        download_only: bool,
+        /// Skip the pre-install Maestro backup.
+        #[arg(long)]
+        no_backup: bool,
+        /// Permit replacing a newer installed package with an older version.
+        #[arg(long)]
+        allow_downgrade: bool,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct Release {
-    pub tag_name: String,
+struct Release {
+    tag_name: String,
     #[serde(default)]
-    pub draft: bool,
+    draft: bool,
     #[serde(default)]
-    pub prerelease: bool,
+    prerelease: bool,
     #[serde(default)]
-    pub assets: Vec<Asset>,
+    assets: Vec<Asset>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct Asset {
-    pub name: String,
+struct Asset {
+    name: String,
+    size: u64,
     #[serde(default)]
-    pub size: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NginxTagInfo {
-    pub tag: String,
-    pub version: [u64; 3],
-    pub version_str: String,
-    pub run_id: Option<u64>,
-    pub attempt: Option<u64>,
-    pub channel: NginxChannel,
-}
-
-impl Ord for NginxTagInfo {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.version
-            .cmp(&other.version)
-            .then_with(|| self.run_id.cmp(&other.run_id))
-            .then_with(|| self.attempt.cmp(&other.attempt))
-    }
-}
-
-impl PartialOrd for NginxTagInfo {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
+    digest: Option<String>,
 }
 
 pub fn require_router(platform: Platform, test_mode: bool) -> Result<()> {
     ensure!(
         platform == Platform::Asuswrt && !test_mode,
-        "upgrade-nginx is available only on a live Asuswrt-Merlin router, not Linux or test mode"
+        "toolbox is available only on a live Asuswrt-Merlin router"
     );
     Ok(())
 }
 
-pub fn parse_version_numbers(version_str: &str) -> Option<[u64; 3]> {
-    let mut parts = version_str.split('.');
-    let mut numbers = [0u64; 3];
-    for number in &mut numbers {
-        let part = parts.next()?;
-        if part.is_empty()
-            || (part.len() > 1 && part.starts_with('0'))
-            || !part.bytes().all(|byte| byte.is_ascii_digit())
-        {
-            return None;
+fn entware_tag(tag: &str) -> bool {
+    tag.starts_with("toolbox-")
+        && tag.contains("-entware-")
+        && validate_asset_name(tag).is_ok()
+}
+
+fn package_parts(filename: &str) -> Result<(&str, &str)> {
+    validate_asset_name(filename)?;
+    let suffix = format!("_{ARCH}.ipk");
+    let stem = filename
+        .strip_suffix(&suffix)
+        .context("incompatible Entware IPK architecture")?;
+    let (name, version) = stem.split_once('_').context("invalid IPK filename")?;
+    ensure!(
+        !name.is_empty() && !version.is_empty() && !version.contains('_'),
+        "invalid IPK filename: {filename}"
+    );
+    Ok((name, version))
+}
+
+fn bundle(release: &Release) -> Result<Vec<&Asset>> {
+    ensure!(
+        !release.draft && !release.prerelease && entware_tag(&release.tag_name),
+        "not a published Toolbox Entware release"
+    );
+    ensure!(
+        release.assets.iter().filter(|a| a.name == "SHA256SUMS").count() == 1,
+        "release must contain one SHA256SUMS manifest"
+    );
+    let mut packages = Vec::new();
+    let mut names = HashMap::new();
+    for asset in &release.assets {
+        if !asset.name.ends_with(".ipk") {
+            continue;
         }
-        *number = part.parse().ok()?;
+        let (name, version) = package_parts(&asset.name)?;
+        ensure!(
+            names.insert(name, version).is_none(),
+            "duplicate package in release: {name}"
+        );
+        ensure!(
+            asset.size > 0 && asset.size <= MAX_IPK_BYTES,
+            "invalid IPK size: {}", asset.name
+        );
+        packages.push(asset);
     }
-    if parts.next().is_some() {
-        return None;
-    }
-    Some(numbers)
-}
-
-pub fn channel_for_version(version: [u64; 3]) -> NginxChannel {
-    if version[1] % 2 == 0 {
-        NginxChannel::Stable
-    } else {
-        NginxChannel::Mainline
-    }
-}
-
-pub fn parse_nginx_tag(tag: &str) -> Option<NginxTagInfo> {
-    let remainder = tag.strip_prefix("nginx-v")?;
-    let mut parts = remainder.split('-');
-    let version_part = parts.next()?;
-    let version = parse_version_numbers(version_part)?;
-    let channel = channel_for_version(version);
-
-    // Refuse unknown suffixes and path characters; the tag becomes part of a
-    // staging directory and release URL, so its format must be unambiguous.
-    let (run_id, attempt) = match (parts.next(), parts.next(), parts.next()) {
-        (None, None, None) => (None, None),
-        (Some(run), Some(attempt), None) => {
-            let run = run.strip_prefix("run")?;
-            let attempt = attempt.strip_prefix('a')?;
-            if run.is_empty() || attempt.is_empty() {
-                return None;
-            }
-            (Some(run.parse().ok()?), Some(attempt.parse().ok()?))
-        }
-        _ => return None,
-    };
-
-    Some(NginxTagInfo {
-        tag: tag.to_string(),
-        version,
-        version_str: version_part.to_string(),
-        run_id,
-        attempt,
-        channel,
-    })
-}
-
-pub fn parse_installed_nginx_version(output: &str) -> Option<[u64; 3]> {
-    for line in output.lines() {
-        let lower = line.to_ascii_lowercase();
-        if let Some(pos) = lower.find("nginx/") {
-            let ver_part = &line[pos + "nginx/".len()..];
-            let token = ver_part
-                .split(|c: char| c.is_whitespace() || c == '(' || c == '/' || c == '-')
-                .next()?;
-            if let Some(numbers) = parse_version_numbers(token) {
-                return Some(numbers);
-            }
+    ensure!(!packages.is_empty(), "release contains no compatible IPKs");
+    if release.tag_name.starts_with("toolbox-nginx-entware-")
+        || NGINX_PACKAGES.iter().any(|name| names.contains_key(name))
+    {
+        let version = names.get("nginx-ssl").context("missing nginx-ssl")?;
+        for name in NGINX_PACKAGES {
+            ensure!(
+                names.get(name) == Some(version),
+                "missing or mismatched NGINX package: {name}"
+            );
         }
     }
-    None
+    packages.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(packages)
 }
 
-pub fn parse_checksums(content: &str) -> Result<HashMap<String, String>> {
+fn verify_manifest(
+    packages: &[&Asset],
+    checksums: &HashMap<String, String>,
+) -> Result<()> {
+    ensure!(
+        checksums.keys().filter(|name| name.ends_with(".ipk")).count() == packages.len(),
+        "IPK assets and checksum manifest disagree"
+    );
+    for asset in packages {
+        let checksum = checksums.get(&asset.name)
+            .with_context(|| format!("missing checksum for {}", asset.name))?;
+        if let Some(digest) = &asset.digest {
+            ensure!(
+                digest.strip_prefix("sha256:") == Some(checksum.as_str()),
+                "GitHub digest and manifest disagree for {}", asset.name
+            );
+        }
+    }
+    Ok(())
+}
+
+fn parse_checksums(content: &str) -> Result<HashMap<String, String>> {
     let mut map = HashMap::new();
     for line in content.lines() {
         let line = line.trim();
@@ -240,85 +198,16 @@ pub fn parse_checksums(content: &str) -> Result<HashMap<String, String>> {
             "invalid SHA-256 digest: {digest}"
         );
         let filename = file.trim_start_matches('*');
-        map.insert(filename.to_string(), digest.to_ascii_lowercase());
+        validate_asset_name(filename)?;
+        ensure!(
+            map.insert(filename.to_string(), digest.to_ascii_lowercase()).is_none(),
+            "duplicate checksum for {filename}"
+        );
     }
     Ok(map)
 }
 
-pub fn find_package_asset<'a>(
-    assets: &'a [Asset],
-    pkg_name: &str,
-    version_str: &str,
-    arch: &str,
-) -> Result<&'a Asset> {
-    let prefix = format!("{pkg_name}_{version_str}-");
-    let suffix = format!("_{arch}.ipk");
-    let matches: Vec<&'a Asset> = assets
-        .iter()
-        .filter(|a| a.name.starts_with(&prefix) && a.name.ends_with(&suffix))
-        .collect();
-    ensure!(
-        !matches.is_empty(),
-        "missing required asset for {pkg_name} (version {version_str}, arch {arch})"
-    );
-    ensure!(
-        matches.len() == 1,
-        "multiple matching assets found for {pkg_name}: {:?}",
-        matches.iter().map(|a| &a.name).collect::<Vec<_>>()
-    );
-    Ok(matches[0])
-}
-
-pub fn find_required_assets<'a>(
-    assets: &'a [Asset],
-    version_str: &str,
-    arch: &str,
-) -> Result<Vec<&'a Asset>> {
-    let mut result = Vec::new();
-    for pkg in REQUIRED_PACKAGES {
-        result.push(find_package_asset(assets, pkg, version_str, arch)?);
-    }
-    Ok(result)
-}
-
-pub fn select_release_from_list<'a>(
-    releases: &'a [Release],
-    target_version: Option<&str>,
-    channel: NginxChannel,
-) -> Result<(&'a Release, NginxTagInfo)> {
-    let mut candidates = Vec::new();
-    for release in releases {
-        if release.draft || release.prerelease {
-            continue;
-        }
-        let Some(info) = parse_nginx_tag(&release.tag_name) else {
-            continue;
-        };
-        if let Some(ver) = target_version {
-            let req_ver =
-                parse_version_numbers(ver).context("invalid --version argument: expected X.Y.Z")?;
-            if info.version != req_ver {
-                continue;
-            }
-        } else if info.channel != channel {
-            continue;
-        }
-        candidates.push((release, info));
-    }
-
-    if candidates.is_empty() {
-        if let Some(ver) = target_version {
-            bail!("no NGINX release found matching version {ver}");
-        } else {
-            bail!("no {channel} NGINX releases found on GitHub");
-        }
-    }
-
-    candidates.sort_by(|a, b| a.1.cmp(&b.1));
-    Ok(candidates.pop().unwrap())
-}
-
-pub fn check_opkg_architecture() -> Result<bool> {
+fn check_opkg_architecture() -> Result<bool> {
     if !Path::new(OPKG).is_file() {
         return Ok(false);
     }
@@ -338,20 +227,7 @@ pub fn check_opkg_architecture() -> Result<bool> {
     Ok(true)
 }
 
-pub fn get_installed_nginx_version(nginx_bin: &Path) -> Option<[u64; 3]> {
-    if !nginx_bin.is_file() {
-        return None;
-    }
-    let output = ProcessCommand::new(nginx_bin).arg("-v").output().ok()?;
-    let text = if !output.stderr.is_empty() {
-        String::from_utf8_lossy(&output.stderr)
-    } else {
-        String::from_utf8_lossy(&output.stdout)
-    };
-    parse_installed_nginx_version(&text)
-}
-
-pub fn test_nginx_config(
+fn test_nginx_config(
     nginx_bin: &Path,
     config_path: &Path,
     prefix_path: Option<&Path>,
@@ -439,97 +315,12 @@ async fn download_and_verify_asset(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UpgradeDisposition {
-    Current,
-    Newer,
-    Rebuild,
-    Downgrade,
-}
-
-pub fn disposition(
-    installed: Option<[u64; 3]>,
-    requested: [u64; 3],
-    installed_files_match: bool,
-) -> UpgradeDisposition {
-    if installed_files_match {
-        return UpgradeDisposition::Current;
-    }
-    match installed {
-        Some(current) if requested < current => UpgradeDisposition::Downgrade,
-        Some(current) if requested == current => UpgradeDisposition::Rebuild,
-        _ => UpgradeDisposition::Newer,
-    }
-}
-
-fn sha256_file(path: &Path) -> Result<Option<String>> {
-    let mut file = match fs::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
-    };
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 32 * 1024];
-    loop {
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    Ok(Some(format!("{:x}", hasher.finalize())))
-}
-
-pub fn installed_matches_release(
-    nginx_bin: &Path,
-    checksum_map: &HashMap<String, String>,
-    modules_dir: &Path,
-) -> Result<bool> {
-    let binary_and_modules = std::iter::once((nginx_bin.to_path_buf(), "nginx".to_string())).chain(
-        MODULE_FILES
-            .iter()
-            .map(|name| (modules_dir.join(name), (*name).to_string())),
-    );
-    for (path, name) in binary_and_modules {
-        let expected = checksum_map
-            .get(&name)
-            .with_context(|| format!("release checksum missing for {name}"))?;
-        if sha256_file(&path)?.as_deref() != Some(expected.as_str()) {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-async fn list_nginx_releases(client: &reqwest::Client) -> Result<Vec<Release>> {
-    let mut releases = Vec::new();
-    for page in 1..=MAX_RELEASE_PAGES {
-        let page_releases: Vec<Release> = client
-            .get(format!("{RELEASES_API}&page={page}"))
-            .send()
-            .await?
-            .error_for_status()
-            .context("unable to query GitHub releases (check internet access and rate limits)")?
-            .json()
-            .await
-            .context("unable to decode GitHub releases")?;
-        let count = page_releases.len();
-        releases.extend(page_releases);
-        if count < 100 {
-            return Ok(releases);
-        }
-    }
-    bail!(
-        "GitHub release discovery exceeded {MAX_RELEASE_PAGES} pages; specify --tag to select an exact release"
-    )
-}
-
 fn validate_asset_name(name: &str) -> Result<()> {
     ensure!(
-        !name.is_empty()
+        !name.is_empty() && name != "."
             && name
                 .bytes()
-                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'.' | b'-' | b'_'))
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'.' | b'-' | b'_' | b'+'))
             && !name.contains(".."),
         "unsafe release asset filename: {name}"
     );
@@ -576,11 +367,11 @@ impl UpgradeLock {
             .create(true)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
-            .open("/tmp/.maestro-nginx-upgrade.lock")
-            .context("unable to open NGINX upgrade lock")?;
+            .open("/tmp/.maestro-toolbox-install.lock")
+            .context("unable to open Toolbox install lock")?;
         ensure!(
             unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
-            "another NGINX upgrade is already running"
+            "another Toolbox installation is already running"
         );
         Ok(Self(file))
     }
@@ -944,161 +735,192 @@ async fn recover_failure(
     failure
 }
 
+fn client() -> Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .user_agent(concat!("maestro/", env!("CARGO_PKG_VERSION")))
+        .timeout(Duration::from_secs(120))
+        .build()?)
+}
+
+async fn list(client: &reqwest::Client) -> Result<()> {
+    let mut found = false;
+    for page in 1..=MAX_RELEASE_PAGES {
+        let bytes = request_bytes(
+            client,
+            &format!("{RELEASES_API}&page={page}"),
+            MAX_RELEASE_BYTES,
+        )
+        .await?;
+        let releases: Vec<Release> = serde_json::from_slice(&bytes)?;
+        let count = releases.len();
+        for release in releases {
+            if let Ok(packages) = bundle(&release) {
+                found = true;
+                println!("{} ({} IPKs)", release.tag_name, packages.len());
+                for asset in packages {
+                    println!("  {}", asset.name);
+                }
+            }
+        }
+        if count < 100 {
+            if !found {
+                println!("No compatible published Toolbox Entware releases found.");
+            }
+            return Ok(());
+        }
+    }
+    println!("Listing limited to {MAX_RELEASE_PAGES} pages; older tags can be selected directly.");
+    Ok(())
+}
+
+async fn installed_packages() -> Result<HashMap<String, String>> {
+    let mut command = AsyncCommand::new(OPKG);
+    command.arg("list-installed");
+    let output = bounded_command(command, OPKG_TIMEOUT, "opkg list-installed").await?;
+    ensure!(output.status.success(), "opkg list-installed failed");
+    let text = String::from_utf8(output.stdout)?;
+    Ok(text
+        .lines()
+        .filter_map(|line| line.split_once(" - "))
+        .map(|(name, version)| (name.to_string(), version.to_string()))
+        .collect())
+}
+
+async fn check_downgrades(packages: &[&Asset], allow_downgrade: bool) -> Result<()> {
+    if allow_downgrade {
+        return Ok(());
+    }
+    let installed = installed_packages().await?;
+    for asset in packages {
+        let (name, version) = package_parts(&asset.name)?;
+        if let Some(current) = installed.get(name) {
+            if current == version {
+                continue;
+            }
+            let mut command = AsyncCommand::new(OPKG);
+            command.args(["compare-versions", current.as_str(), ">", version]);
+            let output = bounded_command(command, OPKG_TIMEOUT, "opkg compare-versions").await?;
+            match output.status.code() {
+                Some(0) => bail!(
+                    "{name}: installed {current} is newer than {version}; use --allow-downgrade"
+                ),
+                Some(1) => {}
+                _ => bail!("opkg could not compare versions for {name}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn verify_installed(packages: &[&Asset]) -> Result<()> {
+    let installed = installed_packages().await?;
+    for asset in packages {
+        let (name, version) = package_parts(&asset.name)?;
+        ensure!(
+            installed.get(name).map(String::as_str) == Some(version),
+            "opkg did not install the selected version of {name} ({version})"
+        );
+    }
+    Ok(())
+}
+
 pub async fn run(
     config: &AppConfig,
     config_path: &Path,
-    options: UpgradeNginxOptions,
+    command: ToolboxCommand,
 ) -> Result<()> {
-    ensure!(
-        options.tag.is_none() || options.version.is_none(),
-        "--tag and --version are mutually exclusive"
-    );
-    let _lock = if options.check {
-        None
-    } else {
-        Some(UpgradeLock::acquire()?)
-    };
-    let opkg_available = check_opkg_architecture()?;
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("maestro/", env!("CARGO_PKG_VERSION")))
-        .timeout(Duration::from_secs(120))
-        .build()?;
-
-    let (release, tag_info) = if let Some(tag) = &options.tag {
-        ensure!(parse_nginx_tag(tag).is_some(), "invalid NGINX release tag");
-        let url = format!("{TAG_API_BASE}/{tag}");
-        let rel: Release = client
-            .get(&url)
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
+    require_router(config.platform, config.test_mode)?;
+    let client = client()?;
+    match command {
+        ToolboxCommand::List => list(&client).await,
+        ToolboxCommand::Install {
+            tag,
+            download_only,
+            no_backup,
+            allow_downgrade,
+        } => {
+            install(
+                config,
+                config_path,
+                &client,
+                &tag,
+                download_only,
+                no_backup,
+                allow_downgrade,
+            )
             .await
-            .context("unable to deserialize GitHub release")?;
-        ensure!(
-            rel.tag_name == *tag,
-            "release tag does not match requested tag"
-        );
-        ensure!(
-            !rel.draft && !rel.prerelease,
-            "release is draft or prerelease"
-        );
-        let info = parse_nginx_tag(&rel.tag_name).context("invalid NGINX release tag")?;
-        (rel, info)
-    } else {
-        let releases = list_nginx_releases(&client).await?;
-        let (selected, info) =
-            select_release_from_list(&releases, options.version.as_deref(), options.channel)?;
-        (selected.clone(), info)
-    };
+        }
+    }
+}
 
-    let matched_assets = find_required_assets(&release.assets, &tag_info.version_str, ARCH)?;
-    ensure!(
-        release.assets.iter().any(|a| a.name == "SHA256SUMS"),
-        "release {} lacks SHA256SUMS",
-        tag_info.tag
-    );
-    let mut expected_size = 0u64;
-    for asset in &matched_assets {
-        validate_asset_name(&asset.name)?;
-        ensure!(
-            asset.size > 0 && asset.size <= MAX_IPK_BYTES,
-            "invalid or oversized release asset {}",
-            asset.name
-        );
-        expected_size = expected_size.saturating_add(asset.size);
+async fn install(
+    config: &AppConfig,
+    config_path: &Path,
+    client: &reqwest::Client,
+    tag: &str,
+    download_only: bool,
+    no_backup: bool,
+    allow_downgrade: bool,
+) -> Result<()> {
+    ensure!(entware_tag(tag), "invalid Toolbox Entware release tag");
+    let opkg_available = check_opkg_architecture()?;
+    let automatic = !download_only && opkg_available && unsafe { libc::geteuid() } == 0;
+    let _lock = if automatic {
+        Some(UpgradeLock::acquire()?)
+    } else {
+        None
+    };
+    let bytes = request_bytes(
+        client,
+        &format!("{TAG_API_BASE}/{tag}"),
+        MAX_RELEASE_BYTES,
+    )
+    .await?;
+    let release: Release = serde_json::from_slice(&bytes)?;
+    ensure!(release.tag_name == tag, "release tag mismatch");
+    let packages = bundle(&release)?;
+    let nginx = packages.iter().any(|asset| {
+        package_parts(&asset.name).is_ok_and(|(name, _)| name == "nginx-ssl")
+    });
+    if automatic {
+        check_downgrades(&packages, allow_downgrade).await?;
+        if nginx {
+            test_nginx_config(
+                &config.commands.nginx,
+                &config.nginx.config_path,
+                config.nginx.prefix_path.as_deref(),
+            )
+            .context("existing NGINX configuration test failed")?;
+        }
     }
 
-    let base_url = format!("{RELEASE_BASE}/{}", tag_info.tag);
+    let expected_size = packages.iter().map(|asset| asset.size).sum();
+    ensure_free_space(Path::new("/tmp"), expected_size)?;
+    let base_url = format!("{RELEASE_BASE}/{tag}");
     let checksum_bytes = request_bytes(
-        &client,
+        client,
         &format!("{base_url}/SHA256SUMS"),
         MAX_CHECKSUM_BYTES,
     )
-    .await
-    .context("unable to download release checksums")?;
-    let checksum_map = parse_checksums(&String::from_utf8(checksum_bytes)?)?;
-    for asset in &matched_assets {
-        ensure!(
-            checksum_map.contains_key(&asset.name),
-            "SHA256SUMS lacks checksum for required asset {}",
-            asset.name
-        );
-    }
+    .await?;
+    let checksums = parse_checksums(&String::from_utf8(checksum_bytes)?)?;
+    verify_manifest(&packages, &checksums)?;
 
-    let installed = get_installed_nginx_version(&config.commands.nginx);
-    let installed_files_match = installed_matches_release(
-        &config.commands.nginx,
-        &checksum_map,
-        Path::new(MODULES_DIR),
-    )?;
-    let action = disposition(installed, tag_info.version, installed_files_match);
-
-    if options.check {
-        println!(
-            "Installed NGINX: {}",
-            installed.map_or_else(
-                || "not detected".to_string(),
-                |v| format!("{}.{}.{}", v[0], v[1], v[2])
-            )
-        );
-        match action {
-            UpgradeDisposition::Current => println!(
-                "Installed binary and modules match release {}.",
-                tag_info.tag
-            ),
-            UpgradeDisposition::Downgrade => println!(
-                "Selected release {} is older; installation requires --allow-downgrade.",
-                tag_info.tag
-            ),
-            UpgradeDisposition::Rebuild => println!(
-                "Different NGINX build available at the same version: {}.",
-                tag_info.tag
-            ),
-            UpgradeDisposition::Newer => println!(
-                "NGINX release available: {} ({}).",
-                tag_info.tag, tag_info.channel
-            ),
-        }
-        return Ok(());
-    }
-    if action == UpgradeDisposition::Current && !options.force && !options.download_only {
-        println!(
-            "NGINX binary and modules already match {}. Use --force to reinstall.",
-            tag_info.tag
-        );
-        return Ok(());
-    }
-    if action == UpgradeDisposition::Downgrade && !options.allow_downgrade && !options.download_only
-    {
-        bail!(
-            "selected NGINX {} is older than installed version; use --allow-downgrade to proceed",
-            tag_info.version_str
-        );
-    }
-
-    // Verify configuration syntax before staging, backing up or modifying packages.
-    test_nginx_config(
-        &config.commands.nginx,
-        &config.nginx.config_path,
-        config.nginx.prefix_path.as_deref(),
-    )
-    .context("existing NGINX configuration test failed")?;
-
-    ensure_free_space(Path::new("/tmp"), expected_size)?;
-    let staging_dir = PathBuf::from("/tmp").join(format!(".nginx-upgrade-{}", Uuid::new_v4()));
+    let staging_dir = PathBuf::from("/tmp").join(format!(".toolbox-{}", Uuid::new_v4()));
     create_private_directory(&staging_dir)?;
     let download_result: Result<()> = async {
-        for asset in &matched_assets {
+        for asset in &packages {
+            let path = staging_dir.join(&asset.name);
             download_and_verify_asset(
-                &client,
+                client,
                 &base_url,
                 &asset.name,
-                &checksum_map[&asset.name],
-                &staging_dir.join(&asset.name),
-                MAX_IPK_BYTES,
+                &checksums[&asset.name],
+                &path,
+                asset.size,
             )
             .await?;
+            ensure!(fs::metadata(&path)?.len() == asset.size, "IPK size mismatch");
         }
         Ok(())
     }
@@ -1107,55 +929,64 @@ pub async fn run(
         let _ = fs::remove_dir_all(&staging_dir);
         return Err(error);
     }
-
-    // Use a unique verified directory: never erase a previous staged bundle.
-    let final_dir =
-        PathBuf::from("/tmp").join(format!("nginx-{}-{}", tag_info.tag, Uuid::new_v4()));
-    fs::rename(&staging_dir, &final_dir).context("unable to publish verified NGINX packages")?;
-    println!(
-        "Verified NGINX {} ({}) packages: {}",
-        tag_info.version_str,
-        tag_info.channel,
-        final_dir.display()
-    );
-
-    let package_paths: Vec<PathBuf> = matched_assets
-        .iter()
+    let final_dir = PathBuf::from("/tmp").join(format!("toolbox-{tag}-{}", Uuid::new_v4()));
+    if let Err(error) = fs::rename(&staging_dir, &final_dir) {
+        let _ = fs::remove_dir_all(&staging_dir);
+        return Err(error).context("unable to publish verified IPKs");
+    }
+    let package_paths: Vec<PathBuf> = packages.iter()
         .map(|asset| final_dir.join(&asset.name))
         .collect();
-    let reinstall = options.force || action == UpgradeDisposition::Rebuild;
-    let mut opkg_options = Vec::new();
-    if reinstall {
-        opkg_options.push("--force-reinstall");
-    }
-    if action == UpgradeDisposition::Downgrade {
+    println!("Verified {} IPKs for {tag}: {}", packages.len(), final_dir.display());
+
+    // Explicit release selection includes same-version rebuilds.
+    let mut opkg_options = vec!["--force-reinstall"];
+    if allow_downgrade {
         opkg_options.push("--force-downgrade");
     }
     let manual_cmd = format!(
-        "{OPKG} {}install {}",
-        if opkg_options.is_empty() {
-            String::new()
-        } else {
-            format!("{} ", opkg_options.join(" "))
-        },
-        package_paths
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(" ")
+        "{OPKG} {} install {}",
+        opkg_options.join(" "),
+        package_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" ")
     );
-
-    // Download-only still makes a backup, like maestro upgrade.
-    if !options.no_backup {
+    if !no_backup {
         backup::run(config, config_path, None)
             .await
-            .context("pre-upgrade backup failed; no packages were installed")?;
+            .context("pre-install backup failed; no packages were installed")?;
     }
-    if options.download_only || !opkg_available || unsafe { libc::geteuid() } != 0 {
+    if !automatic {
         println!("To install as root: {manual_cmd}");
+        if nginx {
+            println!("Manual installation requires NGINX configuration testing and binary activation.");
+        }
         return Ok(());
     }
 
+    println!("Installing all IPKs. Manual retry command: {manual_cmd}");
+    let mut opkg_cmd = AsyncCommand::new(OPKG);
+    opkg_cmd.args(&opkg_options).arg("install").args(&package_paths);
+    if nginx {
+        install_nginx(config, opkg_cmd, &packages).await?;
+    } else {
+        let output = bounded_command(opkg_cmd, OPKG_TIMEOUT, "opkg install").await
+            .context("installation state may be partial; inspect opkg and package hooks before retrying")?;
+        ensure!(
+            output.status.success(),
+            "opkg install failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        verify_installed(&packages).await?;
+    }
+    println!("Successfully installed all {} IPKs from {tag}.", packages.len());
+    Ok(())
+}
+
+async fn install_nginx(
+    config: &AppConfig,
+    opkg_cmd: AsyncCommand,
+    packages: &[&Asset],
+) -> Result<()> {
     ensure_free_space(Path::new("/tmp"), 0)?;
     let snapshot_paths = vec![
         config.commands.nginx.clone(),
@@ -1169,16 +1000,10 @@ pub async fn run(
         snapshot.directory.display()
     );
     println!("If opkg fails, inspect the snapshot; package-manager metadata is not rolled back.");
-    println!("Installing NGINX via Entware. Manual retry command: {manual_cmd}");
     let old_master = nginx_master_from_pid_file(&config.nginx.pid_path, &config.commands.nginx)
         .context("NGINX PID file does not identify the configured master; refusing to install")?;
     let was_running = old_master.is_some();
 
-    let mut opkg_cmd = AsyncCommand::new(OPKG);
-    opkg_cmd
-        .args(&opkg_options)
-        .arg("install")
-        .args(&package_paths);
     let opkg_out = match bounded_command(opkg_cmd, OPKG_TIMEOUT, "opkg install").await {
         Ok(result) => result,
         // A timed-out opkg process may leave package hooks running. Never
@@ -1192,11 +1017,10 @@ pub async fn run(
     };
     if !opkg_out.status.success() {
         let error = anyhow!(
-            "opkg install failed ({}):\nstdout: {}\nstderr: {}\nRetry: {}",
+            "opkg install failed ({}):\nstdout: {}\nstderr: {}",
             opkg_out.status,
             String::from_utf8_lossy(&opkg_out.stdout),
-            String::from_utf8_lossy(&opkg_out.stderr),
-            manual_cmd
+            String::from_utf8_lossy(&opkg_out.stderr)
         );
         return Err(recover_failure(config, &snapshot, error, was_running).await);
     }
@@ -1208,24 +1032,17 @@ pub async fn run(
         return Err(recover_failure(config, &snapshot, error, was_running).await);
     }
 
-    match installed_matches_release(
-        &config.commands.nginx,
-        &checksum_map,
-        Path::new(MODULES_DIR),
-    ) {
-        Ok(true) => {}
-        Ok(false) => {
-            return Err(recover_failure(
-                config,
-                &snapshot,
-                anyhow!(
-                    "installed NGINX executable/modules do not match verified release checksums"
-                ),
-                was_running,
-            )
-            .await);
-        }
-        Err(error) => return Err(recover_failure(config, &snapshot, error, was_running).await),
+    if !config.commands.nginx.is_file() {
+        return Err(recover_failure(
+            config,
+            &snapshot,
+            anyhow!("installed NGINX executable is missing"),
+            was_running,
+        )
+        .await);
+    }
+    if let Err(error) = verify_installed(packages).await {
+        return Err(recover_failure(config, &snapshot, error, was_running).await);
     }
 
     // HUP/reload only reconfigures the OLD master binary. NGINX's supported
@@ -1267,12 +1084,7 @@ pub async fn run(
             "NGINX was not running before the upgrade; packages installed, service left stopped."
         );
     }
-    println!(
-        "Successfully installed NGINX {} ({}). Recovery files: {}",
-        tag_info.version_str,
-        tag_info.channel,
-        snapshot.directory.display()
-    );
+    println!("NGINX recovery files: {}", snapshot.directory.display());
     Ok(())
 }
 
@@ -1280,254 +1092,67 @@ pub async fn run(
 mod tests {
     use super::*;
 
-    #[test]
-    fn parse_version_numbers_valid() {
-        assert_eq!(parse_version_numbers("1.30.7"), Some([1, 30, 7]));
-        assert_eq!(parse_version_numbers("1.28.0"), Some([1, 28, 0]));
-        assert_eq!(parse_version_numbers("0.1.0"), Some([0, 1, 0]));
-        assert_eq!(parse_version_numbers("2.0.0"), Some([2, 0, 0]));
-    }
-
-    #[test]
-    fn parse_version_numbers_invalid() {
-        for invalid in [
-            "1.30", "1.30.7.1", "1.03.7", "1.30.07", "1.30.a", "", "v1.30.7",
-        ] {
-            assert_eq!(parse_version_numbers(invalid), None, "tested: {invalid}");
+    fn release(tag: &str, names: &[&str]) -> Release {
+        let mut assets: Vec<Asset> = names.iter().map(|name| Asset {
+            name: (*name).into(),
+            size: 123,
+            digest: None,
+        }).collect();
+        assets.push(Asset {
+            name: "SHA256SUMS".into(),
+            size: 100,
+            digest: None,
+        });
+        Release {
+            tag_name: tag.into(),
+            draft: false,
+            prerelease: false,
+            assets,
         }
     }
 
     #[test]
-    fn channel_detection() {
-        assert_eq!(channel_for_version([1, 30, 7]), NginxChannel::Stable);
-        assert_eq!(channel_for_version([1, 28, 0]), NginxChannel::Stable);
-        assert_eq!(channel_for_version([1, 26, 2]), NginxChannel::Stable);
-        assert_eq!(channel_for_version([1, 29, 1]), NginxChannel::Mainline);
-        assert_eq!(channel_for_version([1, 31, 0]), NginxChannel::Mainline);
-        assert_eq!(channel_for_version([1, 27, 4]), NginxChannel::Mainline);
+    fn toolbox_release_selection_and_full_bundle() {
+        let nginx = release(
+            "toolbox-nginx-entware-1.30.8-99_aarch64",
+            &[
+                "nginx-ssl_1.30.8-99_aarch64-3.10.ipk",
+                "nginx-mod-brotli_1.30.8-99_aarch64-3.10.ipk",
+                "nginx-mod-stream_1.30.8-99_aarch64-3.10.ipk",
+                "nginx-mod-headers-more_1.30.8-99_aarch64-3.10.ipk",
+            ],
+        );
+        assert_eq!(bundle(&nginx).unwrap().len(), 4);
+        let mut incomplete = nginx.clone();
+        incomplete.assets.remove(0);
+        assert!(bundle(&incomplete).is_err());
+        let mut other = release(
+            "toolbox-btop-entware-aarch64-r45389334971-a1",
+            &["btop_1.4.8-1_aarch64-3.10.ipk"],
+        );
+        assert_eq!(bundle(&other).unwrap().len(), 1);
+        other.assets[0].name = "btop_1.4.8-1_armv7-3.2.ipk".into();
+        assert!(bundle(&other).is_err());
+        other.tag_name = "toolbox-btop-android-arm64".into();
+        assert!(bundle(&other).is_err());
+        assert!(!entware_tag("toolbox-x-entware-../x"));
     }
 
     #[test]
-    fn parse_nginx_tag_formats() {
-        let tag1 = "nginx-v1.30.7-run44684227015-a1";
-        let info1 = parse_nginx_tag(tag1).unwrap();
-        assert_eq!(info1.tag, tag1);
-        assert_eq!(info1.version, [1, 30, 7]);
-        assert_eq!(info1.version_str, "1.30.7");
-        assert_eq!(info1.run_id, Some(44684227015));
-        assert_eq!(info1.attempt, Some(1));
-        assert_eq!(info1.channel, NginxChannel::Stable);
-
-        let tag2 = "nginx-v1.31.0";
-        let info2 = parse_nginx_tag(tag2).unwrap();
-        assert_eq!(info2.version, [1, 31, 0]);
-        assert_eq!(info2.run_id, None);
-        assert_eq!(info2.attempt, None);
-        assert_eq!(info2.channel, NginxChannel::Mainline);
-
-        assert!(parse_nginx_tag("v0.10.3").is_none());
-        assert!(parse_nginx_tag("nginx-1.30.7").is_none());
-        assert!(parse_nginx_tag("nginx-v1.30").is_none());
-        for invalid in [
-            "nginx-v1.30.7/../../oops",
-            "nginx-v1.30.7-run12-a1/escape",
-            "nginx-v1.30.7-unknown",
-            "nginx-v1.30.7-run12",
-            "nginx-v1.30.7-run12-a1-extra",
-            "nginx-v1.30.7-runx-a2",
-        ] {
-            assert!(parse_nginx_tag(invalid).is_none(), "{invalid}");
-        }
-    }
-
-    #[test]
-    fn nginx_tag_ordering() {
-        let tag_old = parse_nginx_tag("nginx-v1.30.6-run10-a1").unwrap();
-        let tag_mid1 = parse_nginx_tag("nginx-v1.30.7-run10-a1").unwrap();
-        let tag_mid2 = parse_nginx_tag("nginx-v1.30.7-run20-a1").unwrap();
-        let tag_mid3 = parse_nginx_tag("nginx-v1.30.7-run20-a2").unwrap();
-        let tag_new = parse_nginx_tag("nginx-v1.31.0-run5-a1").unwrap();
-
-        assert!(tag_old < tag_mid1);
-        assert!(tag_mid1 < tag_mid2);
-        assert!(tag_mid2 < tag_mid3);
-        assert!(tag_mid3 < tag_new);
-    }
-
-    #[test]
-    fn parse_installed_nginx_version_formats() {
-        let out1 = "nginx version: nginx/1.30.6\n";
-        assert_eq!(parse_installed_nginx_version(out1), Some([1, 30, 6]));
-
-        let out2 = "nginx version: nginx/1.28.0 (Ubuntu)\nbuilt with OpenSSL\n";
-        assert_eq!(parse_installed_nginx_version(out2), Some([1, 28, 0]));
-
-        let out3 = "NGINX version: nginx/1.31.0-entware\n";
-        assert_eq!(parse_installed_nginx_version(out3), Some([1, 31, 0]));
-
-        let out4 = "command not found: nginx\n";
-        assert_eq!(parse_installed_nginx_version(out4), None);
-    }
-
-    #[test]
-    fn parse_checksums_valid_and_invalid() {
-        let text = r#"
-84b939dcee71b639bca56219cd94fd6ac9b9669cb876eb5b3ff3aed9e26a53e8  nginx
-53bbf44415b63873531cb5cef447573ca7adc4745b578838b7f312ce4b2e1bce *nginx-ssl_1.30.7-99_aarch64-3.10.ipk
-# Comment
-ad87cc6f9b5b693e0c4bc2e6feda0915dce461e4a780d0d2e207730df826c50f  nginx-mod-brotli_1.30.7-99_aarch64-3.10.ipk
-"#;
-        let map = parse_checksums(text).unwrap();
-        assert_eq!(map.len(), 3);
-        assert_eq!(
-            map.get("nginx-ssl_1.30.7-99_aarch64-3.10.ipk"),
-            Some(&"53bbf44415b63873531cb5cef447573ca7adc4745b578838b7f312ce4b2e1bce".to_string())
+    fn manifest_must_cover_the_exact_ipk_set() {
+        let release = release(
+            "toolbox-btop-entware-1.4.8_aarch64",
+            &["btop_1.4.8-1_aarch64-3.10.ipk"],
         );
-        assert_eq!(
-            map.get("nginx-mod-brotli_1.30.7-99_aarch64-3.10.ipk"),
-            Some(&"ad87cc6f9b5b693e0c4bc2e6feda0915dce461e4a780d0d2e207730df826c50f".to_string())
-        );
-
-        assert!(parse_checksums("invalid_hash file.ipk").is_err());
-        assert!(
-            parse_checksums(
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa file extra"
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn asset_resolution_all_packages() {
-        let assets = vec![
-            Asset {
-                name: "SHA256SUMS".into(),
-                size: 1024,
-            },
-            Asset {
-                name: "nginx-ssl_1.30.7-99_aarch64-3.10.ipk".into(),
-                size: 1024,
-            },
-            Asset {
-                name: "nginx-mod-brotli_1.30.7-99_aarch64-3.10.ipk".into(),
-                size: 1024,
-            },
-            Asset {
-                name: "nginx-mod-stream_1.30.7-99_aarch64-3.10.ipk".into(),
-                size: 1024,
-            },
-            Asset {
-                name: "nginx-mod-headers-more_1.30.7-99_aarch64-3.10.ipk".into(),
-                size: 1024,
-            },
-        ];
-
-        let matched = find_required_assets(&assets, "1.30.7", "aarch64-3.10").unwrap();
-        assert_eq!(matched.len(), 4);
-
-        // Missing package should fail
-        let missing = vec![Asset {
-            name: "nginx-ssl_1.30.7-99_aarch64-3.10.ipk".into(),
-            size: 1024,
-        }];
-        assert!(find_required_assets(&missing, "1.30.7", "aarch64-3.10").is_err());
-    }
-
-    #[test]
-    fn select_release_filters_by_channel_and_version() {
-        let rel1 = Release {
-            tag_name: "nginx-v1.30.6-run1-a1".into(),
-            draft: false,
-            prerelease: false,
-            assets: vec![],
-        };
-        let rel2 = Release {
-            tag_name: "nginx-v1.30.7-run2-a1".into(),
-            draft: false,
-            prerelease: false,
-            assets: vec![],
-        };
-        let rel3 = Release {
-            tag_name: "nginx-v1.31.0-run3-a1".into(),
-            draft: false,
-            prerelease: false,
-            assets: vec![],
-        };
-        let rel_other = Release {
-            tag_name: "v0.10.3".into(),
-            draft: false,
-            prerelease: false,
-            assets: vec![],
-        };
-
-        let releases = vec![rel1, rel2, rel3, rel_other];
-
-        // Stable selection picks 1.30.7
-        let (sel_stable, info_stable) =
-            select_release_from_list(&releases, None, NginxChannel::Stable).unwrap();
-        assert_eq!(sel_stable.tag_name, "nginx-v1.30.7-run2-a1");
-        assert_eq!(info_stable.version, [1, 30, 7]);
-
-        // Mainline selection picks 1.31.0
-        let (sel_mainline, info_mainline) =
-            select_release_from_list(&releases, None, NginxChannel::Mainline).unwrap();
-        assert_eq!(sel_mainline.tag_name, "nginx-v1.31.0-run3-a1");
-        assert_eq!(info_mainline.version, [1, 31, 0]);
-
-        // Specific version selection
-        let (sel_ver, info_ver) =
-            select_release_from_list(&releases, Some("1.30.6"), NginxChannel::Mainline).unwrap();
-        assert_eq!(sel_ver.tag_name, "nginx-v1.30.6-run1-a1");
-        assert_eq!(info_ver.version, [1, 30, 6]);
-
-        // Non-existent version
-        assert!(select_release_from_list(&releases, Some("1.32.0"), NginxChannel::Stable).is_err());
-    }
-
-    #[test]
-    fn upgrade_decision_handles_channel_switches_and_rebuilds() {
-        assert_eq!(
-            disposition(Some([1, 31, 8]), [1, 30, 7], false),
-            UpgradeDisposition::Downgrade
-        );
-        assert_eq!(
-            disposition(Some([1, 30, 6]), [1, 31, 8], false),
-            UpgradeDisposition::Newer
-        );
-        assert_eq!(
-            disposition(Some([1, 30, 7]), [1, 30, 7], false),
-            UpgradeDisposition::Rebuild
-        );
-        assert_eq!(
-            disposition(Some([1, 30, 7]), [1, 30, 7], true),
-            UpgradeDisposition::Current
-        );
-        assert_eq!(
-            disposition(None, [1, 30, 7], false),
-            UpgradeDisposition::Newer
-        );
-    }
-
-    #[test]
-    fn release_identity_requires_binary_and_all_modules() {
-        let dir = tempfile::tempdir().unwrap();
-        let binary = dir.path().join("nginx");
-        let modules = dir.path().join("modules");
-        fs::create_dir(&modules).unwrap();
-        fs::write(&binary, "nginx executable").unwrap();
-        let mut checksums = HashMap::new();
-        checksums.insert("nginx".to_string(), sha256_file(&binary).unwrap().unwrap());
-        for name in MODULE_FILES {
-            let path = modules.join(name);
-            fs::write(&path, format!("module {name}")).unwrap();
-            checksums.insert(name.to_string(), sha256_file(&path).unwrap().unwrap());
-        }
-        assert!(installed_matches_release(&binary, &checksums, &modules).unwrap());
-
-        fs::write(modules.join(MODULE_FILES[1]), "different release").unwrap();
-        assert!(!installed_matches_release(&binary, &checksums, &modules).unwrap());
-        fs::remove_file(&binary).unwrap();
-        assert!(!installed_matches_release(&binary, &checksums, &modules).unwrap());
+        let packages = bundle(&release).unwrap();
+        let name = &packages[0].name;
+        let hash = "a".repeat(64);
+        let line = format!("{hash}  {name}\n");
+        assert!(verify_manifest(&packages, &parse_checksums(&line).unwrap()).is_ok());
+        assert!(parse_checksums(&format!("{line}{line}")).is_err());
+        assert!(verify_manifest(&packages, &HashMap::new()).is_err());
+        let extra = format!("{line}{hash}  other_1_aarch64-3.10.ipk\n");
+        assert!(verify_manifest(&packages, &parse_checksums(&extra).unwrap()).is_err());
     }
 
     #[test]

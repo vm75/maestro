@@ -14,8 +14,8 @@ mod modules;
 mod nginx_ingress;
 mod nginx_mutation;
 mod nginx_render;
-#[path = "platforms/nginx_upgrade.rs"]
-mod nginx_upgrade;
+#[path = "platforms/toolbox.rs"]
+mod toolbox;
 pub mod platforms;
 mod restore;
 mod state;
@@ -106,33 +106,10 @@ enum Command {
         #[arg(long)]
         no_backup: bool,
     },
-    /// Download the newest custom NGINX Entware IPK bundle and optionally install it (router only).
-    #[command(alias = "update-nginx")]
-    UpgradeNginx {
-        /// NGINX release channel: stable (default) or mainline.
-        #[arg(long, value_enum, default_value_t = nginx_upgrade::NginxChannel::Stable)]
-        channel: nginx_upgrade::NginxChannel,
-        /// Target a specific release tag (e.g. nginx-v1.30.7-run44684227015-a1).
-        #[arg(long, conflicts_with = "version")]
-        tag: Option<String>,
-        /// Target a specific NGINX version (e.g. 1.30.7).
-        #[arg(long, conflicts_with = "tag")]
-        version: Option<String>,
-        /// Verify and stage the IPK bundle in /tmp without invoking opkg.
-        #[arg(long)]
-        download_only: bool,
-        /// Skip creating the pre-upgrade backup.
-        #[arg(long)]
-        no_backup: bool,
-        /// Force installation even if already up to date.
-        #[arg(long)]
-        force: bool,
-        /// Check for available updates without downloading or installing.
-        #[arg(long)]
-        check: bool,
-        /// Permit switching from a newer version to an older stable/mainline release.
-        #[arg(long)]
-        allow_downgrade: bool,
+    /// List or install published Toolbox Entware release bundles (router only).
+    Toolbox {
+        #[command(subcommand)]
+        command: toolbox::ToolboxCommand,
     },
 }
 
@@ -203,34 +180,12 @@ fn main() -> Result<()> {
                 .build()?
                 .block_on(upgrade::run(&config, &cli.config, download_only, no_backup))
         }
-        Command::UpgradeNginx {
-            channel,
-            tag,
-            version,
-            download_only,
-            no_backup,
-            force,
-            check,
-            allow_downgrade,
-        } => {
-            nginx_upgrade::require_router(config.platform, config.test_mode)?;
+        Command::Toolbox { command } => {
+            toolbox::require_router(config.platform, config.test_mode)?;
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?
-                .block_on(nginx_upgrade::run(
-                    &config,
-                    &cli.config,
-                    nginx_upgrade::UpgradeNginxOptions {
-                        channel,
-                        tag,
-                        version,
-                        download_only,
-                        no_backup,
-                        force,
-                        check,
-                        allow_downgrade,
-                    },
-                ))
+                .block_on(toolbox::run(&config, &cli.config, command))
         }
         Command::ConfigValue { key } => {
             let mut value = serde_json::to_value(&config)?;
@@ -552,110 +507,29 @@ mod cli_tests {
             matches!(cli.command, Some(Command::Restore { archive, root }) if archive == Path::new("/tmp/backup.tar.gz") && root == Path::new("/tmp/recovery"))
         );
 
-        // upgrade-nginx default flags
-        let cli = Cli::try_parse_from(["maestro", "upgrade-nginx"]).unwrap();
+        let cli = Cli::try_parse_from(["maestro", "toolbox", "list"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(Command::UpgradeNginx {
-                channel: nginx_upgrade::NginxChannel::Stable,
-                tag: None,
-                version: None,
-                download_only: false,
-                no_backup: false,
-                force: false,
-                check: false,
-                allow_downgrade: false,
+            Some(Command::Toolbox {
+                command: toolbox::ToolboxCommand::List,
             })
         ));
-
-        // upgrade-nginx with alias update-nginx and mainline channel
         let cli = Cli::try_parse_from([
-            "maestro",
-            "update-nginx",
-            "--channel",
-            "mainline",
-            "--download-only",
-            "--no-backup",
-            "--force",
+            "maestro", "toolbox", "install", "toolbox-nginx-entware-1.30.8-99_aarch64",
+            "--download-only", "--allow-downgrade",
         ])
         .unwrap();
         assert!(matches!(
             cli.command,
-            Some(Command::UpgradeNginx {
-                channel: nginx_upgrade::NginxChannel::Mainline,
-                tag: None,
-                version: None,
-                download_only: true,
-                no_backup: true,
-                force: true,
-                check: false,
-                allow_downgrade: false,
+            Some(Command::Toolbox {
+                command: toolbox::ToolboxCommand::Install {
+                    download_only: true,
+                    no_backup: false,
+                    allow_downgrade: true,
+                    ..
+                },
             })
         ));
-
-        // upgrade-nginx with explicit tag and check
-        let cli = Cli::try_parse_from([
-            "maestro",
-            "upgrade-nginx",
-            "--tag",
-            "nginx-v1.30.7-run44684227015-a1",
-            "--check",
-        ])
-        .unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Command::UpgradeNginx {
-                channel: nginx_upgrade::NginxChannel::Stable,
-                tag: Some(ref t),
-                version: None,
-                download_only: false,
-                no_backup: false,
-                force: false,
-                check: true,
-                allow_downgrade: false,
-            }) if t == "nginx-v1.30.7-run44684227015-a1"
-        ));
-
-        // upgrade-nginx with explicit version
-        let cli = Cli::try_parse_from(["maestro", "upgrade-nginx", "--version", "1.30.7"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Command::UpgradeNginx {
-                channel: nginx_upgrade::NginxChannel::Stable,
-                tag: None,
-                version: Some(ref v),
-                download_only: false,
-                no_backup: false,
-                force: false,
-                check: false,
-                allow_downgrade: false,
-            }) if v == "1.30.7"
-        ));
-        assert!(
-            Cli::try_parse_from([
-                "maestro",
-                "upgrade-nginx",
-                "--tag",
-                "nginx-v1.30.7",
-                "--version",
-                "1.30.7"
-            ])
-            .is_err()
-        );
-        let cli = Cli::try_parse_from([
-            "maestro",
-            "upgrade-nginx",
-            "--channel",
-            "stable",
-            "--allow-downgrade",
-        ])
-        .unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Command::UpgradeNginx {
-                allow_downgrade: true,
-                ..
-            })
-        ));
+        assert!(Cli::try_parse_from(["maestro", "toolbox", "install"]).is_err());
     }
 }

@@ -206,89 +206,50 @@ This is a separate CLI process, **not** an authenticated API/UI action.
 upgrade requires a published stable IPK; prerelease tags and older tarball-only
 releases cannot be installed through this command.
 
-### Router-only NGINX upgrade command
+### Router-only Toolbox packages
+
+[Toolbox](https://github.com/vm75/toolbox/releases) publishes Entware IPK
+bundles independently of Maestro. Maestro does not build NGINX or other
+Toolbox packages.
 
 ```sh
-/opt/bin/maestro upgrade-nginx
-/opt/bin/maestro upgrade-nginx --channel mainline
-/opt/bin/maestro upgrade-nginx --check
-/opt/bin/maestro upgrade-nginx --download-only
-/opt/bin/maestro upgrade-nginx --no-backup
-/opt/bin/maestro upgrade-nginx --version 1.30.7
-/opt/bin/maestro upgrade-nginx --tag nginx-v1.30.7-run44684227015-a1
-/opt/bin/maestro upgrade-nginx --force
-# Explicitly allow moving from newer mainline to older stable:
-/opt/bin/maestro upgrade-nginx --channel stable --allow-downgrade
+/opt/bin/maestro toolbox list
+/opt/bin/maestro toolbox install toolbox-nginx-entware-1.30.8-99_aarch64
+/opt/bin/maestro toolbox install toolbox-nginx-entware-1.30.8-99_aarch64 --download-only
 ```
 
-The CLI discovers manually published `nginx-v*` GitHub releases, selecting
-the latest stable (even minor) or mainline (odd minor) version unless you
-pin `--tag` or `--version`. Tag and version cannot be combined. Release
-discovery reads up to ten pages of GitHub Releases; older releases beyond that
-limit require `--tag`. A checksum comparison against the installed NGINX binary
-**and all four module binaries** detects same-version rebuilds, not just
-version increases. `--check` fetches only release metadata and checksums.
+List shows published, non-prerelease Entware releases containing a complete
+compatible `aarch64-3.10` IPK bundle and SHA256SUMS, up to ten API pages.
+Android releases and incompatible or mixed-architecture bundles are omitted.
+Select the exact tag shown; no tool-specific build or version selector is needed.
+The old `upgrade-nginx` / `update-nginx` commands are replaced by Toolbox.
 
-The downloader verifies `SHA256SUMS` and all four matching Entware IPKs:
-`nginx-ssl`, `nginx-mod-brotli`, `nginx-mod-stream`, and
-`nginx-mod-headers-more`. It verifies the old NGINX configuration, checks
-available temporary space, stages the bundle in a unique private directory,
-and takes a full Maestro backup by default (including `--download-only`).
-Use `--no-backup` only when you have a current external backup.
+Installation verifies every IPK against the release SHA256SUMS manifest and
+the GitHub asset digest when provided. No packages are installed until the
+whole bundle is staged in a unique private directory under /tmp. A full Maestro
+backup is made by default; `--no-backup` skips it. Selection explicitly
+reinstalls same-version packages, while downgrades require
+`--allow-downgrade`. One opkg invocation receives every IPK, and Maestro checks
+the resulting installed package versions. Non-root, missing-opkg and
+`--download-only` runs print a manual command instead. Installation is
+CLI-only and unavailable on Linux or in test mode.
 
-A live router upgrade also saves the previous executable, module directory,
-module load directives and `S80nginx` in a **separate private rollback
-snapshot** under `/tmp/.nginx-rollback-*`. These files are important because
-Maestro's normal backup does not include NGINX package binaries. Both
-the staged IPKs and rollback snapshot remain in temporary storage after the
-command; copy them off the router before rebooting if needed.
+For NGINX, the four matching packages are required (nginx-ssl,
+nginx-mod-brotli, nginx-mod-stream and nginx-mod-headers-more). Automatic
+installation retains pre/post configuration tests, a separate binary/module
+recovery snapshot and live binary activation using SIGUSR2 and SIGQUIT.
+Toolbox publishes IPK checksums rather than standalone executable/module
+checksums, so verification uses the package hashes, installed package versions,
+configuration test and verified new master identity. A stopped NGINX remains
+stopped unless its package hooks start it. Inspect the printed recovery snapshot
+on error; after SIGUSR2, automatic rollback is unsafe. An opkg failure may
+leave package records or other packages partially changed; file rollback does
+not roll back package metadata. For other tools, normal opkg package hooks
+handle service lifecycle, and no automatic package rollback is promised.
+Keep verified packages and backups outside volatile /tmp for recovery.
 
-When running as root, it invokes a bounded `opkg install` for the full
-bundle and validates the replacement NGINX configuration. Same-version
-rebuilds use `--force-reinstall`; selecting an older version explicitly
-requires `--allow-downgrade`, which passes `--force-downgrade` to opkg.
-If NGINX was running before installation, the command requests the supported
-NGINX **live binary upgrade** with SIGUSR2, waits for a different master PID
-running the new executable, and gracefully retires the old master with
-SIGQUIT. A configuration reload (SIGHUP) by itself cannot activate the
-replacement master binary. NGINX is left stopped if it was already stopped.
-An empty PID file left by `nginx -t` is accepted only when `/proc` confirms
-no NGINX processes exist. A malformed nonempty PID file or an empty file with
-NGINX processes still running blocks installation for administrator review.
-
-When opkg returns a definite failure or post-install verification fails,
-Maestro attempts to restore the previous NGINX binary, modules and module
-configuration from the snapshot and validates them. If opkg cannot be launched
-or times out, the installer state may be uncertain, so no automatic rollback
-is attempted: first ensure opkg and its package hooks have exited.
-That file restoration **does not restore opkg's installed-package database**:
-opkg may still report the attempted package version. After SIGUSR2 has been
-sent, an activation failure **does not trigger automatic file rollback**,
-because a new master may already be active and restoring modules underneath
-it could break compatibility. The command reports an error and leaves the
-snapshot for manual recovery; inspect process IDs and error logs before
-retiring either master. A failure is never reported as a successful upgrade.
-
-If opkg is unavailable, you are not root, or you choose `--download-only`,
-the command prints an explicit opkg command using the four verified package
-paths. The alias `update-nginx` is supported. The command is unavailable in
-Linux and test modes. To verify the running binary after an upgrade:
-
-```sh
-/opt/sbin/nginx -v
-cat /opt/var/run/nginx.pid
-ps | grep '[n]ginx: master'
-/opt/sbin/nginx -t -c /opt/etc/nginx/nginx.conf
-```
-
-For rollback, use the printed snapshot location to inspect and restore
-individual files under their original `/opt` paths only after determining
-which NGINX master is active. Keep the old master alive when SIGUSR2 activation
-fails; do not blindly restart or overwrite modules. To completely reconcile
-opkg metadata, reinstall the matching previously known-good IPK bundle after
-recovery. Test the recovered configuration and startup before restoring WAN
-traffic. Because `/tmp` is volatile, do not treat these local files as a
-permanent disaster-recovery backup.
+Manual NGINX installation bypasses Maestro's automatic activation and snapshot
+logic; test the configuration and activate the new binary separately.
 
 ### Tarball installation (alternative)
 

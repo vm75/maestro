@@ -80,50 +80,15 @@ CI and release tests install nginx.org stable packages from its signed Ubuntu
 repository using the shared setup action. The bundled nginx configuration
 requires nginx 1.25.1+ with the HTTP/2 module; the setup checks both before tests.
 
-## Manual NGINX Entware builds and releases
+## External Entware builds
 
-NGINX builds use a **separate, manual-only** workflow in this repository:
-[Build Nginx](../.github/workflows/build-nginx.yml). It never runs on a push,
-pull request, version tag, or schedule, and it does not install anything on
-the router.
-
-After this workflow file is merged to `main` (GitHub requires a workflow to
-exist on the default branch for manual dispatch), open **Actions → Build Nginx
-→ Run workflow**. Select the version channel: `stable` (default), `mainline`,
-or `exact` with an `X.Y.Z` version. Leave the version field blank when using
-stable/mainline. The selected branch supplies the build script.
-
-Each successful build uploads a uniquely named, downloadable **Actions
-artifact** (retained for 90 days, subject to repository policy) containing the
-four matching NGINX IPKs, binary, dynamic modules, checksums, and build info.
-The workflow verifies the existing builder's checksums and package versions
-before uploading.
-
-By default, the workflow **also creates a separate NGINX GitHub Release** with
-the same files. Disable `publish_release` at dispatch to test artifact
-creation without publishing a release. Each release has a unique tag such as
-`nginx-v1.30.6-run123456789-a1`; repeated builds of the same NGINX version
-never overwrite one another. These `nginx-v*` tags cannot trigger the Router
-Hub `v*` release workflow. The NGINX release is explicitly marked
-`--latest=false`, leaving the existing Maestro release workflow and its
-`releases/latest` endpoint (used by `maestro upgrade`) untouched.
-On an Asuswrt-Merlin router, `/opt/bin/maestro upgrade-nginx` discovers,
-verifies, and installs these published NGINX packages (stable by default;
-`--channel mainline` is optional). It distinguishes rebuilds by checking the
-installed executable and modules against published checksums, requires
-`--allow-downgrade` for version decreases, stages a binary/module recovery
-snapshot, and uses the NGINX live binary-upgrade signals instead of an
-`S80nginx` stop/restart. See [installation](installation.md#router-only-nginx-upgrade-command)
-for failure and rollback limitations.
-
-The builder requires substantial disk space when compiled on a fresh runner.
-If the pre-built Entware toolchain container image is available on GitHub
-Container Registry (built via `.github/workflows/build-toolchain-image.yml`),
-the workflow pulls it and completes NGINX compilation in ~2–3 minutes. If the
-image is absent, it compiles the toolchain from source on the host using all
-available CPU cores. A successful GitHub build is **not** a router runtime test:
-back up the current installation, install NGINX with matching modules, and
-verify configuration and startup on the router before switching traffic.
+NGINX and other manually built Entware tools are maintained and published in
+[vm75/toolbox](https://github.com/vm75/toolbox). Maestro no longer contains
+the NGINX builder, build workflow or dedicated Entware toolchain image workflow.
+On the router, `maestro toolbox list` discovers compatible releases and
+`maestro toolbox install TAG` verifies and installs the complete IPK bundle.
+See [installation](installation.md#router-only-toolbox-packages).
+Maestro CI still installs upstream nginx for configuration/integration tests.
 
 ## Publish the next release
 
