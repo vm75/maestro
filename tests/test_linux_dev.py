@@ -267,6 +267,60 @@ class LinuxDevTest(unittest.TestCase):
         self.assertEqual(hook.read_text(), "operator hook\n")
         self.assertFalse(any(c[0] == "curl" for c in self.commands()))
 
+ 
+class GuidedLinuxInstallerTest(unittest.TestCase):
+    """Exercise the actual backend planner without touching host state."""
+
+    def plan(self, backends, distribution, helper="keep"):
+        script = SCRIPT.with_name("install-linux.sh").read_text()
+        # Execute the bounded planner block only, with a fixture distribution.
+        start = script.index("# Explicit backend preparation")
+        end = script.index("cat <<PLAN", start)
+        block = script[start:end]
+        with tempfile.TemporaryDirectory() as directory:
+            os_release = Path(directory) / "os-release"
+            os_release.write_text(f"ID={distribution}\n")
+            block = block.replace("/etc/os-release", shlex.quote(str(os_release)))
+            return subprocess.run(
+                ["bash", "-c", 'set -eu\nbackends=$1\nhelper_mode=$2\nlinger=0\n'
+                 + block + '\nprintf "%s\\n" "$manager" "${packages[*]}" "${groups[*]}" "${units[*]}" "$linger"\n',
+                 "planner", backends, helper],
+                capture_output=True, text=True,
+            )
+
+    def test_installer_shell_syntax(self):
+        subprocess.run(["bash", "-n", str(SCRIPT.with_name("install-linux.sh"))], check=True)
+
+    def test_debian_all_backends(self):
+        result = self.plan("all", "debian", "install")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manager, packages, groups, units, linger = result.stdout.splitlines()
+        self.assertEqual(manager, "apt")
+        self.assertTrue({"dbus-user-session", "sudo", "podman", "docker-cli",
+                         "incus", "libvirt-daemon-system", "samba", "nfs-kernel-server"}
+                        .issubset(packages.split()))
+        self.assertEqual(set(groups.split()), {"docker", "libvirt", "incus-admin"})
+        self.assertEqual(set(units.split()), {"docker.socket", "docker.service", "libvirtd.socket", "incus.socket"})
+        self.assertEqual(linger, "1")
+
+    def test_ubuntu_docker_and_arch_podman(self):
+        ubuntu = self.plan("docker", "ubuntu")
+        self.assertEqual(ubuntu.returncode, 0, ubuntu.stderr)
+        self.assertIn("docker-compose-v2", ubuntu.stdout)
+        self.assertNotIn("docker-cli", ubuntu.stdout)
+        arch = self.plan("podman", "arch")
+        self.assertEqual(arch.returncode, 0, arch.stderr)
+        self.assertIn("pacman", arch.stdout)
+        self.assertIn("podman-compose", arch.stdout)
+        self.assertNotIn("dbus-user-session", arch.stdout)
+
+    def test_invalid_and_minimal_selections(self):
+        for backends, distribution in [("docker,docker", "debian"), ("bogus", "arch"), ("all", "fedora")]:
+            self.assertNotEqual(self.plan(backends, distribution).returncode, 0)
+        minimal = self.plan("none", "fedora")
+        self.assertEqual(minimal.returncode, 0, minimal.stderr)
+        self.assertEqual(minimal.stdout.splitlines(), ["none", "", "", "", "0"])
+
 
 if __name__ == "__main__":
     unittest.main()
