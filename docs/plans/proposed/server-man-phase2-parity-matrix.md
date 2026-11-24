@@ -848,3 +848,14 @@ and access probes only; no native mutation, directory creation or secret content
 read is introduced. Runtime readiness is still explicitly unchecked. Added Rust
 fixtures for mount visibility, missing inputs, portable path escapes, privacy and
 port warnings. Compilation and test execution remain pending.
+
+### Read-only configuration readiness UI increment
+
+Added the reference-named `managed_config_readiness` operation with its frozen
+empty-object input schema, inspectable missing/invalid configuration states,
+and fresh static file/mount diagnostics. Configuration displays these issues
+and allows a read-only recheck independent of management writes. Native backend
+prerequisite discovery and `managed_config_check` are still pending; static
+success is explicitly not a runtime readiness assertion. Added REST and MCP
+schema regression assertions. Compilation, formatting, frontend checks and
+native acceptance have not been run for this increment.
