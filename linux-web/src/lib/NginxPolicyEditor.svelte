@@ -14,6 +14,20 @@
   let match = $state('prefix')
   let access = $state('deny')
   let editingRoute = $state<number | null>(null)
+  let blockedPath = $state('')
+  let blockSubpaths = $state(true)
+  function addBlockedPath() {
+    const path = blockedPath.trim().replace(/\/+$/,'')
+    if (!path.startsWith('/') || /[\s?#;{}"']/.test(path)) { routeError='Enter an application path such as /admin; use the Deny access policy to block the whole site.'; return }
+    const next = [...displayedRoutes]
+    const additions = [{path, match:'exact', access_policy:'deny'}, ...(blockSubpaths ? [{path:path+'/',match:'prefix',access_policy:'deny'}] : [])]
+    for (const addition of additions) {
+      const existing = next.find(route=>route.path===addition.path && (route.match || 'prefix')===addition.match)
+      if (existing && accessValue(existing)!=='deny') { routeError='An access rule already exists for '+addition.path+'; edit it instead.'; return }
+      if (!existing) next.push(addition)
+    }
+    setRoutes(next); blockedPath=''
+  }
   function editRoute(route: Settings, i: number) {
     editingRoute = i; path = String(route.path ?? ''); match = String(route.match ?? 'prefix'); access = String(route.access_policy ?? (route.enable_lanonly === undefined ? '' : route.enable_lanonly ? 'legacy' : 'public'))
   }
@@ -77,6 +91,7 @@
       <button type="button" disabled={disabled} onclick={() => setRoutes(displayedRoutes.filter((_,j) => j !== i))}>Remove</button>
     </div>
   {/each}
+  <div class="policy-grid"><label>Blocked path <input bind:value={blockedPath} placeholder="/admin" disabled={disabled}/></label><label><input type="checkbox" bind:checked={blockSubpaths} disabled={disabled}/> Include subpaths</label><button type="button" disabled={disabled} onclick={addBlockedPath}>Add blocked path</button></div>
   <div class="policy-grid">
     <label>Path <input bind:value={path} placeholder="/admin" disabled={disabled}/></label>
     <label>Match <select bind:value={match} disabled={disabled}><option value="prefix">Prefix (includes subpaths)</option><option value="exact">Exact</option><option value="regex">Regex</option><option value="regex_i">Case-insensitive regex</option></select></label>

@@ -39,6 +39,15 @@
   let logLoading = $state(false)
   let controller: AbortController | undefined
   let logController: AbortController | undefined
+  let lockController: AbortController | undefined
+  let lockPolling = false
+  async function pollLock() {
+    if (section!=='certificates' || !hasCertificates || lockPolling || loading) return
+    const active=new AbortController(); lockController=active; lockPolling=true
+    try { const value=await request<Lock>('/api/shared/certificates/lock',{signal:active.signal}); if(!active.signal.aborted && section==='certificates') {lock=value; delete errors['Dehydrated polling']} }
+    catch(e){if(!active.signal.aborted)errors['Dehydrated polling']=String(e)}
+    finally{lockPolling=false}
+  }
   let sortKey = $state<'display_name'|'port'|'managed'|'state'>('display_name')
   let sortDirection = $state(1)
   function sortSites(key: typeof sortKey) { if (sortKey === key) sortDirection *= -1; else { sortKey = key; sortDirection = 1 } }
@@ -58,7 +67,7 @@
   function configureGlobal() { if (settings && !globalDraft) globalDraft = clone(settings); globalSection?.scrollIntoView({block:'start'}) }
 
   async function refresh() {
-    controller?.abort()
+    lockController?.abort(); controller?.abort()
     const active = new AbortController(); controller = active
     loading = true; errors = {}
     async function read<T>(key: string, path: string, apply: (value: T) => void) {
@@ -186,7 +195,8 @@
   onMount(() => {
     if (!hasNginx && hasCertificates) section = 'certificates'; else if (!hasCertificates && hasNginx) section = 'nginx'
     void refresh()
-    return () => { controller?.abort(); logController?.abort(); previewController?.abort() }
+    const timer=setInterval(pollLock,15000)
+    return () => { clearInterval(timer); controller?.abort(); logController?.abort(); previewController?.abort(); lockController?.abort() }
   })
 </script>
 
@@ -280,7 +290,7 @@
       {#if httpAccess}<dl class="shared-stats"><div><dt>State</dt><dd>{httpAccess.state}</dd></div><div><dt>WAN control</dt><dd>{httpAccess.wan_control}</dd></div><div><dt>Names</dt><dd>{httpAccess.names.join(', ') || '—'}</dd></div><div><dt>Expires</dt><dd>{httpAccess.expires_at ? new Date(httpAccess.expires_at).toLocaleString() : '—'}</dd></div></dl>{:else}<p class="muted">No validation status available.</p>{/if}
     </section>
     <section class="panel"><h2>Dehydrated</h2><p>{lock ? (lock.locked ? 'Locked' : 'Unlocked') + ' · ' + lock.status : 'Status unavailable'}</p>
-      <button disabled={!allowWrites || busy} onclick={() => { if (confirm('Download/update Dehydrated?')) void mutate('certificates/dehydrated/update') }}>Update Dehydrated</button>
+      <button disabled={!allowWrites || busy || !!lock?.locked || lock?.status==='running'} onclick={() => { if (confirm('Download/update Dehydrated?')) void mutate('certificates/dehydrated/update') }}>Update Dehydrated</button>
       <button disabled={!allowWrites || busy || !lock?.locked || lock.status === 'running'} onclick={() => { if (confirm('Clear the stale lock? Confirm no certificate operation is running.')) void mutate('certificates/lock/clear') }}>Clear stale lock</button>
     </section>
     <section class="panel"><div class="resource-heading"><h2>Let's Encrypt certificates</h2><span>{certificates.length} certificates</span></div>
