@@ -75,6 +75,30 @@
   let loading = $state(false)
   let error = $state('')
   let inventoryError = $state('')
+  interface Readiness {
+    configured: boolean
+    valid: boolean
+    error?: string
+    runtimeChecked?: boolean
+    health?: { checkedAt: string; issues: Array<Issue & {field: string}> }
+  }
+  let readiness = $state<Readiness | null>(null)
+  let readinessError = $state('')
+  let checkingReadiness = $state(false)
+
+  async function checkReadiness() {
+    if (checkingReadiness) return
+    checkingReadiness = true
+    readinessError = ''
+    readiness = null
+    try {
+      readiness = await invokeTool<Readiness>('managed_config_readiness', {})
+    } catch (failure) {
+      readinessError = failure instanceof Error ? failure.message : 'Could not check configuration.'
+    } finally {
+      checkingReadiness = false
+    }
+  }
   const writable = $derived(discovery.modules.some(module => module.id === 'workloads' && module.writable))
 
   async function inspect() {
@@ -172,6 +196,7 @@
 
   onMount(() => {
     void inspect()
+    void checkReadiness()
   })
 </script>
 
@@ -200,6 +225,33 @@
     {/each}</ul>
   {/if}
   <p><a href="#applications">Open Applications to edit and review workload changes</a>. The edit workflow requires a reviewed plan and a current revision fingerprint; the presence of a form does not authorize native mutations.</p>
+</section>
+
+<section class="panel" aria-labelledby="readiness-title">
+  <div class="controls">
+    <h2 id="readiness-title">Configuration health</h2>
+    <button type="button" onclick={checkReadiness} disabled={checkingReadiness}>Recheck files and mounts</button>
+  </div>
+  <p>Read-only checks do not create missing data, install packages, or start applications.</p>
+  {#if checkingReadiness}<p role="status">Checking configuration…</p>{/if}
+  {#if readinessError}<p role="alert">{readinessError}</p>{/if}
+  {#if readiness}
+    {#if !readiness.configured}
+      <p>No authored configuration yet.</p>
+    {:else if !readiness.valid}
+      <p role="alert">{readiness.error ?? 'Configuration is invalid.'}</p>
+    {:else if readiness.health}
+      <p>Checked: {readiness.health.checkedAt}</p>
+      {#if !readiness.runtimeChecked}<p role="status">Native backend prerequisites and runtime readiness are not verified by this check.</p>{/if}
+      {#if readiness.health.issues.length === 0}
+        <p>No static file or mount issues found.</p>
+      {:else}
+        <ul>{#each readiness.health.issues as issue}
+          <li><strong>{issue.severity}: {issue.resource}</strong> — {issue.field}: {issue.message} {issue.remedy}</li>
+        {/each}</ul>
+      {/if}
+    {/if}
+  {/if}
 </section>
 
 <section class="panel" aria-labelledby="typed-title">
