@@ -209,8 +209,17 @@
     if (kind === 'storage') return storage
     if (kind === 'share') {
       const result = { ...share }
-      if (!result.storage) throw new Error('Select a declared directory storage reference before defining a share.')
-      result.path = folderSource === 'manual' ? manualPath.trim() : (share.path ?? '')
+      if (folderSource === 'manual' || directoryStorageChoices.length === 0) {
+        result.storage = ''
+        result.path = manualPath.trim()
+        if (!result.path) throw new Error('Enter a directory path to share.')
+      } else {
+        if (!result.storage) throw new Error('Select a directory storage reference.')
+        // Retain existing subpaths only when keeping the original reference.
+        if (snapshot?.config.shares?.[resourceID]?.storage !== result.storage) {
+          delete result.path
+        }
+      }
       if (share.protocol === 'samba') {
         delete result.users
         delete result.clients
@@ -271,13 +280,13 @@
         vmDisks = (service.vm?.disks ?? []).join(', ')
         selectContainer(Object.keys(service.containers ?? {})[0] ?? 'app')
       } else if (kind === 'storage') storage = structuredClone(result.config.storage?.[resourceID] ?? storage)
-      else if (kind === 'share') { share = structuredClone(result.config.shares?.[resourceID] ?? share); clients = (share.clients ?? []).join(', '); if (share.storage && result.config.storage?.[share.storage]) manualPath = result.config.storage[share.storage]?.path ?? ''; else if (share.path) manualPath = share.path }
+      else if (kind === 'share') { share = structuredClone(result.config.shares?.[resourceID] ?? share); clients = (share.clients ?? []).join(', '); if (share.storage && result.config.storage?.[share.storage]) { const base = result.config.storage[share.storage].path; manualPath = share.path ? (base === '.' ? share.path : base.replace(/\/$/, '') + '/' + share.path) : base } else if (share.path) manualPath = share.path }
       else if (kind === 'binding') binding = structuredClone(result.config.bindings?.[resourceID] ?? binding)
       else privatePath = result.config.secrets?.[resourceID] ?? ''
     }
     if (kind === 'share') {
       const dirChoices = Object.entries(result.config.storage ?? {}).filter(([, s]) => s.kind !== 'file')
-      if (dirChoices.length === 0 || (resourceID && !share.storage && manualPath)) folderSource = 'manual'
+      if (!resourceID || dirChoices.length === 0 || (!share.storage && manualPath)) folderSource = 'manual'
     }
   } catch (e) { if (!stopped) error = e instanceof Error ? e.message : 'Could not load configuration' } })(); return () => { stopped = true; controller.abort() } })
   const serviceTypeTitle = $derived.by(() => {
@@ -521,9 +530,7 @@
                 <button type="button" class="browse-button" onclick={() => openBrowser('share', manualPath)}>Browse…</button>
               </div>
             </label>
-            {#if directoryStorageChoices.length === 0}
-              <p class="field-hint">No directory storage references configured yet. Enter an absolute or relative directory path.</p>
-            {/if}
+            <p class="field-hint">Use an existing directory. A storage reference is automatically reused or added when you save; no directory is created.</p>
           </div>
         {/if}
         {#if browseTarget === 'share'}
