@@ -142,7 +142,7 @@ pub fn render_quadlet(
             ensure!(
                 !source.contains(':')
                     && !mount.target.contains(':')
-                    && matches!(mount.kind.as_str(), "" | "bind")
+                    && matches!(mount.kind.as_str(), "" | "bind" | "directory" | "file")
                     && matches!(mount.selinux.as_str(), "" | "z" | "Z"),
                 "unsupported Quadlet mount"
             );

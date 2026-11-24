@@ -3058,7 +3058,8 @@ pub async fn execute_tool(
                     }
                     (
                         StatusCode::OK,
-                        json!({"configured": true, "revision": snapshot.revision, "shares": shares}),
+                        json!({"configured": true, "revision": snapshot.revision, "shares": shares,
+                            "sambaUsername": crate::platforms::admin::workload_account().ok()}),
                     )
                 }
                 Err(_) => (
@@ -3069,7 +3070,8 @@ pub async fn execute_tool(
                     ),
                 ),
             },
-            Ok(None) => (StatusCode::OK, json!({"configured": false, "shares": []})),
+            Ok(None) => (StatusCode::OK, json!({"configured": false, "shares": [],
+                "sambaUsername": crate::platforms::admin::workload_account().ok()})),
             Err(_) => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 json_err(

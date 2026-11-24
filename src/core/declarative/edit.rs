@@ -217,7 +217,7 @@ fn resolve_mount_storage(config: &mut Config, id: &str, mount: &mut super::Mount
     let kind = match mount.kind.as_str() {
         "file" => "file",
         "directory" => "directory",
-        "" => {
+        "" | "bind" => {
             if let Some(storage) = config.storage.values().find(|s| s.path == path) {
                 if storage.kind == "file" { "file" } else { "directory" }
             } else if path.starts_with('/') && std::fs::metadata(&path).is_ok_and(|m| m.is_file()) {

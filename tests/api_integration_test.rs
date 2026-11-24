@@ -2734,7 +2734,7 @@ shares:
     assert_eq!(status, StatusCode::OK, "plan response: {val:?}");
     let fingerprint = val["plan"]["fingerprint"].as_str().unwrap().to_string();
     assert!(!fingerprint.is_empty());
-    assert_eq!(val["plan"]["changes"].as_array().unwrap().len(), 3);
+    assert_eq!(val["plan"]["changes"].as_array().unwrap().len(), 2);
     assert_eq!(val["blockedResources"], serde_json::json!([]));
 
     // 3. Apply the workload
@@ -2856,7 +2856,7 @@ async fn linux_reviewed_storage_provisioning() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
     let store = maestro::core::linux_config::store(config).unwrap();
-    let snapshot = store.save(b"version: 1\nstorage:\n  disk: {kind: file, path: disk.raw, format: raw}\n  missing: {path: absent/child}\n", "missing").unwrap();
+    let snapshot = store.save(b"version: 1\nstorage:\n  disk: {kind: file, path: disk.raw, format: raw}\n  missing: {path: absent/child}\n  shared: {path: shared}\n  published: {path: published}\nshares:\n  draft: {protocol: samba, storage: shared, enabled: false}\n  live: {protocol: samba, storage: published, enabled: true}\n", "missing").unwrap();
     let revision = snapshot.revision;
     let app = api::app(state).unwrap();
     let call = |tool: &'static str, body: serde_json::Value| {
@@ -2876,6 +2876,12 @@ async fn linux_reviewed_storage_provisioning() {
     let (status, _) = call("managed_storage_plan", serde_json::json!({"storage":"missing","revision":revision})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(!root.join("absent").exists());
+    let (status, share_plan) = call("managed_storage_plan", serde_json::json!({"storage":"shared","revision":revision})).await;
+    assert_eq!(status, StatusCode::OK, "{share_plan:?}");
+    assert_eq!(share_plan["consumers"], serde_json::json!(["share/draft"]));
+    assert!(!root.join("shared").exists());
+    let (status, _) = call("managed_storage_plan", serde_json::json!({"storage":"published","revision":revision})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     let (status, plan) = call("managed_storage_plan", serde_json::json!({"storage":"disk","revision":revision,"sizeGiB":1})).await;
     assert_eq!(status, StatusCode::OK, "{plan:?}");
     assert!(!root.join("disk.raw").exists());

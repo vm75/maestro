@@ -280,7 +280,7 @@ fn render_compose(
                 ensure!(super::path_valid(&storage.path, storage.external)
                     && super::path_valid(&mount.target, true)
                     && (mount.path.is_empty() || super::path_valid(&mount.path, false))
-                    && matches!(mount.kind.as_str(), "" | "bind"),
+                    && matches!(mount.kind.as_str(), "" | "bind" | "directory" | "file"),
                     "unsupported Compose mount");
                 let source = storage_base.join(&storage.path);
                 let source = if mount.path.is_empty() { source } else { source.join(&mount.path) };

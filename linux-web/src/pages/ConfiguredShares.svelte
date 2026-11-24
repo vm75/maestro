@@ -99,7 +99,7 @@
 
 <div class="shares-toolbar">
   <button class="primary" disabled={!allowWrites || activeJob !== null} onclick={() => { editor = { id: '' } }}>Define file share</button>
-  
+  <button disabled={!allowWrites || activeJob !== null || !sambaUsername || discovery.permissions?.sambaPassword?.status !== 'ready'} onclick={() => { passwordOpen = true }}>Set Samba password…</button>
   <button disabled={loading} onclick={load}>{loading ? 'Reading…' : 'Refresh shares'}</button>
 </div>
 

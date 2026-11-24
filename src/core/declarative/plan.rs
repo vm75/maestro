@@ -132,18 +132,12 @@ fn changes(previous: &Config, desired: &Config) -> Result<Vec<Change>> {
         .collect();
 
     let mut result = Vec::new();
-    let mut storage_removals = Vec::new();
     for resource in old
         .iter()
         .rev()
         .filter(|resource| !next_by_key.contains_key(&resource.key))
     {
-        let changes = if resource.key.starts_with("storage/") {
-            &mut storage_removals
-        } else {
-            &mut result
-        };
-        changes.push(Change {
+        result.push(Change {
             resource: resource.key.clone(),
             backend: resource.backend.clone(),
             operation: Operation::Remove,
@@ -174,7 +168,6 @@ fn changes(previous: &Config, desired: &Config) -> Result<Vec<Change>> {
             after: Some(resource.fingerprint),
         });
     }
-    result.extend(storage_removals);
     Ok(result)
 }
 
@@ -358,7 +351,7 @@ services:
             .preview_revert(&old.revision, &current.revision)
             .unwrap();
         assert_eq!(plan.desired_revision, old.revision);
-        assert_eq!(plan.changes.len(), 3);
+        assert_eq!(plan.changes.len(), 2);
         assert!(
             plan.changes
                 .iter()

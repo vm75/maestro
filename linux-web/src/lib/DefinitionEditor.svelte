@@ -187,11 +187,17 @@
       // Build a plain candidate without mutating form state during review.
       const candidate = structuredClone($state.snapshot(service))
       if (candidate.containers) {
-        for (const c of Object.values(candidate.containers)) {
+        for (const [name, c] of Object.entries(candidate.containers)) {
           if (c.mounts) {
             for (const m of c.mounts) {
+              const original = snapshot?.config.services?.[resourceID]?.containers?.[name]?.mounts?.find(old => old.target === m.target)
+              const base = original && snapshot?.config.storage?.[original.storage]?.path
+              const originalPath = base && original?.path ? (base === '.' ? original.path : base.replace(/\/$/, '') + '/' + original.path) : base
               if (m.source === 'selector' && m.storage) {
                 m.path = ''
+                delete m.kind
+              } else if (original && m.storage === original.storage && m.path === originalPath) {
+                m.path = original.path ?? ''
                 delete m.kind
               } else {
                 m.path = (m.path ?? '').trim()

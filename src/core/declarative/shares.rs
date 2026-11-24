@@ -139,6 +139,11 @@ impl ShareProvider {
     // Direct translation of Server Man internal/declarative/shares.go:
     // a protocol publishes its entire authoritative definition set.
     fn definitions(&self, protocol: &str, config: &Config, check_paths: bool) -> Result<Vec<Definition>> {
+        self.definitions_with_account(protocol, config, check_paths, admin::workload_account)
+    }
+
+    fn definitions_with_account(&self, protocol: &str, config: &Config, check_paths: bool,
+        account: impl Fn() -> Result<String>) -> Result<Vec<Definition>> {
         ensure!(matches!(protocol, "samba" | "nfs"), "unsupported share protocol");
         let mut definitions = Vec::new();
         for (id, share) in &config.shares {
@@ -149,7 +154,7 @@ impl ShareProvider {
             let path = if share.path.is_empty() { base } else { base.join(&share.path) };
             // Legacy users remain readable, but never select access identities.
             let users = if protocol == "samba" && !share.guest {
-                vec![admin::workload_account()?]
+                vec![account()?]
             } else { Vec::new() };
             definitions.push(Definition {
                 name: id.clone(),
@@ -188,7 +193,7 @@ impl ShareProvider {
             } else {
                 row["path"].as_str().is_some_and(|p| p.trim_end_matches('/') == path)
             };
-            same && (row["configured"] != false || !matches!(row["runtime"].as_str(), Some("not_exported" | "disconnected")))
+            same && (row["configured"] != false || !matches!(row["runtime"].as_str(), Some("not_exported" | "not_observed")))
         });
         ensure!(!conflict, "referencing share remains configured or active");
         Ok(())
@@ -358,10 +363,14 @@ shares:
         assert_eq!(nfs[0].clients,["192.0.2.0/24"]);
         assert!(nfs[0].root_squash);
         assert_eq!(nfs[0].security,"sys");
-        let samba = provider.definitions("samba",&config,false).unwrap();
+        let samba = provider.definitions_with_account("samba", &config, false, || Ok("workload".into())).unwrap();
         assert_eq!(samba.len(),1);
         assert_eq!(samba[0].path,"/srv/workloads/volumes/files/docs");
-        assert_eq!(samba[0].users, vec![admin::workload_account().unwrap()]);
+        assert_eq!(samba[0].users, ["workload"]);
+        let mut guest = config.clone();
+        guest.shares.get_mut("docs").unwrap().guest = true;
+        let samba = provider.definitions_with_account("samba", &guest, false, || anyhow::bail!("guest share must not resolve an account")).unwrap();
+        assert!(samba[0].users.is_empty());
         assert!(!provider.native_enabled());
     }
 

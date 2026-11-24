@@ -272,10 +272,15 @@ impl CompositeProvider {
             .map(|(id, share)| ShareSummary {
                 id: id.clone(),
                 protocol: share.protocol.clone(),
-                path: share.path.clone(),
+                path: config.storage.get(&share.storage).map(|storage| {
+                    let base = self.shares.storage_base.join(&storage.path);
+                    if share.path.is_empty() { base } else { base.join(&share.path) }
+                }).map(|path| path.to_string_lossy().into_owned()).unwrap_or_default(),
                 enabled: share.enabled,
                 read_only: share.read_only,
-                users: share.users.clone(),
+                users: if share.protocol == "samba" && !share.guest {
+                    crate::platforms::admin::workload_account().ok().into_iter().collect()
+                } else { Vec::new() },
                 clients: share.clients.clone(),
             })
             .collect()
@@ -800,7 +805,7 @@ shares:
         assert_eq!(shares.len(), 1);
         assert_eq!(shares[0].id, "data");
         assert_eq!(shares[0].protocol, "samba");
-        assert_eq!(shares[0].users, vec!["alice"]);
+        assert_eq!(shares[0].users, crate::platforms::admin::workload_account().ok().into_iter().collect::<Vec<_>>());
     }
 
     #[tokio::test]
