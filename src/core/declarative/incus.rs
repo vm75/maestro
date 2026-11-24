@@ -152,6 +152,7 @@ fn check_transition(previous:&Config,desired:&Config,id:&str)->Result<()>{
 
 #[path="incus_backup.rs"]
 mod backup;
+pub(crate) use backup::verify_archive as verify_backup_archive;
 
 pub struct IncusStatus{
     pub state:&'static str,pub runtime_matches:bool,pub restart_required:bool,
