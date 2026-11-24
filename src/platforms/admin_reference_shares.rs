@@ -4,7 +4,8 @@ use std::{collections::{BTreeMap, BTreeSet}, fs, path::{Path, PathBuf}};
 use anyhow::{Result, ensure};
 use serde_json::{Map, Value, json};
 
-use super::{Failure, OperationResult, Policy, SYSTEMD_ENV, capture, capture_in, program, string};
+use super::{Failure, OperationResult, Policy, SYSTEMD_ENV, Tail, MAX_TAIL, capture, capture_in, program, run, string};
+use tokio::{sync::watch, time::{Duration, timeout}};
 use crate::core::declarative::{
     native_shares::{Definition, Export, connections, option_flag, option_value, parse_exports, parse_samba, share_key},
     share_definitions::{self as defs, Snapshot},
@@ -341,9 +342,16 @@ fn check_nfs_conflicts(previous: &[Definition], next: &[Definition], configured:
     Ok(())
 }
 
-async fn validate_candidate(protocol: &str, old: &Snapshot, previous: &[Definition], next: &[Definition]) -> OperationResult<()> {
+struct Prepared {
+    candidate: defs::Candidate,
+    data: Vec<u8>,
+    active: Vec<Export>,
+}
+
+async fn validate_candidate(protocol: &str, old: &Snapshot, previous: &[Definition], next: &[Definition]) -> OperationResult<Prepared> {
     let fail = |error: anyhow::Error| Failure::failed(error.to_string());
     let data = defs::render(protocol,next).map_err(|e|Failure::invalid(e.to_string()))?;
+    let mut active = Vec::new();
     if protocol == "samba" {
         if program("testparm").is_none() || program("smbcontrol").is_none() {
             return Err(Failure::unavailable("Samba testparm and smbcontrol are required"));
@@ -360,7 +368,7 @@ async fn validate_candidate(protocol: &str, old: &Snapshot, previous: &[Definiti
     } else {
         if program("exportfs").is_none() { return Err(Failure::unavailable("exportfs is required")); }
         let configured = nfs_configured().map_err(|_| Failure::failed("Cannot safely inspect unmanaged NFS exports"))?;
-        let active = nfs_active().await.map_err(|_| Failure::failed("Cannot snapshot the current NFS export table"))?;
+        active = nfs_active().await.map_err(|_| Failure::failed("Cannot snapshot the current NFS export table"))?;
         check_nfs_conflicts(previous,next,&configured,&active)?;
     }
     let path = Path::new(file(protocol));
@@ -368,13 +376,170 @@ async fn validate_candidate(protocol: &str, old: &Snapshot, previous: &[Definiti
         if old.exists { old.mode } else { 0o644 })
         .map_err(|e| Failure::failed(format!("Create managed fragment candidate: {e}")))?;
     if protocol == "samba" { validate_samba(next,previous,&candidate).await?; }
-    if !defs::read_file(path,true).is_ok_and(|current| current.revision() == old.revision()) {
+    if !defs::same_file(path,old) {
         return Err(Failure::failed("Managed fragment changed during validation; refresh and retry"));
+    }
+    Ok(Prepared { candidate, data, active })
+}
+
+// Native activation and rollback from shares/nfs.go and shares/samba.go.
+// Only the entries touched by the managed definitions may be changed.
+fn target(e: &Export) -> String {
+    if e.client.contains(':') {
+        let selector = match e.client.split_once('/') {
+            Some((address,bits)) => format!("[{address}]/{bits}"),
+            None => format!("[{}]",e.client),
+        };
+        format!("{selector}:{}",e.path)
+    } else {
+        format!("{}:{}",e.client,e.path)
+    }
+}
+
+async fn export(e: &Export, remove: bool, output: &mut Tail) -> Result<()> {
+    let native = program("exportfs").ok_or_else(|| anyhow::anyhow!("exportfs is unavailable"))?;
+    let target = target(e);
+    let options = e.options.join(",");
+    let args = if remove {
+        vec!["-u", target.as_str()]
+    } else {
+        ensure!(regex::Regex::new(r"^[A-Za-z0-9_,=:.+/-]+$").unwrap().is_match(&options),
+            "unsupported runtime options prevent safe restoration");
+        vec!["-i", "-o", options.as_str(), target.as_str()]
+    };
+    ensure!(run(&native,&args,&[],10,false,output).await? == Some(0), "exportfs failed");
+    Ok(())
+}
+
+fn verify_nfs(old: &BTreeMap<Key,Export>, next: &BTreeMap<Key,Export>, actual: &[Export]) -> Result<()> {
+    let current = export_map(actual);
+    for (key,want) in next {
+        ensure!(current.get(key).is_some_and(|got| same_export(got,want)),
+            "NFS runtime export table does not match the requested access");
+    }
+    for key in old.keys() {
+        ensure!(next.contains_key(key) || !current.contains_key(key), "Removed NFS client remains registered");
     }
     Ok(())
 }
 
-pub(super) async fn execute(operation: &str, input: &Map<String,Value>, policy: &Policy) -> OperationResult<Value> {
+async fn apply_nfs(before: &[Definition], after: &[Definition], active: &[Export], output: &mut Tail) -> Result<()> {
+    let old = pairs(before);
+    let next = pairs(after);
+    let current = export_map(active);
+    for e in next.values() {
+        export(e,false,output).await.map_err(|_| anyhow::anyhow!("NFS export apply failed"))?;
+    }
+    for (key,e) in &old {
+        if !next.contains_key(key) && current.contains_key(key) {
+            export(e,true,output).await.map_err(|_| anyhow::anyhow!("NFS export removal failed"))?;
+        }
+    }
+    let actual = nfs_active().await.map_err(|_| anyhow::anyhow!("NFS runtime verification failed"))?;
+    verify_nfs(&old,&next,&actual)
+}
+
+async fn restore_nfs(before: &[Definition], after: &[Definition], active: &[Export], output: &mut Tail) -> Result<()> {
+    let initial = export_map(active);
+    let current_list = nfs_active().await?;
+    let current = export_map(&current_list);
+    let mut touched = pairs(before);
+    touched.extend(pairs(after));
+    let mut failures = 0;
+    for key in touched.keys() {
+        let result = if let Some(old) = initial.get(key) {
+            export(old,false,output).await
+        } else if let Some(now) = current.get(key) {
+            export(now,true,output).await
+        } else { Ok(()) };
+        if result.is_err() { failures += 1; }
+    }
+    ensure!(failures == 0, "NFS runtime rollback failed for {failures} entries");
+    let restored = nfs_active().await?;
+    let restored = export_map(&restored);
+    for key in touched.keys() {
+        let old = initial.get(key);
+        let now = restored.get(key);
+        ensure!(match (old,now) {
+            (None,None) => true,
+            (Some(old),Some(now)) => old.options == now.options,
+            _ => false,
+        }, "NFS runtime rollback verification failed");
+    }
+    Ok(())
+}
+
+async fn reload_samba() -> Result<()> {
+    let native = program("smbcontrol").ok_or_else(|| anyhow::anyhow!("smbcontrol is unavailable"))?;
+    ensure!(run(&native,&["--configfile",SAMBA_MAIN,"--timeout","5","smbd","reload-config"],&[],7,false,&mut Tail::default()).await? == Some(0),
+        "Samba reload failed");
+    Ok(())
+}
+
+async fn cancelled(cancel: &mut watch::Receiver<bool>) {
+    // A closed channel is also cancellation; the helper owns the sender.
+    let _ = cancel.wait_for(|value| *value).await;
+}
+
+fn append(output: &mut Tail, message: &str) { output.append(message.as_bytes(),MAX_TAIL); }
+
+async fn replace_definitions(protocol: &str, old: &Snapshot, previous: &[Definition], next: &[Definition],
+    output: &mut Tail, mut cancel: watch::Receiver<bool>) -> OperationResult<Value> {
+    append(output,"Validating managed share configuration…\n");
+    let prepared = tokio::select! {
+        biased;
+        _ = cancelled(&mut cancel) => return Err(Failure::failed("context canceled")),
+        result = validate_candidate(protocol,old,previous,next) => result?,
+    };
+    let path = Path::new(file(protocol));
+    if *cancel.borrow() { return Err(Failure::failed("context canceled")); }
+    if !defs::same_file(path,old) {
+        return Err(Failure::failed("Managed fragment changed during validation; refresh and retry"));
+    }
+    if let Err(error) = prepared.candidate.publish(path) {
+        if defs::read_file(path,true).is_ok_and(|current| current.exists && current.data == prepared.data) {
+            if let Err(rollback) = defs::restore(path,old,&prepared.data) {
+                return Err(Failure::failed(format!("Publish failed and file rollback failed: {rollback}")));
+            }
+        }
+        return Err(Failure::failed(format!("Publish managed fragment: {error}")));
+    }
+    // Once a rename succeeds, cancellation is an activation failure, not an
+    // instruction to drop the transaction. Rollback gets its own deadline.
+    let result = tokio::select! {
+        biased;
+        _ = cancelled(&mut cancel) => Err(anyhow::anyhow!("context canceled")),
+        result = async {
+            if protocol == "samba" { reload_samba().await }
+            else { apply_nfs(previous,next,&prepared.active,output).await }
+        } => result,
+    };
+    if result.is_err() || *cancel.borrow() {
+        append(output,"Apply failed; restoring previous configuration and runtime entries…\n");
+        let file_error = defs::restore(path,old,&prepared.data).err();
+        let runtime_error = if file_error.is_none() {
+            match timeout(Duration::from_secs(30),async {
+                if protocol == "samba" { reload_samba().await }
+                else { restore_nfs(previous,next,&prepared.active,output).await }
+            }).await {
+                Ok(result) => result.err(),
+                Err(_) => Some(anyhow::anyhow!("context deadline exceeded")),
+            }
+        } else { None };
+        if file_error.is_some() || runtime_error.is_some() {
+            let describe = |error: Option<anyhow::Error>| error.map_or_else(|| "<nil>".into(),|e|e.to_string());
+            return Err(Failure::failed(format!(
+                "Share apply failed; rollback incomplete (file: {}, runtime: {}). Inspect host state before retrying",
+                describe(file_error),describe(runtime_error))));
+        }
+        return Err(Failure::failed("Share apply failed; previous configuration and runtime entries were restored"));
+    }
+    append(output,"Managed share configuration applied. Shared directory data was not changed.\n");
+    let revision = Snapshot { data: prepared.data, exists: true, mode: old.mode }.revision();
+    Ok(json!({"revision":revision}))
+}
+
+pub(super) async fn execute(operation: &str, input: &Map<String,Value>, policy: &Policy, output: &mut Tail, cancel: watch::Receiver<bool>) -> OperationResult<Value> {
     let protocol = string(input,"protocol");
     if operation == "shares_list" { return list(protocol).await; }
     if operation == "shares_setup" {
@@ -400,9 +565,7 @@ pub(super) async fn execute(operation: &str, input: &Map<String,Value>, policy: 
         validate_candidate(protocol,&snapshot,&previous,&definitions).await?;
         return Ok(json!({"valid":true}));
     }
-    // Publication remains gated until the native rollback and cancellation
-    // paths are ported and the root policy is applied to the mutation.
-    Err(Failure::unavailable("Native reference share publication has not yet been ported"))
+    replace_definitions(protocol,&snapshot,&previous,&definitions,output,cancel).await
 }
 
 #[cfg(test)]
