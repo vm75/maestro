@@ -69,13 +69,14 @@ enum Tool {
     ApplicationsLogs,
     SharesList,
     ManagedShares,
+    ManagedSharePublish,
     SharesSambaPassword,
     SharesSetup,
     SharesStatus,
 }
 
 impl Tool {
-    const ALL: [Self; 47] = [
+    const ALL: [Self; 48] = [
         Self::Status,
         Self::Capabilities,
         Self::JobsList,
@@ -120,6 +121,7 @@ impl Tool {
         Self::ApplicationsLogs,
         Self::SharesList,
         Self::ManagedShares,
+        Self::ManagedSharePublish,
         Self::SharesSambaPassword,
         Self::SharesSetup,
         Self::SharesStatus,
@@ -343,6 +345,11 @@ impl Tool {
                 "Configured file shares",
                 "Read authoritative share definitions without changing native daemons.",
             ),
+            Self::ManagedSharePublish => (
+                "managed_share_publish",
+                "Publish or unpublish share",
+                "Persist the share's publication toggle and apply the authoritative protocol set. Does not change shared data, accounts or host daemon enablement.",
+            ),
             Self::SharesSambaPassword => (
                 "shares_samba_password",
                 "Set Samba password",
@@ -508,7 +515,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                 | Tool::ApplicationsLogs => "workloads",
                 Tool::ManagedConfigReadiness | Tool::ManagedConfigCheck | Tool::ManagedServices => "managed_status",
                 Tool::SharesList | Tool::ManagedShares | Tool::SharesSambaPassword
-                | Tool::SharesSetup | Tool::SharesStatus | Tool::ManagedDirectoryBrowse => "shares",
+                | Tool::SharesSetup | Tool::ManagedSharePublish | Tool::SharesStatus | Tool::ManagedDirectoryBrowse => "shares",
                 _ => "system",
             };
             let read_only = !matches!(
@@ -526,6 +533,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     | Tool::ManagedResourceSave
                     | Tool::SharesSambaPassword
                     | Tool::SharesSetup
+                    | Tool::ManagedSharePublish
                     | Tool::BackupInventory
             );
             let input_schema = match tool {
@@ -598,6 +606,13 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                         "additionalProperties":false
                     })
                 },
+                Tool::ManagedSharePublish => json!({
+                    "type":"object","properties":{
+                        "share":{"type":"string","minLength":1,"maxLength":63,"description":"Share ID"},
+                        "published":{"type":"boolean"},
+                        "confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."}
+                    },"required":["share","published","confirm"],"additionalProperties":false
+                }),
                 Tool::SharesSetup => json!({
                     "type":"object","properties":{
                         "protocol":{"type":"string","enum":["samba","nfs"],"description":"Server protocol"},
@@ -753,7 +768,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     tool,
                     Tool::WorkloadsApply | Tool::WorkloadsResume | Tool::WorkloadsRevert
                         | Tool::ApplicationsAction | Tool::PackagesInstall | Tool::DependenciesInstall
-                        | Tool::ManagedResourceSave | Tool::ManagedConfigSave | Tool::ManagedConfigRevert | Tool::ManagedApplyRetry | Tool::SharesSambaPassword | Tool::SharesSetup
+                        | Tool::ManagedResourceSave | Tool::ManagedConfigSave | Tool::ManagedConfigRevert | Tool::ManagedApplyRetry | Tool::SharesSambaPassword | Tool::SharesSetup | Tool::ManagedSharePublish
                 ),
                 "inputSchema": input_schema
             })
@@ -2817,6 +2832,53 @@ pub async fn execute_tool(
                     json_err("logs_error", &e.to_string()),
                 ),
             }
+        }
+
+        "managed_share_publish" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Input { share: String, published: bool, confirm: bool }
+            let Ok(input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
+                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected share, published and confirm=true."));
+            };
+            if !input.confirm || !crate::core::declarative::id_valid(&input.share) {
+                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Invalid share ID or missing confirmation."));
+            }
+            if !writes_allowed(state) {
+                return (StatusCode::FORBIDDEN,json_err("writes_disabled","Share publication requires management writes."));
+            }
+            if !state.config.test_mode && (!provider.shares.native_enabled() || !admin::probe().await.permits_shares()) {
+                return (StatusCode::SERVICE_UNAVAILABLE,json_err("helper_unavailable","Native share publication requires authorized helper grants and fixed configuration paths."));
+            }
+            let state = state.clone();
+            let store = store.clone();
+            let provider = provider.clone();
+            start_job_value(jobs,"managed_share_publish",move |running| async move {
+                let result = async {
+                    crate::core::linux_config::mutation_ready(&state.config,&store)?;
+                    anyhow::ensure!(store.pending_apply()?.is_none(),"recover the pending apply before changing share publication");
+                    let snapshot = store.read()?.ok_or_else(|| anyhow::anyhow!("configuration is unavailable"))?;
+                    let mut desired = snapshot.config()?;
+                    let share = desired.shares.get_mut(&input.share).ok_or_else(|| anyhow::anyhow!("unknown managed share"))?;
+                    if share.enabled == input.published {
+                        return Ok::<_,anyhow::Error>(json!({"share":input.share,"published":input.published,"revision":snapshot.revision}));
+                    }
+                    share.enabled = input.published;
+                    let edit = crate::core::declarative::edit::EditInput {
+                        kind:"share".into(),id:input.share.clone(),operation:"save".into(),
+                        definition:Some(serde_json::to_string(share)?),revision:snapshot.revision.clone(),
+                    };
+                    let candidate = crate::core::declarative::edit::edit(&store,&edit)?;
+                    let plan = crate::core::linux_config::preview(&state.config,&store,&candidate,&snapshot.revision)?;
+                    let saved = store.apply_review_mode(&candidate,&snapshot.revision,&plan.fingerprint,
+                        crate::core::declarative::ApplyMode::Now,&*provider).await?;
+                    Ok(json!({"share":input.share,"published":input.published,"revision":saved.revision}))
+                }.await;
+                match result {
+                    Ok(value) => running.finish(Outcome::Succeeded(value)),
+                    Err(error) => running.finish(Outcome::Failed(error.to_string())),
+                }
+            }).await
         }
 
         "managed_shares" => match store.read() {
