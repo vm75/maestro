@@ -117,14 +117,7 @@ impl CompositeProvider {
             .as_ref()
             .map(|authority| authority.settings.libvirt_uri.clone());
         let storage = StorageProvider::new(config.paths.storage_dir.clone());
-        let shares = ShareProvider::new(
-            config.paths.samba_conf.clone(),
-            config.paths.exports_file.clone(),
-            config.paths.storage_dir.clone(),
-        ).with_mode(runner.is_test_mode(),
-            config.platform == crate::config::Platform::Linux && config.system.allow_share_writes
-                && config.linux_authority.as_ref().is_some_and(|authority|
-                    authority.settings.samba_config == "/etc/samba/smb.conf"));
+        let shares = ShareProvider::from_config(config,runner.is_test_mode());
 
         Self {
             simulated: runner.is_test_mode(),
