@@ -372,11 +372,10 @@ async fn resume(store:&Store,dir:&File,storage_root:&Path,provider:&CompositePro
                     for dep in &c.services[id].depends_on{
                         ensure!(service_state(provider,c,dep).await?=="running","backup dependency is not running");
                     }
-                    let source_path=store.path();
-                    let root=source_path.parent().context("configuration root unavailable")?;
-                    let inventory=backup_inventory::inventory(store,root,storage_root)?;
-                    ensure!(inventory.issues.iter().all(|issue|issue.severity=="warning"||issue.code=="backup_native_dependencies"),
-                        "required source files need attention before workload recovery");
+                    let mut health=super::preflight::check_files(store,c,storage_root,Some(Path::new("/proc")));
+                    super::preflight::propagate(c,&mut health,vec![]);
+                    ensure!(!health.issues.iter().any(|issue|issue.resource==format!("service/{id}")&&issue.severity!="warning"),
+                        "required service files need attention before workload recovery");
                     if c.services[id].backend=="compose"{
                         let adapter=if c.services[id].engine=="docker"{&provider.docker_compose}else{&provider.podman_compose};
                         adapter.resume_backup_workload(c,id).await?;
