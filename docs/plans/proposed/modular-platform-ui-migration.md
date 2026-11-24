@@ -681,3 +681,5 @@ The final acceptance matrix must cover:
 - [ ] Phase 2: Existing Server Man backup inventory, capture, manifest verification, pending-journal and reviewed publication/recovery functionality ported with explicit non-restorable status.
 - [ ] **M2 hard parity gate:** Every implemented reference feature is accepted with linked test/native evidence; no unapproved omission or downgraded safety contract.
 - [ ] Phase 2: Linux native acceptance, router parity and releases completed.
+
+- [ ] Phase 2: operator-directed old Maestro additions accepted (external workloads, simple OCI creation, Incus system containers, LXD compatibility and optional browser terminal); see the parity ledger for implementation and verification status. Old Arch installer excluded.

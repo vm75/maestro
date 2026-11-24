@@ -1014,3 +1014,19 @@ mutation UI controls; removing Linux YAML write gates does not implement those
 controls. The UI now states the implementation gap explicitly. No new permissions
 are required to make the existing inventory visible, and no mutation capability
 is claimed. Shared feature editing/action integration remains outstanding.
+
+## Operator-directed old Maestro additions (Phase 2)
+
+These features are additive to the pinned Server Man parity denominator, not substitutes for its remaining acceptance work. The old Arch installer is explicitly excluded.
+
+| Feature | Source implementation status | Remaining acceptance |
+|---|---|---|
+| External workloads | `native_inventory.rs`, existing provider adapters, `NativeWorkloads.svelte`; local Docker, Podman, Incus, Libvirt and optional LXD discovery | Native inventory/ownership isolation and UI tests; LXD and Incus external lifecycle not implemented |
+| External OCI lifecycle and logs | Full immutable container ID, fresh ownership and orchestration checks, bounded output, tracked lifecycle jobs | Native execution, denied-action and race/identity tests; safe deletion not implemented |
+| External Libvirt lifecycle | Configured local URI, domain UUID, managed ownership exclusion, graceful native requests | Native start/stop/reboot acceptance; safe deletion not implemented |
+| Single-container creation | Existing typed Compose/Quadlet editor presets | Native and UI acceptance |
+| Incus system containers | Optional `vm.instance_type: container`, unprivileged local guest rendering, existing provider lifecycle and editor | Native LXC acceptance, explicit mounts/environment, filesystem capture and verification; capture currently fails closed |
+| Browser terminal | Not implemented | Opt-in, session-authenticated local non-root PTY, origin checks, limits, disconnect/revocation cleanup and tests |
+| LXD | Local default-project discovery only | Native compatibility and ownership-safe lifecycle; no managed LXD provider yet |
+
+Source commits: `8e2be05`, `6d6ec4a`, `c33a93e`. The source changes include focused Rust regression cases; no Cargo, Clippy, Svelte build, native runtime or browser acceptance has been executed for these increments in the connector-only editing environment. Do not mark these items complete on source evidence alone.
