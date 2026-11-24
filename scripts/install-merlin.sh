@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-PATH=/opt/bin:/opt/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+PATH=/opt/bin:/opt/sbin:${PATH:-/usr/sbin:/usr/bin:/sbin:/bin}
 export PATH
 
 SCRIPT_DIR=$(dirname "$0")
