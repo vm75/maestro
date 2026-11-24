@@ -259,7 +259,8 @@ impl IncusProvider{
             let want=render(desired,id)?;
             if let Some(a)=&actual{
                 // No takeover of an unknown preexisting native instance.
-                ensure!(before.is_some()||current.as_deref()==after.as_deref(),"preexisting Incus instance has no owned prior artifact");
+                ensure!(before.is_some()||current.as_deref()==after.as_deref()||matches_definition(&want,a),
+                    "preexisting Incus instance has no owned prior definition");
                 if a.status_code!=102{ensure!(!running_update_needs_stop(&want,a),"{STOPPED_UPDATE}");}
             }else{
                 ensure!(image_valid(&vm(desired,id)?.image),"initial Incus creation requires a locally available image alias or fingerprint");
@@ -293,8 +294,9 @@ impl IncusProvider{
                         Ok::<(),anyhow::Error>(())
                     }).await.map_err(|_|anyhow!("Incus boot policy update timed out"))??;
                 }else{
-                    let payload=merge_volatile(want,&actual);
-                    ensure!(self.read(desired,id).await?.is_some_and(|a|a.status_code==102),"{STOPPED_UPDATE}");
+                    let latest=self.read(desired,id).await?.filter(|a|a.status_code==102)
+                        .ok_or_else(||anyhow!("{STOPPED_UPDATE}"))?;
+                    let payload=merge_volatile(want,&latest);
                     self.run(project,Some(&payload),&["config","edit",&target],1200).await?;
                 }
             }else{
@@ -464,6 +466,141 @@ services:
         assert!(instance_name(&"a".repeat(63)).len()<=63);
         assert!(!image_valid("images:ubuntu/24.04"));
     }
+    #[tokio::test]
+    async fn reference_native_scoping_stopped_edits_and_non_destructive_removal(){
+        use std::{fs,path::Path,os::unix::fs::PermissionsExt};
+        // This fixture needs only Python's standard library, not Incus or KVM.
+        if !Path::new("/usr/bin/python3").is_file() {
+            eprintln!("Skipping fake Incus executable test: /usr/bin/python3 not installed");
+            return;
+        }
+        let tmp=tempfile::tempdir().unwrap();
+        fs::set_permissions(tmp.path(),fs::Permissions::from_mode(0o700)).unwrap();
+        let cli=tmp.path().join("incus");
+        let qemu=tmp.path().join("qemu");
+        let state=tmp.path().join("instance.json");
+        let log=tmp.path().join("commands");
+        let script=r#"#!/usr/bin/python3
+import json, pathlib, sys
+from urllib.parse import urlsplit, parse_qs
+root = pathlib.Path(__file__).parent
+state = root / "instance.json"
+args = sys.argv[1:]
+with (root / "commands").open("a") as f:
+    f.write(json.dumps(args) + "\n")
+assert args[0] == "--force-local"
+assert "private-definition-value" not in " ".join(args)
+actual = json.loads(state.read_text()) if state.exists() else None
+if args[1] == "query":
+    assert args[2:5] == ["--request", "GET", "--raw"]
+    assert args[5].startswith("local:")
+    url = urlsplit(args[5][len("local:"):])
+    if url.path.startswith("/1.0/instances") or url.path.startswith("/1.0/storage-pools") or url.path.startswith("/1.0/networks"):
+        assert parse_qs(url.query) == {"project": ["managed"]}
+    if url.path == "/1.0/instances":
+        metadata = ["/1.0/instances/sm-guest?project=managed"] if actual else []
+    elif url.path == "/1.0/instances/sm-guest":
+        assert actual
+        metadata = actual
+    elif url.path in ("/1.0", "/1.0/projects/managed", "/1.0/storage-pools/default", "/1.0/networks/default"):
+        metadata = {}
+    else:
+        sys.exit(1)
+    print(json.dumps({"type":"sync","error_code":0,"metadata":metadata}))
+    sys.exit(0)
+assert args[1:3] == ["--project", "managed"]
+op = args[3:]
+if op[0] == "init":
+    assert op == ["init", "local:ubuntu-24.04", "local:sm-guest", "--vm", "--no-profiles"]
+    assert actual is None
+    actual = json.load(sys.stdin)
+    assert actual["profiles"] == [] and not actual["ephemeral"]
+    assert actual["devices"]["root"]["pool"] == "default"
+    assert actual["description"] == "private-definition-value"
+    actual.update(name="sm-guest", type="virtual-machine", status="Stopped", status_code=102)
+    actual["config"]["volatile.uuid"] = "daemon-owned"
+    actual["config"]["volatile.vm.rtc_offset"] = "123"
+elif op[:2] == ["config", "edit"]:
+    assert op[2:] == ["local:sm-guest"] and actual["status_code"] == 102
+    payload = json.load(sys.stdin)
+    assert payload["config"]["volatile.uuid"] == "daemon-owned"
+    assert payload["config"]["volatile.vm.rtc_offset"] == "123"
+    actual.update(payload)
+elif op[:2] == ["config", "set"]:
+    assert op[2] == "local:sm-guest"
+    key, value = op[3].split("=", 1)
+    assert key in ("boot.autostart", "user.server-man.fingerprint", "user.server-man.active-runtime")
+    actual["config"][key] = value
+elif op == ["start", "local:sm-guest"]:
+    assert actual["status_code"] == 102
+    actual.update(status="Running", status_code=103)
+elif op == ["stop", "local:sm-guest", "--timeout", "90"]:
+    if (root / "fail-stop").exists():
+        sys.exit(1)
+    actual.update(status="Stopped", status_code=102)
+elif op == ["info", "local:sm-guest", "--show-log"]:
+    print("first\nsecond\nthird")
+    sys.exit(0)
+else:
+    sys.exit(1)
+state.write_text(json.dumps(actual))
+"#;
+        fs::write(&cli,script).unwrap();
+        fs::write(&qemu,"#!/bin/sh\n[ \"$*\" = '-spice help' ] || exit 2\nprintf 'spice options:\\n  unix=<bool (on/off)>\\n  disable-ticketing=<bool (on/off)>\\n'\nexit 1\n").unwrap();
+        for path in [&cli,&qemu]{fs::set_permissions(path,fs::Permissions::from_mode(0o700)).unwrap();}
+        let provider=IncusProvider::new(cli,CommandRunner::new(false)).native_paths(tmp.path().join("generated")).qemu_path(qemu);
+        let c=fixture();let empty=Config{version:1,..Default::default()};
+        let change=|operation,before:Option<&Config>,after:Option<&Config>|Change{
+            resource:"service/guest".into(),backend:"incus".into(),operation,
+            before:before.map(|c|service_fingerprint(c,"guest").unwrap()),
+            after:after.map(|c|service_fingerprint(c,"guest").unwrap()),
+        };
+        let create=change(Operation::Create,None,Some(&c));
+        provider.apply(&create,&empty,&c).await.unwrap();
+        assert_eq!(provider.status_details(&c,"guest").await.unwrap().state,"stopped");
+        provider.native_action(&c,"guest","start").await.unwrap();
+        let mut next=c.clone();next.services.get_mut("guest").unwrap().enabled=true;
+        let toggle=change(Operation::Update,Some(&c),Some(&next));
+        let prior=fs::read_to_string(&log).unwrap();
+        provider.apply_mode(&toggle,&c,&next,ApplyMode::NextStart).await.unwrap();
+        let commands=fs::read_to_string(&log).unwrap();
+        assert!(commands[prior.len()..].contains("boot.autostart=true"));
+        assert!(!commands[prior.len()..].contains("\"edit\""));
+        assert!(!commands[prior.len()..].contains("\"start\""));
+        let previous=next.clone();next.services.get_mut("guest").unwrap().vm.as_mut().unwrap().memory_mib=2048;
+        let update=change(Operation::Update,Some(&previous),Some(&next));
+        for mode in [ApplyMode::Now,ApplyMode::NextStart]{
+            assert!(provider.apply_mode(&update,&previous,&next,mode).await.is_err());
+        }
+        fs::write(tmp.path().join("fail-stop"),b"fail").unwrap();
+        let prior=fs::read_to_string(&log).unwrap();
+        assert!(provider.native_action(&previous,"guest","restart").await.is_err());
+        assert!(!fs::read_to_string(&log).unwrap()[prior.len()..].contains("\"start\""));
+        fs::remove_file(tmp.path().join("fail-stop")).unwrap();
+        provider.native_action(&previous,"guest","stop").await.unwrap();
+        provider.apply(&update,&previous,&next).await.unwrap();
+        provider.native_action(&next,"guest","start").await.unwrap();
+        assert!(provider.status_details(&next,"guest").await.unwrap().runtime_matches);
+        let logs=provider.native_logs(&next,"guest",2).await.unwrap();
+        assert_eq!(logs.text,"second\nthird\n");assert!(logs.truncated);
+        let remove=change(Operation::Remove,Some(&next),None);
+        assert!(provider.apply(&remove,&next,&empty).await.is_err());
+        provider.native_action(&next,"guest","stop").await.unwrap();
+        assert!(provider.apply(&remove,&next,&empty).await.is_err());
+        let mut foreign:Value=serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+        foreign["config"][IDENTITY]=serde_json::json!("foreign");
+        fs::write(&state,serde_json::to_vec(&foreign).unwrap()).unwrap();
+        assert!(provider.native_action(&next,"guest","start").await.is_err());
+        // A failed/absent instance may have its exact artifact removed.
+        fs::remove_file(&state).unwrap();
+        provider.apply(&remove,&next,&empty).await.unwrap();
+        assert_eq!(provider.observe(&remove,&next,&empty).await.unwrap(),ObservedResource::After);
+        let commands=fs::read_to_string(&log).unwrap();
+        assert!(!commands.contains("\"delete\""));
+        assert!(!commands.contains("\"--force\""));
+        assert!(!commands.contains("private-definition-value"));
+    }
+
     #[tokio::test]
     async fn simulation_lifecycle_and_logs(){
         let provider=IncusProvider::new("/nonexistent/incus".into(),CommandRunner::new(true));
