@@ -244,6 +244,7 @@ pub fn restart_required(config: &AppConfig, bytes: &[u8]) -> Result<bool> {
 }
 
 pub fn mutation_ready(config: &AppConfig, store: &Store) -> Result<()> {
+    super::declarative::backup_capture::ensure_idle(store)?;
     if let Some(snapshot) = store.read()? {
         ensure!(
             !restart_required(config, &snapshot.bytes)?,
