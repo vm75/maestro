@@ -3,6 +3,8 @@ pub mod certificates;
 pub mod firewall;
 #[cfg(feature = "linux")]
 mod linux_session_store;
+#[cfg(feature = "linux")]
+mod linux_shared;
 #[cfg(feature = "linux-ui")]
 mod linux_ui;
 #[cfg(feature = "linux")]

@@ -12,6 +12,7 @@
   import Configuration from './pages/Configuration.svelte'
   import Updates from './pages/Updates.svelte'
   import { ApiError, request, type Status, type Discovery } from './lib/api'
+  import type { SharedDiscovery } from './lib/shared'
   import { themeState } from './lib/theme.svelte'
 
   import Activity from './Activity.svelte'
@@ -23,12 +24,19 @@
     { id: 'configuration', name: 'Configuration', subtitle: 'Storage, bindings, private references and recovery.' },
     { id: 'shares', name: 'File shares', subtitle: 'Samba and NFS exports.' },
     { id: 'updates', name: 'Updates', subtitle: 'Keep your Linux system up to date.' },
+    { id: 'web', name: 'Web', subtitle: 'Nginx sites, certificates and logs.' },
+    { id: 'security', name: 'Ban Shield', subtitle: 'Protection, active bans and detection rules.' },
     { id: 'activity', name: 'Activity', subtitle: 'Inspect management jobs and their output.' },
     { id: 'agent', name: 'Agent access', subtitle: 'Manage your server through MCP.' },
   ]
   const pageModules: Record<string, string> = { applications: 'workloads', configuration: 'workloads', services: 'systemd', shares: 'shares', updates: 'updates' }
   let discovery = $state<Discovery | null>(null)
-  const visiblePages = $derived(pages.filter(p => !pageModules[p.id] || discovery?.modules.some(m => m.id === pageModules[p.id])))
+  let shared = $state<SharedDiscovery | null>(null)
+  const visiblePages = $derived(pages.filter(p => {
+    if (p.id === 'web') return shared?.modules.some(m => ['nginx', 'certificates'].includes(m.id) && m.availability !== 'unsupported')
+    if (p.id === 'security') return shared?.modules.some(m => m.id === 'ban_shield' && m.availability === 'ready')
+    return !pageModules[p.id] || discovery?.modules.some(m => m.id === pageModules[p.id])
+  }))
   let selected = $state('overview')
   const workloadWrites = $derived(!!status?.allowWrites && !!discovery?.modules.find(m => m.id === 'workloads')?.writable)
   function navigate(target: string) { selected = target; location.hash = target; menuOpen = false }
@@ -42,22 +50,22 @@
   async function connect() {
     loading = true
     error = ''
-    try { const next = await request<Status>('/api/status'); discovery = await request<Discovery>('/api/tools'); status = next; needsAuth = false }
-    catch (e) { if (e instanceof ApiError && e.status === 401) { needsAuth = true; status = null; discovery = null } else { error = e instanceof Error ? e.message : 'Could not connect to the server' } }
+    try { const next = await request<Status>('/api/status'); discovery = await request<Discovery>('/api/tools'); shared = await request<SharedDiscovery>('/api/shared/modules'); status = next; needsAuth = false }
+    catch (e) { if (e instanceof ApiError && e.status === 401) { needsAuth = true; status = null; discovery = null; shared = null } else { error = e instanceof Error ? e.message : 'Could not connect to the server' } }
     finally { loading = false }
   }
 
   async function signOut() {
-    try { await request('/api/session', { method: 'DELETE' }); needsAuth = true; status = null; discovery = null; menuOpen = false }
+    try { await request('/api/session', { method: 'DELETE' }); needsAuth = true; status = null; discovery = null; shared = null; menuOpen = false }
     catch (e) { error = e instanceof Error ? e.message : 'Could not sign out' }
   }
 
   onMount(() => {
     themeState.init()
-    const selectHash = () => { selected = location.hash.slice(1) || 'overview'; menuOpen = false }
+    const selectHash = () => { const hash = location.hash.slice(1); if (hash === 'main') return; selected = hash === 'agents' ? 'agent' : hash || 'overview'; menuOpen = false }
     selectHash()
     window.addEventListener('hashchange', selectHash)
-    const expired = () => { needsAuth = true; status = null; discovery = null; menuOpen = false }
+    const expired = () => { needsAuth = true; status = null; discovery = null; shared = null; menuOpen = false }
     window.addEventListener('server-man:unauthorized', expired)
     void connect()
     return () => { window.removeEventListener('server-man:unauthorized', expired); window.removeEventListener('hashchange', selectHash) }
@@ -116,6 +124,10 @@
         <Configuration allowWrites={workloadWrites} />
       {:else if page.id === 'shares' && status}
         {#if discovery}<Shares allowWrites={workloadWrites} {discovery} {status} />{/if}
+      {:else if page.id === 'web' && shared}
+        {#await import('./pages/SharedWeb.svelte')}<p role="status">Loading Web…</p>{:then {default: Page}}<Page discovery={shared} />{:catch failure}<p role="alert">{String(failure)}</p>{/await}
+      {:else if page.id === 'security'}
+        {#await import('./pages/BanShield.svelte')}<p role="status">Loading Ban Shield…</p>{:then {default: Page}}<Page />{:catch failure}<p role="alert">{String(failure)}</p>{/await}
       {:else if page.id === 'activity' && status && discovery}
         <Activity {status} {discovery} />
       {:else if page.id === 'updates' && status}
