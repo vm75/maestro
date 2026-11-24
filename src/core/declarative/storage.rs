@@ -256,6 +256,10 @@ pub struct ProvisionPlan {
     pub mode: &'static str,
     pub consumers: Vec<String>,
     pub review_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<super::model::DiskSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_virtual_bytes: Option<u64>,
 }
 
 struct PreparedProvision {
@@ -263,6 +267,7 @@ struct PreparedProvision {
     parent: File,
     name: String,
     marker: Option<StorageMeta>,
+    source: Option<SourceImage>,
 }
 
 impl StorageProvider {
@@ -285,7 +290,6 @@ impl StorageProvider {
         let storage = config.storage.get(id).ok_or_else(|| anyhow!("unknown storage reference"))?;
         ensure!(!storage.external && super::path_valid(&storage.path, false) && storage.path != ".",
             "new data requires an owned relative storage path");
-        ensure!(storage.source.is_none(), "source image cloning is not yet supported; no destination was created");
         let kind = if storage.kind.is_empty() { "directory" } else { storage.kind.as_str() };
         ensure!(
             (kind == "directory" && size_gib == 0)
@@ -293,9 +297,10 @@ impl StorageProvider {
                     && matches!(storage.format.as_str(), "raw" | "qcow2")),
             "directory size must be zero; disks require raw/qcow2 and 1–4096 GiB"
         );
-        if storage.format == "qcow2" {
+        ensure!(storage.source.is_none() || kind == "file", "only disks may have an initial image");
+        if storage.format == "qcow2" || storage.source.is_some() {
             ensure!(!state.runner.is_test_mode() && qemu_img().is_some(),
-                "native qemu-img is required for qcow2 provisioning");
+                "native qemu-img is required for qcow2 or source image provisioning");
         }
         let relative = Path::new(&storage.path);
         let destination = self.base_dir.join(relative);
@@ -382,9 +387,13 @@ impl StorageProvider {
                 fingerprint: super::revision(&bytes),
             })
         } else { None };
+        let source = match &storage.source {
+            Some(source) => Some(SourceImage::inspect(state, authority_root, source, size_gib << 30).await?),
+            None => None,
+        };
         let token = super::revision(&serde_json::to_vec(&serde_json::json!([
             revision,id,destination,kind,storage.format,size_gib,info.dev(),info.ino(),
-            storage.mount,uid,gid,consumers,
+            storage.mount,uid,gid,consumers,storage.source,source.as_ref().map(|image| &image.identity),
         ]))?);
         Ok(PreparedProvision {
             plan: ProvisionPlan {
@@ -392,8 +401,9 @@ impl StorageProvider {
                 kind: kind.into(), format: storage.format.clone(), size_gib, available_bytes,
                 uid, gid, mode: if kind == "directory" { "0700" } else { "0600" },
                 consumers, review_token: token,
+                source: storage.source.clone(), source_virtual_bytes: source.as_ref().map(|image| image.virtual_bytes),
             },
-            parent, name, marker,
+            parent, name, marker, source,
         })
     }
 
@@ -472,6 +482,19 @@ impl StorageProvider {
                     ensure!(image["format"] == "qcow2" && image["virtual-size"].as_u64() == Some(bytes)
                         && image.get("backing-filename").is_none(), "new qcow2 disk verification failed");
                 }
+                if let Some(source) = &prepared.source {
+                    let definition = prepared.plan.source.as_ref().ok_or_else(|| anyhow!("source definition missing"))?;
+                    source.verify_checksum(&definition.sha256, cancellation).await?;
+                    ensure!(!*cancellation.borrow(), "provisioning cancelled before conversion");
+                    let program = qemu_img().ok_or_else(|| anyhow!("native qemu-img disappeared"))?;
+                    let input = descriptor_path(&source.file);
+                    let output = descriptor_path(&staged);
+                    state.runner.capture_bounded(&program, &["convert", "-n", "-f", &definition.format, "-O", &prepared.plan.format, &input, &output],
+                        std::time::Duration::from_secs(1200), 64 * 1024).await?;
+                    source.verify_checksum(&definition.sha256, cancellation).await?;
+                    ensure!(inspect_image(state, &staged, &prepared.plan.format).await? == bytes,
+                        "converted disk size verification failed");
+                }
                 staged.sync_all()?;
             }
             let latest = self.prepare_provision(state, store, providers, id, revision, size_gib).await?;
@@ -499,6 +522,114 @@ impl StorageProvider {
     }
 }
 
+const MAX_IMAGE_BYTES: u64 = 4096 << 30;
+
+struct SourceImage {
+    file: File,
+    virtual_bytes: u64,
+    identity: serde_json::Value,
+}
+
+fn descriptor_path(file: &File) -> String {
+    use std::os::fd::AsRawFd;
+    format!("/proc/{}/fd/{}", std::process::id(), file.as_raw_fd())
+}
+
+fn check_image_header(file: &File, format: &str) -> Result<()> {
+    use std::os::unix::fs::FileExt;
+    if format == "raw" { return Ok(()); }
+    ensure!(format == "qcow2", "unsupported disk image format");
+    let mut header = [0u8; 104];
+    file.read_exact_at(&mut header[..72], 0)?;
+    let version = u32::from_be_bytes(header[4..8].try_into()?);
+    ensure!(header[..4] == [0x51, 0x46, 0x49, 0xfb] && matches!(version, 2 | 3),
+        "unsupported qcow2 header");
+    ensure!(header[8..20].iter().all(|byte| *byte == 0)
+        && header[32..36].iter().all(|byte| *byte == 0),
+        "backed or encrypted qcow2 images are not supported");
+    if version == 3 {
+        file.read_exact_at(&mut header[72..], 72)?;
+        ensure!(header[72..80].iter().all(|byte| *byte == 0),
+            "qcow2 incompatible features, including external data files, are not supported");
+    }
+    Ok(())
+}
+
+async fn inspect_image(state: &crate::state::AppState, file: &File, format: &str) -> Result<u64> {
+    check_image_header(file, format)?;
+    let program = qemu_img().ok_or_else(|| anyhow!("native qemu-img is unavailable"))?;
+    let path = descriptor_path(file);
+    let output = state.runner.capture_bounded(&program, &["info", "--output=json", "-f", format, &path],
+        std::time::Duration::from_secs(30), 64 * 1024).await?;
+    let info: serde_json::Value = serde_json::from_slice(&output)?;
+    ensure!(info["format"] == format && info.get("backing-filename").is_none()
+        && info.get("full-backing-filename").is_none(),
+        "source image format or backing file verification failed");
+    let size = info["virtual-size"].as_u64().ok_or_else(|| anyhow!("image virtual size unavailable"))?;
+    ensure!((1..=MAX_IMAGE_BYTES).contains(&size), "image virtual size out of range");
+    Ok(size)
+}
+
+impl SourceImage {
+    async fn inspect(state: &crate::state::AppState, root: &std::path::Path,
+        source: &super::model::DiskSource, capacity: u64) -> Result<Self> {
+        use std::{os::unix::fs::MetadataExt, path::Path};
+        ensure!(super::path_valid(&source.path, false) && source.path != ".",
+            "source image must be a relative asset");
+        ensure!(matches!(source.format.as_str(), "raw" | "qcow2")
+            && store::valid_revision(&source.sha256), "invalid image format or checksum");
+        let path = Path::new(&source.path);
+        let mut parent = store::open_directory(root)?;
+        let uid = unsafe { libc::geteuid() };
+        for part in path.parent().ok_or_else(|| anyhow!("invalid source parent"))?.components() {
+            let name = part.as_os_str();
+            let fd = fs::openat(&parent, name,
+                fs::OFlags::RDONLY | fs::OFlags::DIRECTORY | fs::OFlags::NOFOLLOW | fs::OFlags::CLOEXEC,
+                fs::Mode::empty())?;
+            parent = File::from(fd);
+            let info = parent.metadata()?;
+            ensure!((info.uid() == uid || info.uid() == 0) && info.mode() & 0o022 == 0,
+                "source directory is not owned and protected");
+        }
+        let fd = fs::openat(&parent, path.file_name().ok_or_else(|| anyhow!("invalid source name"))?,
+            fs::OFlags::RDONLY | fs::OFlags::NOFOLLOW | fs::OFlags::NONBLOCK | fs::OFlags::CLOEXEC,
+            fs::Mode::empty())?;
+        let file = File::from(fd);
+        let info = file.metadata()?;
+        ensure!(info.is_file() && (1..=MAX_IMAGE_BYTES).contains(&info.len())
+            && info.nlink() == 1 && (info.uid() == uid || info.uid() == 0)
+            && info.mode() & 0o022 == 0, "source must be a protected regular image file");
+        let virtual_bytes = inspect_image(state, &file, &source.format).await?;
+        ensure!(virtual_bytes <= capacity, "source image exceeds requested disk capacity");
+        let identity = serde_json::json!([info.dev(),info.ino(),info.len(),info.mtime(),
+            info.mtime_nsec(),info.ctime(),info.ctime_nsec(),virtual_bytes]);
+        Ok(Self { file, virtual_bytes, identity })
+    }
+
+    async fn verify_checksum(&self, expected: &str, cancellation: &tokio::sync::watch::Receiver<bool>) -> Result<()> {
+        use sha2::{Digest, Sha256};
+        use std::os::unix::fs::FileExt;
+        let file = self.file.try_clone()?;
+        let expected = expected.to_owned();
+        let cancellation = cancellation.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut hash = Sha256::new();
+            let mut offset = 0u64;
+            let mut buffer = vec![0u8; 1024 * 1024];
+            loop {
+                ensure!(!*cancellation.borrow(), "provisioning cancelled while verifying source");
+                let read = file.read_at(&mut buffer, offset)?;
+                if read == 0 { break; }
+                offset += read as u64;
+                ensure!(offset <= MAX_IMAGE_BYTES, "source image exceeds checksum limit");
+                hash.update(&buffer[..read]);
+            }
+            ensure!(format!("{:x}", hash.finalize()) == expected, "source image checksum mismatch");
+            Ok(())
+        }).await?
+    }
+}
+
 fn qemu_img() -> Option<PathBuf> {
     ["/usr/bin/qemu-img", "/usr/local/bin/qemu-img"]
         .into_iter().map(PathBuf::from).find(|path| path.is_file())
@@ -509,6 +640,23 @@ mod tests {
     use super::*;
     use crate::core::declarative::{Operation, Storage};
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn qcow2_header_rejects_backing_and_external_data() {
+        use std::io::Write;
+        let mut file = tempfile::tempfile().unwrap();
+        let mut header = [0u8; 104];
+        header[..4].copy_from_slice(&[0x51, 0x46, 0x49, 0xfb]);
+        header[4..8].copy_from_slice(&3u32.to_be_bytes());
+        file.write_all(&header).unwrap();
+        assert!(check_image_header(&file, "qcow2").is_ok());
+        use std::os::unix::fs::FileExt;
+        file.write_all_at(&[1], 79).unwrap();
+        assert!(check_image_header(&file, "qcow2").is_err());
+        file.write_all_at(&[0], 79).unwrap();
+        file.write_all_at(&[1], 15).unwrap();
+        assert!(check_image_header(&file, "qcow2").is_err());
+    }
 
     #[tokio::test]
     async fn test_storage_provider_lifecycle() {
