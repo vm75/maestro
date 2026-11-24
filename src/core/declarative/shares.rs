@@ -4,7 +4,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
+use serde::Deserialize;
+use serde_json::{Value, json};
+
+use super::{native_shares::Definition, share_definitions};
+use crate::platforms::admin;
 
 use crate::core::declarative::{
     ApplyProvider, Change, Config, ObservedResource, Operation, RecoveryProvider, Share,
@@ -89,6 +94,8 @@ pub struct ShareProvider {
     pub samba_conf: PathBuf,
     pub exports_file: PathBuf,
     pub storage_base: PathBuf,
+    simulated: bool,
+    native_enabled: bool,
 }
 
 impl ShareProvider {
@@ -97,15 +104,124 @@ impl ShareProvider {
             samba_conf,
             exports_file,
             storage_base,
+            simulated: false,
+            native_enabled: false,
         }
+    }
+
+    pub fn with_mode(mut self, simulated: bool, native_enabled: bool) -> Self {
+        self.simulated = simulated;
+        self.native_enabled = native_enabled
+            && self.samba_conf == Path::new("/etc/samba/server-man.conf")
+            && self.exports_file == Path::new("/etc/exports.d/server-man.exports");
+        self
+    }
+
+    pub fn native_enabled(&self) -> bool { self.native_enabled }
+
+    // Direct translation of Server Man internal/declarative/shares.go:
+    // a protocol publishes its entire authoritative definition set.
+    fn definitions(&self, protocol: &str, config: &Config, check_paths: bool) -> Result<Vec<Definition>> {
+        ensure!(matches!(protocol, "samba" | "nfs"), "unsupported share protocol");
+        let mut definitions = Vec::new();
+        for (id, share) in &config.shares {
+            if share.protocol != protocol || !share.enabled { continue; }
+            let storage = config.storage.get(&share.storage).context("referenced storage not found")?;
+            ensure!(storage.kind != "file", "share requires directory storage");
+            let base = if storage.external { PathBuf::from(&storage.path) } else { self.storage_base.join(&storage.path) };
+            let path = if share.path.is_empty() { base } else { base.join(&share.path) };
+            // Preserve the existing typed explicit users when present; the
+            // pinned reference defaults non-guest Samba to its workload account.
+            let users = if protocol == "samba" && !share.guest && share.users.is_empty() {
+                vec![admin::workload_account()?]
+            } else { share.users.clone() };
+            definitions.push(Definition {
+                name: id.clone(),
+                path: path.to_str().context("share path is not UTF-8")?.into(),
+                read_only: share.read_only,
+                guest: share.guest,
+                browseable: share.browseable,
+                users,
+                clients: share.clients.clone(),
+                root_squash: share.root_squash.unwrap_or(protocol == "nfs"),
+                security: if protocol == "nfs" && share.security.is_empty() { "sys".into() } else { share.security.clone() },
+            });
+        }
+        share_definitions::normalize(protocol, definitions, check_paths)
+    }
+
+    async fn inspect(&self, protocol: &str, definitions: &[Definition]) -> Result<DefinitionState> {
+        let (result, _) = admin::share_operation("shares_definitions_inspect", definition_args(protocol,definitions)?).await?;
+        let state: DefinitionState = serde_json::from_value(result).context("invalid privileged share inspection")?;
+        ensure!(state.revision.len() == 64 && state.revision.bytes().all(|b| b.is_ascii_hexdigit()), "invalid native share revision");
+        Ok(state)
+    }
+
+    async fn validate_native(&self, protocol: &str, previous: &Config, desired: &Config) -> Result<()> {
+        ensure!(self.native_enabled, "native share publication requires authorized Linux configuration and fixed reference paths");
+        ensure!(admin::probe().await.permits_shares(), "native share publication requires an authorized optional helper");
+        let next = self.definitions(protocol,desired,true)?;
+        let current = self.inspect(protocol,&next).await?;
+        ensure!(current.available, "native share dependencies, permissions or setup are unavailable");
+        if current.exact() { return Ok(()); }
+        // Refuse unrelated owned-fragment drift before a central YAML commit.
+        // A missing or externally changed runtime is not automatically replayed.
+        let before = self.definitions(protocol,previous,false)?;
+        let old = self.inspect(protocol,&before).await?;
+        ensure!(old.exact() && old.revision == current.revision,
+            "native shares do not match the reviewed before or after state");
+        let (result,_) = admin::share_operation("shares_definitions_validate",definition_args(protocol,&next)?).await?;
+        ensure!(result["valid"] == true, "native share validation failed");
+        Ok(())
+    }
+
+    async fn apply_native(&self, protocol: &str, previous: &Config, desired: &Config) -> Result<()> {
+        ensure!(self.native_enabled, "native share publication is disabled");
+        let next = self.definitions(protocol,desired,true)?;
+        let state = self.inspect(protocol,&next).await?;
+        ensure!(state.available, "native share dependencies, permissions or setup are unavailable");
+        // Several share changes can describe one protocol. The first operation
+        // publishes the complete set; subsequent journal entries are no-ops.
+        if state.exact() { return Ok(()); }
+        let before = self.definitions(protocol,previous,false)?;
+        let old = self.inspect(protocol,&before).await?;
+        ensure!(old.exact() && old.revision == state.revision,
+            "native shares do not match the reviewed before or after state");
+        let mut args = definition_args(protocol,&next)?;
+        args["revision"] = json!(state.revision);
+        args["confirm"] = json!(true);
+        let (result,_) = admin::share_operation("shares_definitions_apply",args).await?;
+        let verified = self.inspect(protocol,&next).await?;
+        ensure!(verified.exact() && result["revision"].as_str() == Some(verified.revision.as_str()),
+            "native share publication could not be verified");
+        Ok(())
     }
 }
 
+fn definition_args(protocol: &str, definitions: &[Definition]) -> Result<Value> {
+    Ok(json!({"protocol":protocol,"definitions":serde_json::to_string(definitions)?}))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DefinitionState {
+    revision: String,
+    matches: bool,
+    runtime_matches: bool,
+    available: bool,
+}
+impl DefinitionState {
+    fn exact(&self) -> bool { self.available && self.matches && self.runtime_matches }
+}
+
 impl ApplyProvider for ShareProvider {
-    async fn preflight(&self, change: &Change, _previous: &Config, desired: &Config) -> Result<()> {
+    async fn preflight(&self, change: &Change, previous: &Config, desired: &Config) -> Result<()> {
         let Some(share_id) = change.resource.strip_prefix("share/") else {
             return Ok(());
         };
+        if !self.simulated {
+            return self.validate_native(&change.backend,previous,desired).await;
+        }
         if let Some(share) = desired.shares.get(share_id) {
             ensure!(super::id_valid(share_id), "invalid share ID");
             if !share.storage.is_empty() {
@@ -118,9 +234,12 @@ impl ApplyProvider for ShareProvider {
         Ok(())
     }
 
-    async fn apply(&self, change: &Change, _previous: &Config, desired: &Config) -> Result<()> {
+    async fn apply(&self, change: &Change, previous: &Config, desired: &Config) -> Result<()> {
         if !change.resource.starts_with("share/") {
             return Ok(());
+        }
+        if !self.simulated {
+            return self.apply_native(&change.backend,previous,desired).await;
         }
         let samba_content = render_samba(&desired.shares, &self.storage_base)?;
         if let Some(parent) = self.samba_conf.parent() {
@@ -141,11 +260,22 @@ impl RecoveryProvider for ShareProvider {
     async fn observe(
         &self,
         change: &Change,
-        _previous: &Config,
-        _desired: &Config,
+        previous: &Config,
+        desired: &Config,
     ) -> Result<ObservedResource> {
         if !change.resource.starts_with("share/") {
             return Ok(ObservedResource::Unknown);
+        }
+        if !self.simulated {
+            if !self.native_enabled { return Ok(ObservedResource::Unknown); }
+            let next = self.definitions(&change.backend,desired,false)?;
+            let after = self.inspect(&change.backend,&next).await?;
+            if after.exact() { return Ok(ObservedResource::After); }
+            let before = self.definitions(&change.backend,previous,false)?;
+            let old = self.inspect(&change.backend,&before).await?;
+            return Ok(if old.exact() && old.revision == after.revision {
+                ObservedResource::Before
+            } else { ObservedResource::Unknown });
         }
         if !self.samba_conf.exists() && !self.exports_file.exists() {
             return if change.operation == Operation::Create {
