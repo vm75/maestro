@@ -151,15 +151,16 @@ impl CompositeProvider {
         }
     }
 
+    fn lxd(&self) -> Option<IncusProvider> {
+        ["/usr/bin/lxc","/snap/bin/lxc"].into_iter().map(std::path::PathBuf::from)
+            .find(|p|p.is_file()).map(|path|IncusProvider::new(path,self.incus.runner.clone()))
+    }
     pub async fn external_inventory(&self, config: &Config) -> super::native_inventory::NativeInventory {
         use super::native_inventory::NativeInventory;
         if self.simulated { return NativeInventory::default(); }
-        // LXD is optional and discovery-only. Use the same local Unix-socket
-        // query and explicit project boundary, never default remote selection.
-        let lxd_path = ["/usr/bin/lxc","/snap/bin/lxc"].into_iter().map(std::path::PathBuf::from).find(|p| p.is_file());
+        // LXD uses the compatible local guest adapter, independently scoped.
         let lxd = async {
-            if let Some(path) = lxd_path {
-                let provider = IncusProvider::new(path, self.incus.runner.clone());
+            if let Some(provider) = self.lxd() {
                 tokio::time::timeout(std::time::Duration::from_secs(6), provider.external_inventory_named(config,"lxd")).await
                     .unwrap_or_else(|_| NativeInventory { workloads: vec![], warnings: vec!["LXD local inventory timed out.".into()] })
             } else { NativeInventory::default() }
@@ -185,17 +186,24 @@ impl CompositeProvider {
         result.workloads.sort_by(|a,b| (&a.provider,&a.scope,&a.name,&a.id).cmp(&(&b.provider,&b.scope,&b.name,&b.id)));
         result
     }
-    pub async fn external_action(&self, config: &Config, provider: &str, scope: &str, id: &str, action: &str) -> Result<String> {
+    pub async fn external_action(&self, config: &Config, provider: &str, scope: &str, id: &str, identity: &str, action: &str) -> Result<String> {
         ensure!(!self.simulated, "native actions unavailable in simulation");
         match (provider,scope) {
             ("docker" | "podman","local") => self.compose_provider(provider).external_action(config,id,action).await,
             ("libvirt",_) => self.libvirt.external_action(config,id,scope,action).await,
+            ("incus",_) => self.incus.external_action(config,provider,scope,id,identity,action).await,
+            ("lxd",_) => self.lxd().ok_or_else(||anyhow!("LXD client unavailable"))?.external_action(config,provider,scope,id,identity,action).await,
             _ => Err(anyhow!("external lifecycle unavailable for this provider/scope")),
         }
     }
-    pub async fn external_logs(&self, config: &Config, provider: &str, scope: &str, id: &str, tail: usize) -> Result<ManagedLogs> {
-        ensure!(!self.simulated && scope == "local" && matches!(provider,"docker"|"podman"), "external logs unavailable for this provider/scope");
-        self.compose_provider(provider).external_logs(config,id,tail).await
+    pub async fn external_logs(&self, config: &Config, provider: &str, scope: &str, id: &str, identity: &str, tail: usize) -> Result<ManagedLogs> {
+        ensure!(!self.simulated,"native logs unavailable in simulation");
+        match (provider,scope) {
+            ("docker"|"podman","local") => self.compose_provider(provider).external_logs(config,id,tail).await,
+            ("incus",_) => self.incus.external_logs(config,provider,scope,id,identity,tail).await,
+            ("lxd",_) => self.lxd().ok_or_else(||anyhow!("LXD client unavailable"))?.external_logs(config,provider,scope,id,identity,tail).await,
+            _ => Err(anyhow!("external logs unavailable for provider/scope")),
+        }
     }
     pub fn list_applications(&self, config: &Config) -> Vec<ApplicationSummary> {
         let mut apps = Vec::new();

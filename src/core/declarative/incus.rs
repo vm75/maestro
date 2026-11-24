@@ -45,6 +45,30 @@ fn binding_name(value:&str)->bool{
     !value.is_empty()&&value.len()<=128&&value.as_bytes()[0].is_ascii_alphanumeric()
         &&value.bytes().all(|b|b.is_ascii_alphanumeric()||b"_.-".contains(&b))
 }
+// Use a stable server-provided creation timestamp and volatile UUID; never
+// authorize an external guest solely by its reusable name.
+fn external_identity(row: &Value, provider: &str, scope: &str) -> Option<String> {
+    let name = row["name"].as_str().filter(|s| binding_name(s) && !super::native_inventory::reserved(s))?;
+    let kind = row["type"].as_str().filter(|s| matches!(*s,"container"|"virtual-machine"))?;
+    let config = row["config"].as_object()?;
+    if config.keys().any(|key| key.starts_with("user.maestro.")) { return None; }
+    let uuid = config.get("volatile.uuid")?.as_str()?;
+    uuid::Uuid::parse_str(uuid).ok()?;
+    let created = row["created_at"].as_str().filter(|s| !s.is_empty() && s.len()<=80)?;
+    Some(super::revision(&serde_json::to_vec(&(provider,scope,name,kind,uuid,created)).ok()?))
+}
+fn external_actions(row: &Value) -> Vec<&'static str> {
+    // Ephemeral and externally managed/unknown state guests remain read-only.
+    if row["ephemeral"].as_bool()!=Some(false) { return vec![]; }
+    match row["status_code"].as_i64() {
+        Some(102) => vec!["start","delete"],
+        Some(103) => vec!["stop","restart"],
+        _ => vec![],
+    }
+}
+fn external_scope(config:&Config,provider:&str,scope:&str)->bool {
+    binding_name(scope) && (scope=="default" || (provider=="incus" && config.bindings.values().any(|b|b.kind=="project"&&b.name==scope)))
+}
 fn instance_name(id:&str)->String{
     if id.len()<=55&&!id.contains('_'){return format!("maestro-{id}")}
     let name=id.replace('_',"-");
@@ -222,7 +246,7 @@ impl IncusProvider{
             return result;
         }
         for project in projects {
-            let rows: Result<Vec<Value>> = self.get(Some(&project), "/1.0/instances?recursion=1").await;
+            let rows: Result<Vec<Value>> = self.get(Some(&project), "/1.0/instances?recursion=2").await;
             match rows {
                 Ok(rows) if rows.len() <= 1024 => {
                     for row in rows {
@@ -241,11 +265,14 @@ impl IncusProvider{
                             .filter_map(|address| address.get("address").and_then(Value::as_str))
                             .filter(|address| address.parse::<std::net::IpAddr>().is_ok())
                             .take(32).map(str::to_owned).collect();
+                        let identity = external_identity(&row,provider,&project).unwrap_or_default();
+                        let actions = if identity.is_empty() { vec![] } else { external_actions(&row) };
+                        let logs = !identity.is_empty();
                         result.workloads.push(NativeWorkload {
                             provider: provider.into(), scope: project.clone(), id: name.into(), name: name.into(),
                             kind: if kind == "container" { "system-container".into() } else { "virtual-machine".into() },
                             state: if valid_text(state) { state.to_owned() } else { "unknown".into() },
-                            image: String::new(), addresses, actions: vec![], logs: false, identity: String::new(),
+                            image: String::new(), addresses, actions, logs, identity,
                         });
                     }
                 }
@@ -253,6 +280,43 @@ impl IncusProvider{
             }
         }
         result
+    }
+    async fn external_verified(&self,config:&Config,provider:&str,scope:&str,id:&str,identity:&str)->Result<Value>{
+        ensure!(!self.runner.is_test_mode()&&matches!(provider,"incus"|"lxd")&&external_scope(config,provider,scope)&&binding_name(id)&&store::valid_revision(identity),"invalid external guest identity or scope");
+        let server:Value=self.get(None,"/1.0").await?;
+        ensure!(server["environment"]["server_clustered"].as_bool()==Some(false),"external guest actions require a verified local non-clustered daemon");
+        let row:Value=self.get(Some(scope),&format!("/1.0/instances/{id}")).await?;
+        ensure!(row["name"].as_str()==Some(id)&&external_identity(&row,provider,scope).as_deref()==Some(identity),"external guest identity changed or became managed");
+        Ok(row)
+    }
+    pub async fn external_action(&self,config:&Config,provider:&str,scope:&str,id:&str,identity:&str,action:&str)->Result<String>{
+        let row=self.external_verified(config,provider,scope,id,identity).await?;
+        ensure!(external_actions(&row).contains(&action),"action unavailable for guest state");
+        let target=format!("local:{id}");
+        if action=="delete" {
+            ensure!(row["config"]["security.protection.delete"].as_str()!=Some("true"),"guest deletion is protected");
+            let snapshots:Vec<String>=self.get(Some(scope),&format!("/1.0/instances/{id}/snapshots")).await?;
+            ensure!(snapshots.is_empty(),"guest has snapshots; remove them explicitly outside Maestro");
+            let latest=self.external_verified(config,provider,scope,id,identity).await?;
+            ensure!(external_actions(&latest).contains(&action),"guest state changed");
+            // No --force: refuse running guests and let daemon enforce protection.
+            self.run(scope,None,&["delete",&target],120).await?;
+        } else {
+            let args=if action=="start"{vec!["start",target.as_str()]}else{vec![action,target.as_str(),"--timeout","90"]};
+            self.run(scope,None,&args,120).await?;
+        }
+        Ok(format!("{provider} {action} completed"))
+    }
+    pub async fn external_logs(&self,config:&Config,provider:&str,scope:&str,id:&str,identity:&str,tail:usize)->Result<ManagedLogs>{
+        ensure!((1..=2000).contains(&tail),"invalid log line limit");
+        self.external_verified(config,provider,scope,id,identity).await?;
+        let target=format!("local:{id}");
+        let output=self.runner.capture_scoped(&self.binary,&["--force-local","--project",scope,"info",&target,"--show-log"],Duration::from_secs(15),128*1024,true,ENV,None,&[]).await?;
+        ensure!(output.status.success(),"native guest log unavailable");
+        let text=String::from_utf8_lossy(&output.stdout);
+        let lines=text.lines().collect::<Vec<_>>();
+        let skip=lines.len().saturating_sub(tail);
+        Ok(ManagedLogs{text:lines[skip..].join("\n"),truncated:output.truncated||skip>0,source:"native-instance"})
     }
     async fn run(&self,project:&str,definition:Option<&Definition>,args:&[&str],seconds:u64)->Result<()>{
         ensure!(self.binary.is_absolute()&&binding_name(project),"invalid Incus client or project");
@@ -564,6 +628,17 @@ services:
         assert_ne!(instance_name("a_b"),instance_name("a-b"));
         assert!(instance_name(&"a".repeat(63)).len()<=63);
         assert!(!image_valid("images:ubuntu/24.04"));
+    }
+    #[test]
+    fn external_guest_identity_rejects_owned_and_recreated_names(){
+        let mut row=serde_json::json!({"name":"external","type":"container","created_at":"2026-01-01T00:00:00Z","status_code":102,"ephemeral":false,"config":{"volatile.uuid":"00000000-0000-4000-8000-000000000001"}});
+        let id=external_identity(&row,"incus","default").unwrap();
+        assert_eq!(external_actions(&row),vec!["start","delete"]);
+        assert_ne!(external_identity(&row,"lxd","default").unwrap(),id);
+        row["created_at"]=serde_json::json!("2026-01-02T00:00:00Z");
+        assert_ne!(external_identity(&row,"incus","default").unwrap(),id);
+        row["config"]["user.maestro.id"]=serde_json::json!("owned");
+        assert!(external_identity(&row,"incus","default").is_none());
     }
     #[test]
     fn system_container_uses_unprivileged_lxc_settings_and_type_is_immutable(){

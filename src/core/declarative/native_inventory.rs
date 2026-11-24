@@ -119,7 +119,7 @@ pub(super) fn oci_rows(data: &[u8], engine: &str, config: &Config) -> Result<Vec
         let actions = if full_oci_id(id) && !orchestrated(&labels) {
             match state.to_ascii_lowercase().as_str() {
                 "running" => vec!["stop","restart"],
-                "created" | "configured" | "exited" | "stopped" => vec!["start"],
+                "created" | "configured" | "exited" | "stopped" => vec!["start","delete"],
                 _ => vec![],
             }
         } else { vec![] };

@@ -248,9 +248,11 @@ impl ComposeProvider {
         Ok(row)
     }
     pub async fn external_action(&self, config: &Config, id: &str, action: &str) -> Result<String> {
-        ensure!(matches!(action,"start"|"stop"|"restart"), "unsupported external action");
+        ensure!(matches!(action,"start"|"stop"|"restart"|"delete"), "unsupported external action");
         self.external_verified(config,id,Some(action)).await?;
-        self.engine_command(&[action,id],None,120,4096,false).await?;
+        // Native rm without force or volume removal; a concurrent start makes rm fail.
+        let command = if action == "delete" { "rm" } else { action };
+        self.engine_command(&[command,id],None,120,4096,false).await?;
         Ok(format!("{} {action} completed",self.engine))
     }
     pub async fn external_logs(&self, config: &Config, id: &str, tail: usize) -> Result<ManagedLogs> {

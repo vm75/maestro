@@ -121,7 +121,7 @@ impl LibvirtProvider{
                 let state = self.state(id).await?;
                 let actions = match state.as_str() {
                     "running" => vec!["stop","restart"],
-                    "shut off" => vec!["start"],
+                    "shut off" => vec!["start","delete"],
                     _ => vec![],
                 };
                 Ok(Some(NativeWorkload {
@@ -136,7 +136,7 @@ impl LibvirtProvider{
     }
     pub async fn external_action(&self, config: &Config, id: &str, scope: &str, action: &str) -> Result<String> {
         ensure!(!self.runner.is_test_mode() && self.connection()? == scope && uuid::Uuid::parse_str(id).is_ok(), "invalid local Libvirt identity");
-        ensure!(matches!(action,"start"|"stop"|"restart"), "unsupported external action");
+        ensure!(matches!(action,"start"|"stop"|"restart"|"delete"), "unsupported external action");
         ensure!(!config.services.values().any(|s| s.backend == "libvirt" && s.vm.as_ref().is_some_and(|v| v.uuid == id)), "managed domain");
         let name = self.command(&["domname",id],5,4096,false).await?;
         let name = std::str::from_utf8(&name)?.trim();
@@ -148,6 +148,16 @@ impl LibvirtProvider{
             ("start","shut off") => "start",
             ("stop","running") => "shutdown",
             ("restart","running") => "reboot",
+            ("delete","shut off") => {
+                // Plain undefine only: do not force shutdown, remove storage,
+                // snapshots, managed-save state, or firmware/NVRAM.
+                let info = self.command(&["dominfo","--domain",id],5,65536,false).await?;
+                ensure!(std::str::from_utf8(&info)?.lines().any(|line|line.split_once(':').is_some_and(|(key,val)|key.trim()=="Persistent"&&val.trim()=="yes")), "domain is not persistent");
+                let snaps = self.command(&["snapshot-list","--domain",id,"--name"],5,65536,false).await?;
+                ensure!(std::str::from_utf8(&snaps)?.trim().is_empty(),"domain has snapshots");
+                ensure!(self.state(id).await?=="shut off","domain state changed");
+                "undefine"
+            },
             _ => return Err(anyhow!("action unavailable for native domain state")),
         };
         self.command(&[command,"--domain",id],120,4096,false).await?;
