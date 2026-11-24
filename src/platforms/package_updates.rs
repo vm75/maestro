@@ -466,7 +466,7 @@ async fn execute(
     Ok(output.status.code())
 }
 
-const APT_ARGS: &[&str] = &[
+pub(super) const APT_ARGS: &[&str] = &[
     "--simulate",
     "--no-remove",
     "--with-new-pkgs",
@@ -481,7 +481,7 @@ const APT_ARGS: &[&str] = &[
     "upgrade",
 ];
 
-const DNF_ARGS: &[&str] = &[
+pub(super) const DNF_ARGS: &[&str] = &[
     "--cacheonly",
     "--quiet",
     "repoquery",
@@ -491,8 +491,8 @@ const DNF_ARGS: &[&str] = &[
     "%{name}\t%{arch}\t%{evr}\n",
 ];
 
-const PACMAN_ARGS: &[&str] = &["--query", "--upgrades", "--color", "never"];
-const ZYPPER_ARGS: &[&str] = &[
+pub(super) const PACMAN_ARGS: &[&str] = &["--query", "--upgrades", "--color", "never"];
+pub(super) const ZYPPER_ARGS: &[&str] = &[
     "--non-interactive",
     "--no-refresh",
     "--xmlout",
@@ -570,6 +570,16 @@ fn reboot(family: Family, path: &Path) -> Reboot {
             reason: "Reboot requirement is unavailable.",
         }
     }
+}
+
+pub(super) fn reference_package_rows(manager: admin_packages::Family, text: &str) -> Option<serde_json::Value> {
+    let family = match manager {
+        admin_packages::Family::Apt => Family::Apt,
+        admin_packages::Family::Dnf => Family::Dnf,
+        admin_packages::Family::Pacman => Family::Pacman,
+        admin_packages::Family::Zypper => Family::Zypper,
+    };
+    serde_json::to_value(parse(family, text)?).ok()
 }
 
 fn parse(family: Family, text: &str) -> Option<Vec<Package>> {
