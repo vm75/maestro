@@ -597,7 +597,8 @@ async fn backend_prerequisites(
         "samba" | "nfs" => {
             let provider = super::shares::ShareProvider::from_config(&state.config,state.runner.is_test_mode());
             if let Err(error) = provider.check_prerequisites(backend,config).await {
-                issues.push(backend_issue(backend,"error","share_setup",&error.to_string()));
+                issues.push(issue("error",&format!("backend/{backend}"),"share","share_setup",error.to_string(),
+                    "Check native share packages/setup, directory permissions and access identities."));
             }
         },
         _ => issues.push(backend_issue(backend, "unknown", "check_unavailable",
