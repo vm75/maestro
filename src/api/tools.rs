@@ -753,6 +753,8 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
 
     // Keep the reference's individual lifecycle contracts on the existing provider path.
     tools.extend([
+        json!({"name":"managed_service_disable","module":"managed_lifecycle","title":"Managed service disable","description":"Change the authoritative Quadlet boot policy as a tracked next-start job without starting, stopping or restarting workloads. Other native providers remain unavailable.","readOnly":false,"destructive":true,"inputSchema":{"additionalProperties":false,"properties":{"confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."},"service":{"type":"string","description":"Managed service ID","minLength":1,"maxLength":63}},"required":["confirm","service"],"type":"object"}}),
+        json!({"name":"managed_service_enable","module":"managed_lifecycle","title":"Managed service enable","description":"Change the authoritative Quadlet boot policy as a tracked next-start job without starting, stopping or restarting workloads. Other native providers remain unavailable.","readOnly":false,"destructive":true,"inputSchema":{"additionalProperties":false,"properties":{"confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."},"service":{"type":"string","description":"Managed service ID","minLength":1,"maxLength":63}},"required":["confirm","service"],"type":"object"}}),
         json!({"name":"managed_service_logs","module":"managed_logs","title":"Read managed application logs","description":"Explicitly read bounded recent logs for one configured managed application. Runtime logs may contain private application data. This never starts a workload or reads another application.","readOnly":true,"destructive":false,"inputSchema":{"additionalProperties":false,"properties":{"service":{"type":"string","description":"Managed application ID","minLength":1,"maxLength":63},"tail":{"type":"integer","description":"Most recent entries per native log reader; default 200","minimum":1,"maximum":2000}},"required":["service"],"type":"object"}}),
         json!({"name":"managed_service_restart","module":"managed_lifecycle","title":"Managed service restart","description":"Manage the authoritative service as a tracked job. Start/stop/restart affect execution; enable/disable affect boot policy only.","readOnly":false,"destructive":true,"inputSchema":{"additionalProperties":false,"properties":{"confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."},"service":{"type":"string","description":"Managed service ID","minLength":1,"maxLength":63}},"required":["confirm","service"],"type":"object"}}),
         json!({"name":"managed_service_start","module":"managed_lifecycle","title":"Managed service start","description":"Manage the authoritative service as a tracked job. Start/stop/restart affect execution; enable/disable affect boot policy only.","readOnly":false,"destructive":false,"inputSchema":{"additionalProperties":false,"properties":{"service":{"type":"string","description":"Managed service ID","minLength":1,"maxLength":63}},"required":["service"],"type":"object"}}),
@@ -937,6 +939,8 @@ pub async fn execute_tool(
             | "managed_service_stop"
             | "managed_service_restart"
             | "managed_storage_create"
+            | "managed_service_enable"
+            | "managed_service_disable"
     ) {
         if let Err(error) = crate::core::linux_config::mutation_ready(&state.config, store) {
             return (
@@ -2556,6 +2560,58 @@ pub async fn execute_tool(
             (StatusCode::OK, json!({ "applications": apps }))
         }
 
+        "managed_service_enable" | "managed_service_disable" => {
+            if !writes_allowed(state) {
+                return (StatusCode::FORBIDDEN, json_err("writes_disabled", "Boot policy requires management writes."));
+            }
+            let Some(id) = arguments.get("service").and_then(Value::as_str)
+                .filter(|id| crate::core::declarative::id_valid(id)) else {
+                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Invalid managed service ID."));
+            };
+            if arguments.len() != 2 || arguments.get("confirm") != Some(&Value::Bool(true)) {
+                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Changing boot policy requires confirm=true."));
+            }
+            let enable = name == "managed_service_enable";
+            let tool = if enable { "managed_service_enable" } else { "managed_service_disable" };
+            let id = id.to_owned();
+            let state = state.clone();
+            let store = store.clone();
+            let provider = provider.clone();
+            start_job_value(jobs, tool, move |running| async move {
+                let result = async {
+                    crate::core::linux_config::mutation_ready(&state.config, &store)?;
+                    anyhow::ensure!(store.pending_apply()?.is_none(), "recover the pending apply before changing boot policy");
+                    let snapshot = store.read()?.ok_or_else(|| anyhow::anyhow!("configuration is unavailable"))?;
+                    let mut desired = snapshot.config()?;
+                    let service = desired.services.get(&id).ok_or_else(|| anyhow::anyhow!("unknown managed service"))?;
+                    anyhow::ensure!(service.backend == "quadlet", "native boot policy is not verified for this backend");
+                    let native = provider.quadlet.as_ref().ok_or_else(|| anyhow::anyhow!("rootless Quadlet provider is unavailable"))?;
+                    let status = native.status_details(&desired, &id).await?;
+                    anyhow::ensure!(status.state != "unknown", "managed runtime identity cannot be verified");
+                    if enable {
+                        crate::core::declarative::preflight::check_startup_files(&state, &store, &desired, &id)?;
+                    }
+                    if service.enabled == enable {
+                        native.verify_boot_policy(&desired, &id).await?;
+                        return Ok::<_, anyhow::Error>(json!({"service":id,"enabled":enable,"revision":snapshot.revision}));
+                    }
+                    desired.services.get_mut(&id).unwrap().enabled = enable;
+                    let bytes = serde_yaml::to_string(&desired)?.into_bytes();
+                    let plan = crate::core::linux_config::preview(&state.config, &store, &bytes, &snapshot.revision)?;
+                    anyhow::ensure!(!plan.restart_required && plan.changes.len() == 1
+                        && plan.changes[0].resource == format!("service/{id}"),
+                        "boot-only update unexpectedly changes other definitions");
+                    anyhow::ensure!(!*running.cancellation().borrow(), "boot policy job cancelled before publication");
+                    let saved = store.apply_review_mode(&bytes, &snapshot.revision, &plan.fingerprint,
+                        crate::core::declarative::ApplyMode::NextStart, &*provider).await?;
+                    Ok(json!({"service":id,"enabled":enable,"revision":saved.revision}))
+                }.await;
+                match result {
+                    Ok(value) => running.finish(Outcome::Succeeded(value)),
+                    Err(error) => running.finish(Outcome::Failed(error.to_string())),
+                }
+            }).await
+        }
         "applications_action"
         | "managed_service_start"
         | "managed_service_stop"
@@ -2616,6 +2672,7 @@ pub async fn execute_tool(
             let id = id.to_string();
             let action = action.to_string();
             let provider_clone = provider.clone();
+            let state_clone = state.clone();
             start_job_value(jobs, tool, move |running| async move {
                 let config = (|| -> anyhow::Result<_> {
                     anyhow::ensure!(
@@ -2634,6 +2691,12 @@ pub async fn execute_tool(
                         return;
                     }
                 };
+                if action != "stop" && !state_clone.config.test_mode {
+                    if let Err(error) = crate::core::declarative::preflight::check_startup_files(&state_clone, &store, &config, &id) {
+                        running.finish(Outcome::Failed(error.to_string()));
+                        return;
+                    }
+                }
                 match provider_clone.action(&config, &id, &action).await {
                     Ok(msg) => {
                         running.append_output(&msg);
