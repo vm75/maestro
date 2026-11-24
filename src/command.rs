@@ -297,6 +297,34 @@ impl CommandRunner {
         result
     }
 
+    /// Stream binary export stdout into an already exclusively opened file.
+    /// No native stderr or private output is returned to the caller.
+    #[cfg(feature = "linux")]
+    pub(crate) async fn stream_backup(
+        &self, program: &Path, args: &[&str], destination: std::fs::File,
+        deadline: Duration, max_bytes: u64,
+    ) -> Result<u64> {
+        use tokio::io::AsyncReadExt;
+        anyhow::ensure!(!self.test_mode && program.is_absolute(), "native export unavailable");
+        let mut command = Command::new(program);
+        command.args(args).env("LC_ALL","C").stdin(Stdio::null())
+            .stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+        command.process_group(0);
+        let mut child = command.spawn()?;
+        let mut group = ProcessGroupGuard(child.id());
+        let mut stdout = child.stdout.take().context("missing export stdout")?.take(max_bytes.saturating_add(1));
+        let mut file = tokio::fs::File::from_std(destination);
+        let result = timeout(deadline, async {
+            let bytes = tokio::io::copy(&mut stdout, &mut file).await?;
+            anyhow::ensure!(bytes <= max_bytes, "native export exceeded available capture budget");
+            anyhow::ensure!(child.wait().await?.success(), "native export failed");
+            file.sync_all().await?;
+            Ok::<_,anyhow::Error>(bytes)
+        }).await.context("native export timed out")??;
+        group.0 = None;
+        Ok(result)
+    }
+
     /// Run a command and all its hook subprocesses in a dedicated Unix process
     /// group. On timeout, kill the group rather than only the parent shell.
     pub async fn run_process_group<I, S>(
