@@ -9,11 +9,15 @@
     initialKind,
     initialEngine,
     initialBackend,
+    initialContainer,
+    initialRemoval = false,
     onClose,
     onSaved
   }: {
     kind: ResourceKind
     resourceID?: string
+    initialContainer?: string
+    initialRemoval?: boolean
     initialKind?: 'container' | 'vm'
     initialEngine?: 'podman' | 'docker'
     initialBackend?: 'quadlet' | 'compose' | 'libvirt' | 'incus'
@@ -247,11 +251,19 @@
     if (kind === 'binding') return binding
     return privatePath
   }
-  async function review(remove = false) {
+  async function review(remove = false, replacement?: ServiceDefinition, signal?: AbortSignal) {
     busy = true; error = ''
-    try { operation = remove ? 'remove' : 'save'; reviewDefinition = remove ? '' : JSON.stringify(convertDefinition(kind, payload(), true)); const result = await invokeTool<{plan: ImpactPlan; blockedResources: string[]}>('managed_resource_plan', { kind, id, operation, ...(remove ? {} : {definition: reviewDefinition}), revision: snapshot?.revision }); plan = result.plan; blockedResources = result.blockedResources }
-    catch (e) { error = e instanceof Error ? e.message : 'Could not validate the change' }
-    finally { busy = false }
+    try {
+      operation = remove ? 'remove' : 'save'
+      reviewDefinition = remove ? '' : JSON.stringify(convertDefinition(kind, replacement ?? payload(), true))
+      const result = await invokeTool<{plan: ImpactPlan; blockedResources: string[]}>('managed_resource_plan', {
+        kind, id, operation, ...(remove ? {} : { definition: reviewDefinition }), revision: snapshot?.revision
+      }, signal)
+      plan = result.plan
+      blockedResources = result.blockedResources
+    } catch (e) {
+      if (!signal?.aborted) error = e instanceof Error ? e.message : 'Could not validate the change'
+    } finally { busy = false }
   }
   async function save() {
     if (!plan || blockedResources.length) return
@@ -264,6 +276,19 @@
     const definitions = kind === 'service' ? result.config.services : kind === 'storage' ? result.config.storage : kind === 'share' ? result.config.shares : kind === 'binding' ? result.config.bindings : result.config.secrets
     if (resourceID && !Object.prototype.hasOwnProperty.call(definitions ?? {},resourceID)) throw new Error('The definition no longer exists. Refresh before editing.')
     snapshot = result
+    if (initialRemoval) {
+      if (initialContainer) {
+        const replacement = structuredClone(result.config.services?.[resourceID])
+        const containers = replacement?.containers
+        if (!replacement || !containers || !Object.hasOwn(containers, initialContainer)) throw new Error('The container no longer exists. Refresh the Applications list.')
+        if (Object.keys(containers).length <= 1) throw new Error('Delete the application to remove its last container.')
+        delete containers[initialContainer]
+        await review(false, replacement, controller.signal)
+      } else {
+        await review(true, undefined, controller.signal)
+      }
+      return
+    }
     if (resourceID) {
       if (kind === 'service') {
         service = structuredClone(result.config.services?.[resourceID] ?? service)
@@ -289,7 +314,8 @@
         }
         dependencyText = (service.dependsOn ?? []).join(', ')
         vmDisks = (service.vm?.disks ?? []).join(', ')
-        selectContainer(Object.keys(service.containers ?? {})[0] ?? 'app')
+        const names = Object.keys(service.containers ?? {})
+        selectContainer(initialContainer && names.includes(initialContainer) ? initialContainer : names[0] ?? 'app')
       } else if (kind === 'storage') storage = structuredClone(result.config.storage?.[resourceID] ?? storage)
       else if (kind === 'share') { share = structuredClone(result.config.shares?.[resourceID] ?? share); clients = (share.clients ?? []).join(', '); if (share.storage && result.config.storage?.[share.storage]) { const base = result.config.storage[share.storage].path; manualPath = share.path ? (base === '.' ? share.path : base.replace(/\/$/, '') + '/' + share.path) : base } else if (share.path) manualPath = share.path }
       else if (kind === 'binding') binding = structuredClone(result.config.bindings?.[resourceID] ?? binding)
@@ -312,17 +338,22 @@
 </script>
 
 <section class="panel definition-editor" aria-label="Definition editor">
-  <header><h2>{resourceID ? `Edit ${kind === 'service' ? 'application' : kind}: ${resourceID}` : `Define ${serviceTypeTitle}`}</h2><button onclick={onClose} disabled={busy}>Close editor</button></header>
+  <header><h2>{initialRemoval ? `Delete ${resourceID}${initialContainer ? ` / ${initialContainer}` : ''}` : resourceID ? `Edit ${kind === 'service' ? 'application' : kind}: ${resourceID}` : `Define ${serviceTypeTitle}`}</h2><button onclick={onClose} disabled={busy}>{initialRemoval ? 'Cancel' : 'Close editor'}</button></header>
   {#if error}<p class="form-error" role="alert">{error}</p>{/if}
   {#if !snapshot}{#if !error}<p role="status">Loading private definition…</p>{/if}
   {:else if plan}
-    <h3>Review changes</h3><p>{operation === 'remove' ? 'Remove the definition. Persistent data is retained where supported; unsafe removal is refused.' : 'Save this definition and update affected native configuration. Existing running workloads may need recreation or shutdown/start.'}</p>
+    <h3>Review changes</h3><p>{initialRemoval && initialContainer ? 'Remove this container from the application and update its native configuration.' : operation === 'remove' ? 'Remove the definition. Persistent data is retained where supported; unsafe removal is refused.' : 'Save this definition and update affected native configuration. Existing running workloads may need recreation or shutdown/start.'}</p>
     {#if kind === 'service' && service.kind === 'vm' && service.backend === 'incus' && operation !== 'remove'}<p>{incusEditNotice}</p>{/if}
     {#if plan.changes.length}<ul>{#each plan.changes as change}<li>{change.operation}: {change.resource} ({change.backend})</li>{/each}</ul>{:else}<p>No native definition changes. Reference settings will still be saved.</p>{/if}
     {#if plan.files?.issues.length}<ul>{#each plan.files?.issues ?? [] as issue}<li><strong>{issue.resource}: {issue.message}</strong> {issue.remedy}</li>{/each}</ul>{/if}
     {#if blockedResources.length}<p class="form-error">Unavailable native resources: {blockedResources.join(", ")}. Resolve provider readiness and review again.</p>{/if}
     <label>Apply changes <select aria-label="Apply changes" bind:value={mode}><option value="now">Apply now</option><option value="next_start">Save for next start</option></select></label>
-    <div class="actions"><button disabled={busy} onclick={() => { plan = null }}>Back to editing</button><button disabled={busy || blockedResources.length > 0} onclick={save}>{busy ? 'Starting save…' : 'Confirm and save'}</button></div>
+    <div class="actions">
+      {#if !initialRemoval}<button disabled={busy} onclick={() => { plan = null }}>Back to editing</button>{/if}
+      <button class:danger-button={initialRemoval} disabled={busy || blockedResources.length > 0} onclick={save}>{busy ? 'Starting save…' : initialRemoval ? 'Confirm deletion' : 'Confirm and save'}</button>
+    </div>
+  {:else if initialRemoval}
+    {#if busy}<p role="status">Checking removal…</p>{/if}
   {:else}
     {#snippet directoryBrowser(isMount: boolean)}
       <div class="directory-browser" role="region" aria-label="Directory browser">

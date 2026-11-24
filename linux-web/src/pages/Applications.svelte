@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import DefinitionEditor from '../lib/DefinitionEditor.svelte'
+  import Icon from '../lib/Icon.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import type { ConfigurationIssue, ConfigurationHealth } from '../lib/managed'
   import { invokeTool, startJob, type Job } from '../lib/api'
   let { allowWrites }: { allowWrites: boolean } = $props()
   type Issue = ConfigurationIssue
-  interface Service { id: string; name: string; kind: string; backend: string; enabled: boolean; state: string; registered: boolean; configuration: string; issues: Issue[]; members?: { name: string; state: string }[] }
+  interface Service { id: string; name: string; kind: string; backend: string; enabled: boolean; state: string; registered: boolean; configuration: string; issues: Issue[]; members?: { name: string; state: string; ports?: string[] }[] }
   interface Inventory { configured: boolean; valid?: boolean; error?: string; services: Service[]; health?: ConfigurationHealth }
   let inventory = $state<Inventory | null>(null)
   let error = $state('')
@@ -14,15 +15,20 @@
   let query = $state('')
   type EditorState = {
     id: string
+    initialContainer?: string
+    initialRemoval?: boolean
     initialKind?: 'container' | 'vm'
     initialEngine?: 'podman' | 'docker'
     initialBackend?: 'quadlet' | 'compose' | 'libvirt' | 'incus'
   }
   let editor = $state<EditorState | null>(null)
+  let editorDialog = $state<HTMLDialogElement>()
   let feedback = $state('')
   let activeJob = $state<string | null>(null)
-  let pending = $state<{ service: Service; action: string } | null>(null)
-  let logServiceID = $state<string | null>(null)
+  let pending = $state<{ service: Service; action: string; member?: string } | null>(null)
+  let logService = $state<Service | null>(null)
+  let logMember = $state<string | undefined>(undefined)
+  let submitting = $state(false)
   let logTail = $state(200)
   let logLoading = $state(false)
   let logError = $state('')
@@ -30,7 +36,7 @@
   let logController: AbortController | undefined
   let controller: AbortController | undefined
   let stopped = false
-  const filtered = $derived(inventory?.services.filter(s => `${s.id} ${s.name} ${s.backend}`.toLowerCase().includes(query.toLowerCase())) ?? [])
+  const filtered = $derived(inventory?.services.filter(s => `${s.id} ${s.name} ${s.backend} ${s.members?.map(member => member.name).join(' ') ?? ''}`.toLowerCase().includes(query.toLowerCase())) ?? [])
   const issues = $derived(inventory?.health?.issues ?? [])
   const blocked = $derived(issues.filter(i => i.severity !== 'warning'))
 
@@ -57,33 +63,55 @@
     } catch (e) { if (!signal.aborted) error = e instanceof Error ? e.message : 'Could not read applications' }
     finally { if (!signal.aborted) loading = false }
   }
-  async function readLogs(service: Service) {
+  function showModal(dialog: HTMLDialogElement) {
+    dialog.showModal()
+  }
+
+  function closeLogs() {
+    logController?.abort()
+    logService = null
+  }
+
+  const actionLabels: Record<string, string> = {
+    start: 'Start', stop: 'Stop', restart: 'Restart',
+    enable: 'Enable boot startup', disable: 'Disable boot startup', pull: 'Pull latest image'
+  }
+
+  function needsAttention(state: string) {
+    return /error|failed|partial|missing|unknown|dead/i.test(state)
+  }
+
+  async function readLogs(service: Service, member?: string) {
     logController?.abort(); logController = new AbortController()
     const signal = logController.signal
-    logServiceID = service.id; logs = null; logError = ''; logLoading = true
+    logService = service; logMember = member; logs = null; logError = ''; logLoading = true
     try {
-      const result = await invokeTool<{ text: string; truncated: boolean; source: string }>('managed_service_logs', { service: service.id, tail: logTail }, signal)
-      if (!stopped && !signal.aborted && logServiceID === service.id) logs = result
+      const result = await invokeTool<{ text: string; truncated: boolean; source: string }>('managed_service_logs', { service: service.id, tail: logTail, ...(member ? { container: member } : {}) }, signal)
+      if (!stopped && !signal.aborted && logService?.id === service.id) logs = result
     } catch (e) {
       if (!signal.aborted) logError = e instanceof Error ? e.message : 'Could not read application logs'
     } finally { if (!signal.aborted) logLoading = false }
   }
-  async function perform(service: Service, action: string) {
-    error = ''; pending = null
-    try { const job = await startJob(`managed_service_${action}`, { service: service.id, ...(action === 'start' ? {} : { confirm: true }) }); activeJob = job.id; feedback = 'Operation started. Follow its progress in Activity.' }
-    catch (e) { error = e instanceof Error ? e.message : 'Could not start operation' }
+  async function perform(service: Service, action: string, member?: string) {
+    if (submitting || activeJob !== null) return
+    submitting = true; error = ''; pending = null
+    try {
+      const job = member
+        ? await startJob('managed_container_action', { service: service.id, container: member, action, confirm: true })
+        : await startJob(`managed_service_${action}`, { service: service.id, ...(action === 'start' ? {} : { confirm: true }) })
+      activeJob = job.id
+      feedback = 'Operation started. Follow its progress in Activity.'
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Could not start operation'
+    } finally {
+      submitting = false
+    }
   }
   onMount(() => {
     const finished = (event: Event) => { const job = (event as CustomEvent<Job>).detail; if (job.id !== activeJob) return; activeJob = null; feedback = job.state === 'succeeded' ? 'Operation completed.' : job.error || `Operation ${job.state}.`; void load() }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && editor !== null) {
-        editor = null
-      }
-    }
-    window.addEventListener('keydown', onKey)
     window.addEventListener('maestro:job-finished', finished)
     void load()
-    return () => { stopped = true; controller?.abort(); logController?.abort(); window.removeEventListener('keydown', onKey); window.removeEventListener('maestro:job-finished', finished) }
+    return () => { stopped = true; controller?.abort(); logController?.abort(); window.removeEventListener('maestro:job-finished', finished) }
   })
 </script>
 
@@ -103,21 +131,25 @@
 </div>
 
 {#if editor}
-  <div class="modal-backdrop" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) editor = null }}>
-    <div class="modal-card">
-      {#key `${editor.id}-${editor.initialKind}-${editor.initialEngine}-${editor.initialBackend}`}
-        <DefinitionEditor
-          kind="service"
-          resourceID={editor.id}
-          initialKind={editor.initialKind}
-          initialEngine={editor.initialEngine}
-          initialBackend={editor.initialBackend}
-          onClose={() => { editor = null }}
-          onSaved={(id) => { activeJob = id; editor = null; feedback = 'Definition save started. Follow its validation and apply progress in Activity.' }}
-        />
-      {/key}
-    </div>
-  </div>
+  <dialog class="modal-card" aria-label="Application definition" bind:this={editorDialog} use:showModal onclose={() => { editor = null }}>
+    {#key `${editor.id}-${editor.initialKind}-${editor.initialEngine}-${editor.initialBackend}`}
+      <DefinitionEditor
+        kind="service"
+        resourceID={editor.id}
+        initialContainer={editor.initialContainer}
+        initialRemoval={editor.initialRemoval}
+        initialKind={editor.initialKind}
+        initialEngine={editor.initialEngine}
+        initialBackend={editor.initialBackend}
+        onClose={() => editorDialog?.close()}
+        onSaved={(id) => {
+          feedback = editor?.initialRemoval ? 'Deletion started. Follow its progress in Activity.' : 'Definition save started. Follow its validation and apply progress in Activity.'
+          activeJob = id
+          editorDialog?.close()
+        }}
+      />
+    {/key}
+  </dialog>
 {/if}
 {#if error}<div class="notice error" role="alert"><p>{error}</p><button onclick={() => load(true)}>Retry</button></div>{/if}
 {#if feedback}<div class="job-feedback" role="status">{feedback}</div>{/if}
@@ -146,85 +178,129 @@
   </section>
 {/if}
 
-<div class="applications">
-{#each filtered as service (service.id)}
-  <section class="panel application">
-    <header class="app-header">
-      <div class="app-title-group">
-        <h2>{service.name || service.id}</h2>
-        <span class="app-subtitle">{service.kind} · {service.backend}</span>
-      </div>
-      <span class="project-state" class:running={service.state === 'running'} class:attention={service.state.includes('partially') || service.state === 'failed'}>{service.state.replaceAll('_', ' ')}</span>
-    </header>
-    <dl class="app-meta">
-      <div>
-        <dt>Start at boot</dt>
-        <dd>{service.enabled ? 'Enabled' : 'Disabled'}</dd>
-      </div>
-      <div>
-        <dt>Configuration</dt>
-        <dd>{service.configuration.replaceAll('_', ' ')}</dd>
-      </div>
-      <div>
-        <dt>Registration</dt>
-        <dd>{service.registered ? 'Registered' : 'Not registered'}</dd>
-      </div>
-    </dl>
-    {#if service.members?.length}
-      <details class="application-members">
-        <summary>Containers ({service.members.length})</summary>
-        <ul class="member-list">
-          {#each service.members as member (member.name)}
-            <li>
-              <strong>{member.name}</strong>
-              <span class="project-state" class:running={member.state === 'running'}>{member.state.replaceAll('_', ' ')}</span>
-            </li>
-          {/each}
-        </ul>
-      </details>
-    {/if}
-    {#if service.issues.length}
-      <ul class="issues">
-        {#each service.issues as issue}
-          <li class="issue-item">
-            <strong>{issue.message}</strong>
-            <p>{issue.remedy}</p>
-          </li>
-        {/each}
-      </ul>
-    {/if}
-    {#if service.kind === 'container' || service.backend === 'incus'}
-      <div class="project-log-controls">
-        <h3>{service.backend === 'incus' ? 'VM instance diagnostics' : 'Application logs'}</h3>
-        <div>
-          <label class="sr-only" for="application-log-tail-{service.id}">Log entries for {service.name || service.id}</label>
-          <select id="application-log-tail-{service.id}" bind:value={logTail}>
-            {#each [100, 200, 500, 1000, 2000] as count}
-              <option value={count}>{count} entries</option>
+{#snippet status(state: string)}
+  <span class="project-state" class:running={state === 'running'} class:attention={needsAttention(state)}>
+    {state.replaceAll('_', ' ')}
+  </span>
+{/snippet}
+
+{#if filtered.length}
+  <div class="panel applications">
+  <div class="application-row list-head" aria-hidden="true">
+    <span>Name</span><span>Type</span><span>Status</span><span>Published ports</span><span>Actions</span>
+  </div>
+  <ul aria-label="Managed applications">
+    {#each filtered as service (service.id)}
+      {@const name = service.name || service.id}
+      {@const kind = service.backend.endsWith('/compose') ? 'Compose project' : service.kind === 'vm' ? 'VM' : 'Quadlet group'}
+      {@const label = `${name} (${kind})`}
+      {@const canEdit = allowWrites && activeJob === null && !submitting}
+      {@const canReadLogs = service.kind === 'container' || service.backend === 'incus'}
+      <li>
+        <div class="application-row">
+          <div class="row-name">
+            <Icon name={service.kind === 'vm' ? 'machines' : 'applications'} size={16} />
+            <strong>{name}</strong>
+          </div>
+          <div class="row-type">{kind}<small>{service.backend}</small></div>
+          <div class="row-status">
+            {@render status(service.state)}
+            <span class="project-state">{service.registered ? 'Registered' : 'Not registered'}</span>
+            {#if service.configuration === 'restart_required'}
+              <span class="project-state attention">Restart required</span>
+            {/if}
+            {#if service.issues.length}
+              <span class="project-state attention">{service.issues.some(issue => issue.severity !== 'warning') ? 'Configuration error' : 'Configuration warning'}</span>
+            {/if}
+          </div>
+          <div class="row-ports">{service.kind === 'vm' ? 'Unmanaged' : '—'}</div>
+          <div class="row-actions">
+            {#each ['start', 'stop', 'restart', service.enabled ? 'disable' : 'enable'] as action}
+              <button type="button" title={actionLabels[action]} aria-label={`${actionLabels[action]} · ${label}`}
+                disabled={!canEdit || loading || (['start', 'restart', 'enable'].includes(action) && service.issues.some(i => i.severity !== 'warning' && (action === 'enable' || i.field !== 'autostart')))}
+                onclick={() => { if (action === 'start') void perform(service, action); else pending = { service, action } }}>
+                <Icon name={action} size={16} />
+              </button>
             {/each}
-          </select>
-          <button disabled={logLoading && logServiceID === service.id} onclick={() => void readLogs(service)}>
-            {logLoading && logServiceID === service.id ? 'Reading…' : logs && logServiceID === service.id ? 'Refresh logs' : 'Read logs'}
-          </button>
+            <button type="button" title="Edit definition" aria-label={`Edit definition · ${label}`} disabled={!canEdit} onclick={() => { editor = { id: service.id } }}>
+              <Icon name="edit" size={16} />
+            </button>
+            <button type="button" title={canReadLogs ? 'View logs' : 'Logs unavailable for this backend'} aria-label={`View logs · ${label}`} disabled={!canReadLogs}
+              onclick={() => { logTail = 200; void readLogs(service) }}>
+              <Icon name="logs" size={16} />
+            </button>
+            <button type="button" title="Delete application" aria-label={`Delete · ${label}`} disabled={!canEdit}
+              onclick={() => { editor = { id: service.id, initialRemoval: true } }}>
+              <Icon name="trash" size={16} />
+            </button>
+          </div>
         </div>
-      </div>
-      {#if logServiceID === service.id}
-        {#if logError}<p class="form-error" role="alert">{logError}</p>{/if}
-        {#if logs}<pre class="project-log-output">{logs.text || 'No visible log entries. The workload may not have emitted output or the account may lack access.'}</pre>{#if logs.truncated}<p class="resource-hint">Showing only the most recent 128 KiB of output.</p>{/if}{/if}
-        <p class="resource-hint">Logs can contain private application data and are requested only when you click Read logs.{service.backend === 'incus' ? ' Incus reports instance diagnostics, not guest application logs.' : ''}</p>
-      {/if}
-    {:else if service.kind === 'vm'}
-      <p class="resource-hint">Guest application logs are not exposed by the libvirt backend; inspect them inside the guest.</p>
-    {/if}
-    <div class="actions">
-      <button disabled={!allowWrites || activeJob !== null} onclick={() => { editor = {id:service.id} }}>Edit definition</button>
-      {#each ['start', 'stop', 'restart', service.enabled ? 'disable' : 'enable'] as action}
-        <button class:primary={action === 'start'} disabled={!allowWrites || activeJob !== null || loading || ((action === 'start' || action === 'restart' || action === 'enable') && service.issues.some(i => i.severity !== 'warning' && (action === 'enable' || i.field !== 'autostart')))} onclick={() => { if (action === 'start') void perform(service, action); else pending = { service, action } }}>{action === 'enable' ? 'Enable boot startup' : action === 'disable' ? 'Disable boot startup' : action.charAt(0).toUpperCase() + action.slice(1)}</button>
-      {/each}
-    </div>
-  </section>
-{/each}
+        {#if service.members?.length}
+          <ul class="members" aria-label={`Containers in ${name}`}>
+            {#each service.members as member (member.name)}
+              <li class="application-row member">
+                <div class="row-name">
+                  <Icon name="containers" size={15} />
+                  <strong>{member.name}</strong>
+                </div>
+                <div class="row-type">Container</div>
+                <div class="row-status">{@render status(member.state)}</div>
+                <div class="row-ports">
+                  {#each member.ports ?? [] as port}<code>{port}</code>{:else}<span>—</span>{/each}
+                </div>
+                <div class="row-actions">
+                  {#each ['start', 'stop', 'restart', 'pull'] as action}
+                    <button type="button" title={actionLabels[action]} aria-label={`${actionLabels[action]} · ${name}/${member.name}`}
+                      disabled={!canEdit || loading || (['start', 'restart'].includes(action) && service.issues.some(i => i.severity !== 'warning' && i.field !== 'autostart'))}
+                      onclick={() => { if (action === 'start') void perform(service, action, member.name); else pending = { service, action, member: member.name } }}>
+                      <Icon name={action} size={16} />
+                    </button>
+                  {/each}
+                  <button type="button" title="Edit container" aria-label={`Edit container ${member.name} in ${name}`} disabled={!canEdit}
+                    onclick={() => { editor = { id: service.id, initialContainer: member.name } }}>
+                    <Icon name="edit" size={16} />
+                  </button>
+                  <button type="button" title="View container logs" aria-label={`View logs · ${name}/${member.name}`}
+                    onclick={() => { logTail = 200; void readLogs(service, member.name) }}>
+                    <Icon name="logs" size={16} />
+                  </button>
+                  <button type="button" title={service.members.length <= 1 ? 'Delete the application to remove its last container' : 'Delete container'}
+                    aria-label={`Delete · ${name}/${member.name}`} disabled={!canEdit || service.members.length <= 1}
+                    onclick={() => { editor = { id: service.id, initialContainer: member.name, initialRemoval: true } }}>
+                    <Icon name="trash" size={16} />
+                  </button>
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </li>
+    {/each}
+  </ul>
 </div>
+{/if}
+
+{#if logService}
+  <dialog class="modal-card panel logs-dialog" aria-labelledby="application-logs-heading" use:showModal onclose={closeLogs}>
+    <header>
+      <h2 id="application-logs-heading">{logService.backend === 'incus' ? 'VM diagnostics' : 'Application logs'} · {logService.name || logService.id}{logMember ? ` / ${logMember}` : ''}</h2>
+      <button type="button" title="Close logs" aria-label="Close logs" onclick={(event) => event.currentTarget.closest('dialog')?.close()}><Icon name="close" size={16} /></button>
+    </header>
+    <div class="log-controls">
+      <label for="application-log-tail">Log entries</label>
+      <select id="application-log-tail" bind:value={logTail}>
+        {#each [100, 200, 500, 1000, 2000] as count}<option value={count}>{count}</option>{/each}
+      </select>
+      <button type="button" disabled={logLoading} onclick={() => { if (logService) void readLogs(logService, logMember) }}>Refresh logs</button>
+    </div>
+    {#if logLoading}<p role="status">Reading logs…</p>{/if}
+    {#if logError}<p class="form-error" role="alert">{logError}</p>{/if}
+    {#if logs}
+      <pre class="project-log-output">{logs.text || 'No visible log entries.'}</pre>
+      {#if logs.truncated}<p class="resource-hint">Showing only the most recent 128 KiB of output.</p>{/if}
+    {/if}
+  </dialog>
+{/if}
 
 {#if issues.length}
   <details class="panel all-issues">
@@ -240,7 +316,15 @@
   </details>
 {/if}
 
-<ConfirmDialog open={pending !== null} title={pending ? `${pending.action}: ${pending.service.name || pending.service.id}` : ''} description={pending?.action === 'enable' || pending?.action === 'disable' ? 'Change automatic startup at boot. The current running state stays unchanged.' : 'This interrupts the selected application.'} label="Confirm" busy={activeJob !== null} onConfirm={() => { if (pending) void perform(pending.service, pending.action) }} onClose={() => { pending = null }} />
+<ConfirmDialog
+  open={pending !== null}
+  title={pending ? `${actionLabels[pending.action]} · ${pending.service.name || pending.service.id}${pending.member ? ` / ${pending.member}` : ''}` : ''}
+  description={pending?.action === 'pull' ? 'Download the configured image tag or digest without restarting the container.' : pending?.action === 'enable' || pending?.action === 'disable' ? 'Change automatic startup at boot.' : 'This interrupts the selected workload.'}
+  label="Confirm"
+  busy={submitting || activeJob !== null}
+  onConfirm={() => { if (pending) void perform(pending.service, pending.action, pending.member) }}
+  onClose={() => { pending = null }}
+/>
 
 <style>
   .toolbar {
@@ -266,102 +350,57 @@
     flex: 1;
     min-width: 180px;
   }
-  .modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(5, 9, 15, 0.75);
-    backdrop-filter: blur(8px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    padding: 16px;
-    overflow-y: auto;
-  }
   .modal-card {
     width: min(860px, calc(100vw - 32px));
-    max-height: calc(100vh - 48px);
-    overflow-y: auto;
-  }
-  .applications {
-    display: grid;
-    gap: 20px;
-  }
-  .application {
-    min-width: 0;
-    padding: 24px;
-  }
-  .app-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 16px;
-    margin-bottom: 16px;
-  }
-  .app-title-group h2 {
-    font-size: 18px;
-    font-weight: 650;
-    overflow-wrap: anywhere;
-  }
-  .app-subtitle {
-    font-size: 12px;
-    color: var(--muted);
-    display: block;
-    margin-top: 4px;
-  }
-  .app-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 24px;
-    margin: 16px 0;
-    padding: 14px 18px;
-    background: var(--panel-subtle);
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border-subtle);
-  }
-  .app-meta dt {
-    font-size: 11px;
-    color: var(--dim);
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    font-weight: 600;
-  }
-  .app-meta dd {
-    margin: 4px 0 0;
-    font-size: 13px;
-    color: var(--text);
-    font-weight: 500;
-  }
-  .application-members {
-    margin: 16px 0;
-    background: var(--panel-subtle);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    padding: 12px 16px;
-  }
-  .application-members summary {
-    cursor: pointer;
-    font-weight: 600;
-    font-size: 12.5px;
-    color: var(--text-secondary);
-  }
-  .member-list {
-    list-style: none;
+    max-height: calc(100dvh - 48px);
+    margin: auto;
     padding: 0;
-    margin: 12px 0 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .member-list li {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 6px 10px;
+    overflow: auto;
+    color: var(--text);
     background: var(--panel);
-    border-radius: 4px;
-    font-size: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
   }
+  .modal-card::backdrop { background: rgb(5 9 15 / 75%); }
+  .logs-dialog { padding: 16px; }
+  .logs-dialog header, .log-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .logs-dialog header { justify-content: space-between; }
+  .applications, .applications > ul, .members { list-style: none; margin: 0; padding: 0; }
+  .applications > ul > li + li { border-top: 1px solid var(--border); }
+  .application-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 1.15fr) minmax(90px, .7fr) minmax(100px, .85fr) minmax(115px, 1fr) 253px;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+  }
+  .member { background: var(--panel-subtle); border-top: 1px solid var(--border-subtle); }
+  .member .row-name { padding-left: 18px; }
+  .row-name, .row-status, .row-actions { display: flex; align-items: center; gap: 6px; }
+  .row-name { overflow-wrap: anywhere; }
+  .list-head { font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--border); }
+  .list-head span:last-child { text-align: right; }
+  .row-type, .row-ports { overflow-wrap: anywhere; font-size: 12px; color: var(--muted); }
+  .row-type small, .row-ports code { display: block; }
+  .row-ports code { color: var(--text); }
+  .row-status, .row-actions { flex-wrap: wrap; }
+  .row-status { text-transform: capitalize; }
+  .row-actions { justify-content: flex-end; }
+  .row-actions button {
+    display: inline-grid;
+    place-items: center;
+    width: 31px;
+    min-height: 31px;
+    padding: 0;
+  }
+  .applications { overflow-x: auto; }
+  .application-row { min-width: 725px; }
   .issues {
     list-style: none;
     padding: 0;
@@ -398,14 +437,6 @@
   }
   .health-alert p {
     color: var(--amber-text-secondary);
-  }
-  .actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 20px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border);
   }
   .all-issues {
     margin-top: 24px;

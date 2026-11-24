@@ -471,11 +471,54 @@ impl ComposeProvider {
         for dep in order.into_iter().filter(|dep|needed.contains(dep)){self.action_one(config,dep,if dep==id{action}else{"start"}).await?;}
         Ok(format!("Compose {action} completed"))
     }
-    pub async fn native_logs(&self,config:&Config,id:&str,tail:usize)->Result<ManagedLogs>{
+    pub(in crate::core::declarative) async fn member_action(&self, config: &Config, id: &str, member: &str, action: &str) -> Result<String> {
+        let status = self.status_details(config, id).await?;
+        if action != "stop" {
+            self.validate_candidate(config, id).await?;
+        }
+        let service = &config.services[id];
+        let container = &service.containers[member];
+        if action == "pull" {
+            let file = self.compose_file(id);
+            self.engine_command(&["pull", "--", &container.image], file.parent(), 1200, 128 * 1024, true).await?;
+            return Ok(format!("Compose image pull completed for {member}"));
+        }
+        if matches!(action, "start" | "restart") {
+            for dependency in &service.depends_on {
+                ensure!(self.matches(&config.services[dependency]) &&
+                    self.status_details(config, dependency).await?.state == "running",
+                    "Start the required application {dependency} first.");
+            }
+            let dependencies = container.depends_on.keys().map(String::as_str)
+                .chain(container.network_mode.strip_prefix("service:"));
+            for dependency in dependencies {
+                ensure!(status.members.iter().any(|item| item.name == dependency && item.state == "running"),
+                    "Start the required container {dependency} first.");
+            }
+        }
+        let args = match action {
+            "start" => vec!["up", "--detach", "--no-build", "--no-deps", "--no-recreate", member],
+            "restart" if self.engine == "docker" => vec!["restart", "--no-deps", member],
+            "restart" => vec!["restart", member],
+            "stop" => vec!["stop", member],
+            _ => return Err(anyhow!("unsupported container action")),
+        };
+        self.compose_command(id, &self.compose_file(id), &args, 1200, 128 * 1024, true).await?;
+        let status = self.status_details(config, id).await?;
+        ensure!(status.members.iter().any(|item| item.name == member &&
+            if action == "stop" { matches!(item.state.as_str(), "missing" | "exited" | "stopped" | "created" | "configured") }
+            else { item.state == "running" }),
+            "Compose container did not reach requested state");
+        Ok(format!("Compose {action} completed for {member}"))
+    }
+
+    pub async fn native_logs(&self,config:&Config,id:&str,tail:usize,member:Option<&str>)->Result<ManagedLogs>{
         ensure!((1..=2000).contains(&tail),"invalid log line limit");
         self.status_details(config,id).await?;
         let tail=tail.to_string();
-        let result=self.compose_command(id,&self.compose_file(id),&["logs","--tail",&tail],15,128*1024,true).await?;
+        let mut args = vec!["logs", "--tail", tail.as_str()];
+        args.extend(member);
+        let result=self.compose_command(id,&self.compose_file(id),&args,15,128*1024,true).await?;
         Ok(ManagedLogs{text:String::from_utf8_lossy(&result.stdout).into_owned(),truncated:result.truncated,source:"compose"})
     }
 }

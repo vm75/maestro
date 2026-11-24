@@ -329,19 +329,41 @@ impl CompositeProvider {
         }
     }
 
+    pub async fn container_action(&self, config: &Config, id: &str, member: &str, action: &str) -> Result<String> {
+        let service = config.services.get(id).ok_or_else(|| anyhow!("service not found: {id}"))?;
+        ensure!(service.containers.contains_key(member), "unknown managed container");
+        ensure!(matches!(action, "start" | "stop" | "restart" | "pull"), "unsupported container action");
+        if self.simulated {
+            return Ok(format!("Simulated {action} for {id}/{member}"));
+        }
+        match service.backend.as_str() {
+            "compose" => self.compose_provider(&service.engine).member_action(config, id, member, action).await,
+            "quadlet" => self.quadlet.as_ref().ok_or_else(|| anyhow!("native Quadlet is unavailable"))?
+                .action_target(config, id, action, Some(member)).await,
+            _ => Err(anyhow!("container actions are unavailable for this backend")),
+        }
+    }
+
     pub async fn managed_logs(
         &self,
         config: &Config,
         id: &str,
         tail: usize,
+        member: Option<&str>,
     ) -> Result<ManagedLogs> {
         ensure!((1..=2000).contains(&tail), "invalid log line limit");
         let service = config
             .services
             .get(id)
             .ok_or_else(|| anyhow!("service not found: {id}"))?;
+        if let Some(member) = member {
+            ensure!(service.containers.contains_key(member), "unknown managed container");
+            if self.simulated {
+                return Ok(ManagedLogs { text: String::new(), truncated: false, source: "simulation" });
+            }
+        }
         if !self.simulated && service.backend == "compose" {
-            return self.compose_provider(&service.engine).native_logs(config,id,tail).await;
+            return self.compose_provider(&service.engine).native_logs(config,id,tail,member).await;
         }
         if !self.simulated && service.backend == "incus" {
             return self.incus.native_logs(config,id,tail).await;
@@ -352,7 +374,7 @@ impl CompositeProvider {
                 .as_ref()
                 .ok_or_else(|| anyhow!("native Quadlet is unavailable"))?;
             return provider
-                .managed_logs(config, id, &self.journalctl, tail)
+                .managed_logs(config, id, &self.journalctl, tail, member)
                 .await;
         }
         ensure!(
@@ -378,7 +400,7 @@ impl CompositeProvider {
             .get(id)
             .ok_or_else(|| anyhow!("service not found: {id}"))?;
         if !self.simulated && service.backend == "compose" {
-            return Ok(self.compose_provider(&service.engine).native_logs(config,id,tail).await?.display_text());
+            return Ok(self.compose_provider(&service.engine).native_logs(config,id,tail,None).await?.display_text());
         }
         if !self.simulated && service.backend == "incus" {
             return Ok(self.incus.native_logs(config,id,tail).await?.display_text());

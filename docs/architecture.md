@@ -171,6 +171,12 @@ Owned running containers with a different configured-definition fingerprint are
 reported as requiring restart; Start refuses that state, while Stop/Restart still
 require verified ownership. Unknown or foreign runtime state hides lifecycle
 controls. Boot-only/runtime fingerprint separation remains incomplete.
+The Applications inventory pairs runtime member states with configured container
+port mappings. Container lifecycle jobs and bounded log reads resolve their target
+from the saved service definition and verify provider ownership. Compose scopes
+the operation to a named service, and Quadlet scopes it to a generated user unit.
+Image pulls fetch the configured image reference without restarting the workload.
+Boot policy is stored on the managed service.
 Revert can supersede a published pending transition after verifying that removed
 resources absent from both current and target are already absent natively. An
 unchanged target resource from the earlier transition must already match its

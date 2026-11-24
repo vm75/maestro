@@ -825,9 +825,10 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
 
     // Keep the reference's individual lifecycle contracts on the existing provider path.
     tools.extend([
+        json!({"name":"managed_container_action","module":"managed_lifecycle","title":"Manage a container","description":"Start, stop, restart or pull the configured image for one managed container.","readOnly":false,"destructive":true,"inputSchema":{"additionalProperties":false,"properties":{"service":{"type":"string","minLength":1,"maxLength":63},"container":{"type":"string","minLength":1,"maxLength":63},"action":{"enum":["start","stop","restart","pull"]},"confirm":{"type":"boolean"}},"required":["service","container","action","confirm"],"type":"object"}}),
         json!({"name":"managed_service_disable","module":"managed_lifecycle","title":"Managed service disable","description":"Change the authoritative Quadlet, Compose, Libvirt or Incus boot policy as a tracked next-start job without starting, stopping or restarting workloads. Other native providers remain unavailable.","readOnly":false,"destructive":true,"inputSchema":{"additionalProperties":false,"properties":{"confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."},"service":{"type":"string","description":"Managed service ID","minLength":1,"maxLength":63}},"required":["confirm","service"],"type":"object"}}),
         json!({"name":"managed_service_enable","module":"managed_lifecycle","title":"Managed service enable","description":"Change the authoritative Quadlet, Compose, Libvirt or Incus boot policy as a tracked next-start job without starting, stopping or restarting workloads. Other native providers remain unavailable.","readOnly":false,"destructive":true,"inputSchema":{"additionalProperties":false,"properties":{"confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."},"service":{"type":"string","description":"Managed service ID","minLength":1,"maxLength":63}},"required":["confirm","service"],"type":"object"}}),
-        json!({"name":"managed_service_logs","module":"managed_logs","title":"Read managed application logs","description":"Explicitly read bounded recent logs for one configured managed application. Runtime logs may contain private application data. This never starts a workload or reads another application.","readOnly":true,"destructive":false,"inputSchema":{"additionalProperties":false,"properties":{"service":{"type":"string","description":"Managed application ID","minLength":1,"maxLength":63},"tail":{"type":"integer","description":"Most recent entries per native log reader; default 200","minimum":1,"maximum":2000}},"required":["service"],"type":"object"}}),
+        json!({"name":"managed_service_logs","module":"managed_logs","title":"Read managed application logs","description":"Explicitly read bounded recent logs for one configured managed application. Runtime logs may contain private application data. This never starts a workload or reads another application.","readOnly":true,"destructive":false,"inputSchema":{"additionalProperties":false,"properties":{"service":{"type":"string","description":"Managed application ID","minLength":1,"maxLength":63},"container":{"type":"string","description":"Optional configured container ID","minLength":1,"maxLength":63},"tail":{"type":"integer","description":"Most recent entries per native log reader; default 200","minimum":1,"maximum":2000}},"required":["service"],"type":"object"}}),
         json!({"name":"managed_service_restart","module":"managed_lifecycle","title":"Managed service restart","description":"Manage the authoritative service as a tracked job. Start/stop/restart affect execution; enable/disable affect boot policy only.","readOnly":false,"destructive":true,"inputSchema":{"additionalProperties":false,"properties":{"confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."},"service":{"type":"string","description":"Managed service ID","minLength":1,"maxLength":63}},"required":["confirm","service"],"type":"object"}}),
         json!({"name":"managed_service_start","module":"managed_lifecycle","title":"Managed service start","description":"Manage the authoritative service as a tracked job. Start/stop/restart affect execution; enable/disable affect boot policy only.","readOnly":false,"destructive":false,"inputSchema":{"additionalProperties":false,"properties":{"service":{"type":"string","description":"Managed service ID","minLength":1,"maxLength":63}},"required":["service"],"type":"object"}}),
         json!({"name":"managed_service_stop","module":"managed_lifecycle","title":"Managed service stop","description":"Manage the authoritative service as a tracked job. Start/stop/restart affect execution; enable/disable affect boot policy only.","readOnly":false,"destructive":true,"inputSchema":{"additionalProperties":false,"properties":{"confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."},"service":{"type":"string","description":"Managed service ID","minLength":1,"maxLength":63}},"required":["confirm","service"],"type":"object"}}),
@@ -1013,6 +1014,7 @@ pub async fn execute_tool(
             | "workloads_resume"
             | "workloads_revert"
             | "applications_action"
+            | "managed_container_action"
             | "managed_service_start"
             | "managed_service_stop"
             | "managed_service_restart"
@@ -1968,10 +1970,16 @@ pub async fn execute_tool(
                     } else {
                         "unknown"
                     };
+                    let service = &config.services[&app.id];
+                    let members: Vec<_> = service.containers.iter().map(|(name, container)| {
+                        let state = app.members.iter().find(|member| &member.name == name)
+                            .map_or("unknown", |member| member.state.as_str());
+                        json!({"name":name,"state":state,"ports":container.ports})
+                    }).collect();
                     json!({"id":app.id,"name":app.name,"kind":app.kind,
-                        "backend":crate::core::declarative::preflight::service_backend(&config.services[&app.id]),
+                        "backend":crate::core::declarative::preflight::service_backend(service),
                         "enabled":app.enabled,"state":app.state,"registered":registered,
-                        "configuration":configuration,"issues":issues,"members":app.members})
+                        "configuration":configuration,"issues":issues,"members":members})
                 }).collect();
                 return (StatusCode::OK, json!({"configured":true,"valid":true,
                     "revision":snapshot.revision,"health":health,"services":items}));
@@ -2843,6 +2851,7 @@ pub async fn execute_tool(
             }).await
         }
         "applications_action"
+        | "managed_container_action"
         | "managed_service_start"
         | "managed_service_stop"
         | "managed_service_restart" => {
@@ -2855,7 +2864,20 @@ pub async fn execute_tool(
                     ),
                 );
             }
-            let (tool, id, action) = if name == "applications_action" {
+            let mut member = None;
+            let (tool, id, action) = if name == "managed_container_action" {
+                member = arguments.get("container").and_then(Value::as_str)
+                    .filter(|member| crate::core::declarative::id_valid(member))
+                    .map(str::to_owned);
+                let action = arguments.get("action").and_then(Value::as_str);
+                if arguments.len() != 4 || member.is_none()
+                    || arguments.get("confirm") != Some(&Value::Bool(true))
+                    || !matches!(action, Some("start" | "stop" | "restart" | "pull"))
+                {
+                    return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Expected service, container, action and confirm=true."));
+                }
+                ("managed_container_action", arguments.get("service").and_then(Value::as_str), action.unwrap())
+            } else if name == "applications_action" {
                 let id = arguments.get("id").and_then(Value::as_str);
                 let action = arguments.get("action").and_then(Value::as_str);
                 if arguments.len() != 2 || !matches!(action, Some("start" | "stop" | "restart")) {
@@ -2921,18 +2943,25 @@ pub async fn execute_tool(
                         return;
                     }
                 };
-                if action != "stop" && !state_clone.config.test_mode {
+                if matches!(action.as_str(), "start" | "restart") && !state_clone.config.test_mode {
                     if let Err(error) = crate::core::declarative::preflight::check_startup_files(&state_clone, &store, &config, &id) {
                         running.finish(Outcome::Failed(error.to_string()));
                         return;
                     }
                 }
-                match provider_clone.action(&config, &id, &action).await {
+                let result = if let Some(member) = &member {
+                    provider_clone.container_action(&config, &id, member, &action).await
+                } else {
+                    provider_clone.action(&config, &id, &action).await
+                };
+                match result {
                     Ok(msg) => {
                         running.append_output(&msg);
-                        running.finish(Outcome::Succeeded(
-                            json!({ "id": id, "action": action, "output": msg }),
-                        ));
+                        let mut result = json!({ "id": id, "action": action, "output": msg });
+                        if let Some(member) = member {
+                            result["container"] = json!(member);
+                        }
+                        running.finish(Outcome::Succeeded(result));
                     }
                     Err(e) => {
                         running.finish(Outcome::Failed(e.to_string()));
@@ -2947,7 +2976,7 @@ pub async fn execute_tool(
             let key = if reference { "service" } else { "id" };
             if arguments
                 .keys()
-                .any(|argument| argument != key && argument != "tail")
+                .any(|argument| argument != key && argument != "tail" && !(reference && argument == "container"))
             {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -2985,7 +3014,12 @@ pub async fn execute_tool(
                 .flatten()
                 .and_then(|s| s.config().ok())
                 .unwrap_or_default();
-            match provider.managed_logs(&config, id, tail).await {
+            let member = match arguments.get("container") {
+                None => None,
+                Some(Value::String(member)) if crate::core::declarative::id_valid(member) => Some(member.as_str()),
+                _ => return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Invalid managed container ID.")),
+            };
+            match provider.managed_logs(&config, id, tail, member).await {
                 Ok(logs) if reference => (StatusCode::OK, json!(logs)),
                 Ok(logs) => (
                     StatusCode::OK,

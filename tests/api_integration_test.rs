@@ -2720,7 +2720,7 @@ services:
     backend: compose
     enabled: true
     containers:
-      web: { image: "nginx:alpine" }
+      web: { image: "nginx:alpine", ports: ["127.0.0.1:8080:80/tcp"] }
 shares:
   docs:
     protocol: samba
@@ -2775,6 +2775,11 @@ shares:
     assert_eq!(status, StatusCode::OK);
     assert_eq!(services["services"][0]["id"], "web");
     assert_eq!(services["services"][0]["backend"], "docker/compose");
+    assert_eq!(services["services"][0]["members"][0]["name"], "web");
+    assert_eq!(
+        services["services"][0]["members"][0]["ports"],
+        serde_json::json!(["127.0.0.1:8080:80/tcp"])
+    );
 
     // 4. Check applications_list
     let (status, val) = call("applications_list", serde_json::json!({})).await;
@@ -2829,6 +2834,47 @@ shares:
         tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
     }
     assert!(succeeded, "restart job did not complete");
+
+    let (status, _) = call(
+        "managed_container_action",
+        serde_json::json!({"service":"web","container":"web","action":"pull","confirm":false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, started) = call(
+        "managed_container_action",
+        serde_json::json!({"service":"web","container":"web","action":"pull","confirm":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{started:?}");
+    let mut result = None;
+    for _ in 0..50 {
+        let (status, job) = call("jobs_get", serde_json::json!({"id":started["job"]["id"]})).await;
+        assert_eq!(status, StatusCode::OK, "{job:?}");
+        assert_ne!(job["state"], "failed", "{job:?}");
+        if job["state"] == "succeeded" {
+            result = Some(job["result"].clone());
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+    let result = result.expect("container pull job did not complete");
+    assert_eq!(result["container"], "web");
+    assert_eq!(result["action"], "pull");
+
+    let (status, logs) = call(
+        "managed_service_logs",
+        serde_json::json!({"service":"web","container":"web","tail":10}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{logs:?}");
+    assert_eq!(logs["source"], "simulation");
+    let (status, _) = call(
+        "managed_service_logs",
+        serde_json::json!({"service":"web","container":"missing","tail":10}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 
     // 7. Check shares_status
     let (status, val) = call("shares_status", serde_json::json!({})).await;

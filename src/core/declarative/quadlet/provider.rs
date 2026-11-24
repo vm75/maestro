@@ -115,8 +115,12 @@ impl QuadletProvider {
     }
 
     pub async fn action(&self, config: &Config, id: &str, action: &str) -> Result<String> {
+        self.action_target(config, id, action, None).await
+    }
+
+    pub(in crate::core::declarative) async fn action_target(&self, config: &Config, id: &str, action: &str, member: Option<&str>) -> Result<String> {
         ensure!(
-            matches!(action, "start" | "stop" | "restart"),
+            matches!(action, "start" | "stop" | "restart" | "pull"),
             "unsupported Quadlet action"
         );
         ensure!(config.services.contains_key(id), "unknown workload service");
@@ -148,7 +152,18 @@ impl QuadletProvider {
                 units.extend(verified.into_iter().map(|(unit, _)| unit));
             }
         }
+        if let Some(member) = member {
+            let target = format!("{}.service", super::unit_name(id, member));
+            units.retain(|unit| unit == &target);
+        }
         ensure!(!units.is_empty(), "no generated Quadlet container units");
+        if action == "pull" {
+            let member = member.ok_or_else(|| anyhow::anyhow!("select a container image to pull"))?;
+            let image = &config.services[id].containers[member].image;
+            self.runner.capture_tail(&self.podman, &["--remote=false", "pull", "--", image],
+                Duration::from_secs(1200), 128 * 1024).await?;
+            return Ok(format!("Podman image pull completed for {member}"));
+        }
         let mut args = vec!["--user", "--no-pager", "--no-ask-password", action, "--"];
         args.extend(units.iter().map(String::as_str));
         let (output, _) = self
@@ -229,7 +244,7 @@ impl QuadletProvider {
         tail: usize,
     ) -> Result<String> {
         Ok(self
-            .managed_logs(config, id, journalctl, tail)
+            .managed_logs(config, id, journalctl, tail, None)
             .await?
             .display_text())
     }
@@ -240,12 +255,18 @@ impl QuadletProvider {
         id: &str,
         journalctl: &Path,
         tail: usize,
+        member: Option<&str>,
     ) -> Result<crate::core::declarative::composite::ManagedLogs> {
         ensure!(
             (1..=2000).contains(&tail),
             "journal line limit must be between 1 and 2000"
         );
-        let units = self.owned_units(config, id).await?;
+        let mut units = self.owned_units(config, id).await?;
+        if let Some(member) = member {
+            let target = format!("{}.service", super::unit_name(id, member));
+            units.retain(|(unit, _)| unit == &target);
+            ensure!(!units.is_empty(), "no generated unit for this container");
+        }
         let lines = tail.to_string();
         let mut args = vec![
             "--user",
