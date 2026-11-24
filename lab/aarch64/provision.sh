@@ -229,8 +229,10 @@ if [ -n "$IPK_FILE" ] && [ -f "$IPK_FILE" ]; then
     echo "Installing IPK..."
     /opt/bin/opkg install "$IPK_FILE"
     echo "Maestro package installation complete."
-    echo "Upgrading nginx..."
-    /opt/bin/maestro upgrade-nginx
+    # Keep the Entware NGINX installed in Step 5. Custom Toolbox bundles
+    # require an explicit release selection on the booted guest.
+    echo "To install a custom Entware bundle after boot, run: /opt/bin/maestro toolbox list"
+    echo "Then run: /opt/bin/maestro toolbox install RELEASE_TAG"
 else
     if [ "$LAB_OFFLINE" = 1 ]; then
         echo 'Error: No Maestro IPK found; build it with make ipk before initializing the lab.' >&2

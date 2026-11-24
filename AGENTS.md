@@ -11,7 +11,7 @@ custom nginx objects remain authored configuration files.
 
 ## Repository map
 
-- `src/main.rs`, `src/config.rs`, `src/state.rs`, `src/platforms/{upgrade,nginx_upgrade}.rs` — startup, configuration, runtime state, and router-only upgrade commands.
+- `src/main.rs`, `src/config.rs`, `src/state.rs`, `src/platforms/{upgrade,toolbox}.rs` — startup, configuration, runtime state, and router-only upgrade commands.
 - `src/api/` — authenticated HTTP API handlers and route map.
 - `src/modules/{nginx,nginx_sites}.rs`, `src/nginx_render.rs` — nginx filesystem workflows, Jinja rendering, and settings.
 - `src/modules/firewall.rs`, `src/ban_attack/` — firewall management and log-driven bans.
@@ -91,11 +91,11 @@ of AArch64 musl archives/IPKs with SHA-256 checksums. Manual tags remain support
 Do not commit `dist/` output or retag published versions; never deploy to
 production routers automatically.
 
-The standalone Entware NGINX builder has a **manual-only** GitHub Actions
-workflow (`.github/workflows/build-nginx.yml`). Its uniquely tagged
-`nginx-v*` GitHub Releases must always be created with `--latest=false`;
-stable Maestro releases remain Latest for the router-only upgrade command.
-Do not introduce automatic NGINX build triggers or router deployment.
+Entware tool builds are maintained in [vm75/toolbox](https://github.com/vm75/toolbox).
+On a live router, `maestro toolbox list` lists compatible releases and
+`maestro toolbox install TAG` verifies and installs every IPK in the selected
+release. Do not build NGINX in Maestro, automatically select Toolbox releases,
+or deploy to routers automatically.
 
 ## Engineering constraints
 

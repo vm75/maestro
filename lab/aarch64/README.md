@@ -171,6 +171,18 @@ The provisioning script:
 7. Seeds `/opt/etc/maestro/firewall-policy.json` (disabled) and generates `/opt/etc/maestro/maestro.yaml`.
 8. Validates the SHA-256 checksum and installs `maestro_*_aarch64-3.10.ipk` via Entware `opkg`.
 
+Provisioning uses the NGINX package installed from the standard Entware feed in
+Step 5. It does not automatically install or upgrade custom Toolbox packages.
+To install a custom NGINX bundle, boot the guest and run:
+
+```sh
+/opt/bin/maestro toolbox list
+/opt/bin/maestro toolbox install toolbox-nginx-entware-1.30.8-99_aarch64
+```
+
+Choose the exact release tag from the list; Maestro verifies and installs all
+IPKs in that release.
+
 During ISO installation, provisioning runs with `LAB_OFFLINE=1`: OpenRC service
 starts and kernel interface probes are deferred, and the package setup hook uses
 `MAESTRO_DEFER_START=1` to initialize configuration without stopping or starting

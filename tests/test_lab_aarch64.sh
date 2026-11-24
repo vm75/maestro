@@ -13,6 +13,12 @@ sh -n lab/aarch64/installer/install.sh
 sh -n lab/aarch64/installer/provision-installed.sh
 sh -n scripts/setup-merlin.sh
 sh -n lab/aarch64/provision.sh
+# Provisioning must not call a removed CLI command or implicitly select a bundle.
+if grep -Eq '^[[:space:]]*/opt/bin/maestro[[:space:]]+(upgrade-nginx|update-nginx|toolbox[[:space:]]+install)([[:space:]]|$)' lab/aarch64/provision.sh; then
+    echo "Provisioning unexpectedly invokes an obsolete or unselected NGINX upgrade" >&2
+    exit 1
+fi
+grep -F '/opt/bin/maestro toolbox list' lab/aarch64/provision.sh >/dev/null
 sh -n lab/aarch64/configure-share.sh
 sh -n lab/aarch64/configure-shell.sh
 sh -n lab/aarch64/files/login-banner.sh
