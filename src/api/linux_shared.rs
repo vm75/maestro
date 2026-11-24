@@ -62,6 +62,11 @@ pub(super) fn router(state: AppState) -> Router<AppState> {
         .route("/shared/certificates/dehydrated/update", post(update_dehydrated))
         .route("/shared/firewall", get(firewall::status).put(update_firewall))
         .route("/shared/firewall/capability", get(firewall_capability))
+        .route("/shared/firewall/rules", post(firewall::create_rule))
+        .route(
+            "/shared/firewall/rules/{id}",
+            delete(firewall::delete_rule).put(firewall::update_rule),
+        )
         .route("/shared/firewall/allowlist", post(firewall::add_allowlist))
         .route("/shared/firewall/allowlist/{network}", delete(firewall::delete_allowlist))
         .route("/shared/firewall/bans", post(firewall::manual_ban))
@@ -105,9 +110,22 @@ async fn certificates(State(state): State<AppState>) -> Json<Vec<Value>> {
 
 async fn certificate_lock(State(state): State<AppState>) -> Result<Json<Value>, super::ApiError> {
     let Json(lock) = super::certificates::dehydrated_lock(State(state)).await?;
-    Ok(Json(
-        json!({ "locked": lock.locked, "status": lock.status }),
-    ))
+    // Public operation metadata only; error output may contain DNS hook credentials.
+    let operation = lock.operation.map(|operation| {
+        json!({
+            "certificate": operation.certificate,
+            "action": operation.action,
+            "status": operation.status,
+            "started_at": operation.started_at,
+            "finished_at": operation.finished_at,
+        })
+    });
+    Ok(Json(json!({
+        "locked": lock.locked,
+        "status": lock.status,
+        "path": lock.path,
+        "operation": operation,
+    })))
 }
 
 async fn authorize_mutation(

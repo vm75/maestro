@@ -27,7 +27,7 @@
   const pauseMinutes = [1, 10, 30, 60]
   function remaining(seconds?: number) { return seconds == null ? 'Indefinite' : Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's' }
   function launchAdGuard() {
-    try { const url = new URL(ad?.launch_url || ''); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Invalid launch URL'); window.open(url.href, '_blank', 'noopener,noreferrer') }
+    try { const url = new URL(ad?.launch_url || ad?.api_endpoint || ''); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Invalid launch URL'); window.open(url.href, '_blank', 'noopener,noreferrer') }
     catch { errors['Launch'] = 'Configure a valid HTTP or HTTPS launch URL.' }
   }
   async function pollStatus() {

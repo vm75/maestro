@@ -63,6 +63,7 @@ const server=createServer(async(req,res)=>{
     if(key==='adguard/rewrites'){if(method==='PUT')rewrites=body;return json(res,rewrites);}
     if(key==='wireguard/status')return json(res,{interface:'wg0',is_running:false,writable:false,peers_writable:false,reason:'Helper unavailable'});
     if(key==='firewall/capability')return json(res,{enforcement:false,reason:'Helper unavailable'});
+    if(key==='firewall/rules' && method==='POST'){const rule={...body,id:'new-rule'};policy={...policy,rules:[...policy.rules,rule]};return json(res,rule);}
     if(key==='firewall'){if(method==='PUT')policy=body;return json(res,{policy,snapshot:{active_ban_count:bans.length,banned_ips:[],banned_subnets:[],rule_stats:[['Test rule',{match_count:7,ban_count:2}]]},bans,health,settings:{global_threshold:5},tuning:policy.tuning||tuning});}
     if(key.startsWith('firewall/bans/') && method==='DELETE'){bans=[];return json(res,{message:'network unbanned, history cleared, and exception added'});}
     return json(res,{error:'Unexpected fixture route: '+key},404);

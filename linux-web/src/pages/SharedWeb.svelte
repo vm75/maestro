@@ -15,8 +15,8 @@
   interface Site { kind: string; domain: string; name: string; display_name: string; port?: number; managed: boolean; enabled: boolean; state: string; effective_access?: EffectiveAccess }
   interface Log { path: string; size: number }
   interface Certificate { id: string; name: string; domains: string[]; method: string; staging: boolean; auto_renew: boolean; exists: boolean; expires_at?: string; days_remaining?: number; renewal_due: boolean }
-  interface HttpAccess { state: string; expires_at?: string; names: string[]; wan_control: string }
-  interface Lock { locked: boolean; status: string }
+  interface HttpAccess { state: string; expires_at?: string; names: string[]; wan_control: string; error?: string }
+  interface Lock { locked: boolean; status: string; path?: string; operation?: {certificate: string; action: string; status: string; started_at: string; finished_at?: string} }
   let status = $state<NginxStatus | null>(null)
   let sites = $state<Site[]>([])
   let settings = $state<GlobalSettings | null>(null)
@@ -44,7 +44,7 @@
   async function pollLock() {
     if (section!=='certificates' || !hasCertificates || lockPolling || loading) return
     const active=new AbortController(); lockController=active; lockPolling=true
-    try { const value=await request<Lock>('/api/shared/certificates/lock',{signal:active.signal}); if(!active.signal.aborted && section==='certificates') {lock=value; delete errors['Dehydrated polling']} }
+    try { const [value,http]=await Promise.all([request<Lock>('/api/shared/certificates/lock',{signal:active.signal}),request<HttpAccess>('/api/shared/certificates/http-access',{signal:active.signal})]); if(!active.signal.aborted && section==='certificates') {lock=value; httpAccess=http; delete errors['Dehydrated polling']} }
     catch(e){if(!active.signal.aborted)errors['Dehydrated polling']=String(e)}
     finally{lockPolling=false}
   }
@@ -64,7 +64,10 @@
   function openReference() { referenceDialog?.showModal() }
   function closeReference() { referenceDialog?.close() }
   let globalSection = $state<HTMLElement>()
-  function configureGlobal() { if (settings && !globalDraft) globalDraft = clone(settings); globalSection?.scrollIntoView({block:'start'}) }
+  let siteEditor = $state<HTMLDetailsElement>()
+  let globalFromSite = $state(false)
+  function configureGlobal(fromSite = false) { globalFromSite=fromSite; if (settings && !globalDraft) globalDraft = clone(settings); globalSection?.scrollIntoView({block:'start'}) }
+  function closeGlobal() { globalDraft=null; if(globalFromSite)siteEditor?.scrollIntoView({block:'start'}); globalFromSite=false }
 
   async function refresh() {
     lockController?.abort(); controller?.abort()
@@ -156,7 +159,7 @@
     } catch (failure) { actionError = String(failure) }
   }
   async function saveGlobal(value: GlobalSettings) {
-    if (await mutate('nginx/settings','PUT',value)) globalDraft = null
+    if (await mutate('nginx/settings','PUT',value)) closeGlobal()
   }
   async function previewAccess(payload: string) {
     previewController?.abort(); const active = new AbortController(); previewController = active
@@ -170,8 +173,11 @@
   $effect(() => {
     const payload = JSON.stringify({kind:siteKind,domain:siteDomain,settings:siteSettings})
     const shouldPreview = section === 'nginx' && siteEditorOpen && !!siteDomain.trim() && !customSite && !!settings
+    const canPreview = allowWrites
+    const stored = editingSite?.effective_access
     previewController?.abort(); preview = null; previewError = ''; previewBusy = false
     if (!shouldPreview) return
+    if (!canPreview) { preview=stored ?? null; return }
     const timer = setTimeout(() => void previewAccess(payload),180)
     return () => { clearTimeout(timer); previewController?.abort() }
   })
@@ -236,8 +242,8 @@
       </tbody></table></div>
       {#if !visibleSites.length && !loading}<p class="muted">No matching sites.</p>{/if}
       {#if allowWrites || editingSite}
-        <details bind:open={siteEditorOpen}><summary>{editingSite ? (allowWrites?'Edit site':'Inspect site') : 'Add site'}</summary>
-          <button type="button" onclick={openReference}>Setup guide</button><button type="button" disabled={!settings} onclick={configureGlobal}>Global settings</button>
+        <details bind:this={siteEditor} bind:open={siteEditorOpen}><summary>{editingSite ? (allowWrites?'Edit site':'Inspect site') : 'Add site'}</summary>
+          <button type="button" onclick={openReference}>Setup guide</button><button type="button" disabled={!settings} onclick={()=>configureGlobal(true)}>Global settings</button>
           <form onsubmit={event => { event.preventDefault(); void saveSite() }}><fieldset disabled={!allowWrites || busy}>
             <label>Kind <select bind:value={siteKind} disabled={!!editingSite} onchange={event=>{if(event.currentTarget.value==='subfolder'){const next={...siteSettings};delete next.listener_profile;siteSettings=next}preview=null;previewController?.abort();previewBusy=false}}><option value="domain">Domain</option><option value="subdomain">Subdomain</option><option value="subfolder">Subfolder</option></select></label>
             {#if siteKind==='domain' || editingSite}<label>Domain <input bind:value={siteDomain} required disabled={!!editingSite} /></label>{:else}<label>Parent domain <select bind:value={siteDomain} required><option value="">Choose a domain</option>{#each sites.filter(s=>s.kind==='domain') as parent}<option value={parent.domain}>{parent.domain}{parent.enabled?'':' (disabled)'}</option>{/each}</select></label>{/if}
@@ -272,8 +278,8 @@
     <section class="panel" bind:this={globalSection}><div class="resource-heading"><h2>Global settings</h2></div><p>Shared listeners, client allowlists and defaults inherited by managed sites.</p>
       {#if settings}
         <dl class="shared-stats"><div><dt>Listener profiles</dt><dd>{Object.keys(settings.listener_profiles).length}</dd></div><div><dt>Access policies</dt><dd>{Object.keys(settings.access_policies).length}</dd></div><div><dt>Limit policies</dt><dd>{Object.keys(settings.limit_policies).length}</dd></div><div><dt>Allowed IP entries</dt><dd>{settings.allowed_ips.length}</dd></div></dl>
-        {#if globalDraft}<NginxGlobalEditor initial={globalDraft} {usage} disabled={busy || !allowWrites} onSave={saveGlobal} onCancel={()=>globalDraft=null}/>
-        {:else}<button disabled={busy} onclick={configureGlobal}>{allowWrites?'Configure global settings':'Inspect global settings'}</button>{/if}
+        {#if globalDraft}<NginxGlobalEditor initial={globalDraft} {usage} disabled={busy || !allowWrites} onSave={saveGlobal} onCancel={closeGlobal}/>
+        {:else}<button disabled={busy} onclick={()=>configureGlobal()}>{allowWrites?'Configure global settings':'Inspect global settings'}</button>{/if}
       {/if}
     </section>
     <section class="panel"><div class="resource-heading"><h2>Nginx logs</h2></div>
@@ -287,9 +293,11 @@
 {:else}
   {#if !hasCertificates}<section class="panel"><h2>Certificates unavailable</h2></section>{:else}
     <section class="panel"><h2>HTTP certificate access</h2><button disabled={!allowWrites || busy || !httpAccess} onclick={() => { if (confirm('Close the managed HTTP validation window?')) void mutate('certificates/http-access', 'DELETE') }}>Close validation window</button>
-      {#if httpAccess}<dl class="shared-stats"><div><dt>State</dt><dd>{httpAccess.state}</dd></div><div><dt>WAN control</dt><dd>{httpAccess.wan_control}</dd></div><div><dt>Names</dt><dd>{httpAccess.names.join(', ') || '—'}</dd></div><div><dt>Expires</dt><dd>{httpAccess.expires_at ? new Date(httpAccess.expires_at).toLocaleString() : '—'}</dd></div></dl>{:else}<p class="muted">No validation status available.</p>{/if}
+      {#if httpAccess}<dl class="shared-stats"><div><dt>State</dt><dd>{httpAccess.state}</dd></div><div><dt>WAN control</dt><dd>{httpAccess.wan_control}</dd></div><div><dt>Names</dt><dd>{httpAccess.names.join(', ') || '—'}</dd></div><div><dt>Expires</dt><dd>{httpAccess.expires_at ? new Date(httpAccess.expires_at).toLocaleString() : '—'}</dd></div></dl>{#if httpAccess.error}<p class="form-error" role="alert">{httpAccess.error}</p>{/if}{:else}<p class="muted">No validation status available.</p>{/if}
     </section>
     <section class="panel"><h2>Dehydrated</h2><p>{lock ? (lock.locked ? 'Locked' : 'Unlocked') + ' · ' + lock.status : 'Status unavailable'}</p>
+      {#if lock?.operation}<p>Certificate {lock.operation.action}: {lock.operation.certificate} · {lock.operation.status}{#if lock.operation.status==='failed'} — inspect server logs for details.{/if}</p>{/if}
+      {#if lock?.locked && lock.path}<p class="mono">{lock.path}</p>{/if}
       <button disabled={!allowWrites || busy || !!lock?.locked || lock?.status==='running'} onclick={() => { if (confirm('Download/update Dehydrated?')) void mutate('certificates/dehydrated/update') }}>Update Dehydrated</button>
       <button disabled={!allowWrites || busy || !lock?.locked || lock.status === 'running'} onclick={() => { if (confirm('Clear the stale lock? Confirm no certificate operation is running.')) void mutate('certificates/lock/clear') }}>Clear stale lock</button>
     </section>

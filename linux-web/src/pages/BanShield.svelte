@@ -41,8 +41,7 @@
   async function saveRule() {
     if (!status || !ruleDraft) return
     const next = {...ruleDraft, log_paths: rulePaths.split(/\r?\n/).map(v=>v.trim()).filter(Boolean)}
-    const rules = next.id ? status.policy.rules.map(r=>r.id === next.id ? next : r) : [...status.policy.rules, next]
-    if (await mutate('', 'PUT', {...status.policy, rules})) ruleDraft = null
+    if (await mutate('/rules' + (next.id ? '/' + encodeURIComponent(next.id) : ''), next.id ? 'PUT' : 'POST', next)) ruleDraft = null
   }
   async function saveTuning() {
     if (!status || !tuningDraft) return
@@ -100,7 +99,7 @@
     <div class="shared-table"><table><thead><tr><th>Rule</th><th>Log paths</th><th>Weight / threshold</th><th>Hits / bans</th><th>State</th><th>Actions</th></tr></thead><tbody>
       {#each status.policy.rules as rule (rule.id)}
         {@const stats = status.snapshot.rule_stats?.find(([name])=>name===rule.name)?.[1]}
-        <tr><td>{rule.name}</td><td class="mono">{rule.log_paths.join(', ')}</td><td>{rule.weight} / {Math.ceil(status.settings.global_threshold / rule.weight)} hits from zero</td><td>{stats ? stats.match_count + ' / ' + stats.ban_count : '—'}</td><td>{rule.enabled ? 'Enabled' : 'Disabled'}</td><td><button disabled={!allowWrites || busy} onclick={() => editRule(rule)}>Edit</button><button disabled={!allowWrites || busy} onclick={() => { if (status && confirm('Delete this detection rule?')) void mutate('', 'PUT', {...status.policy,rules:status.policy.rules.filter(r=>r.id!==rule.id)}) }}>Delete</button></td></tr>
+        <tr><td>{rule.name}</td><td class="mono">{rule.log_paths.join(', ')}</td><td>{rule.weight} / {Math.ceil(status.settings.global_threshold / rule.weight)} hits from zero</td><td>{stats ? stats.match_count + ' / ' + stats.ban_count : '—'}</td><td>{rule.enabled ? 'Enabled' : 'Disabled'}</td><td><button disabled={!allowWrites || busy} onclick={() => editRule(rule)}>Edit</button><button disabled={!allowWrites || busy} onclick={() => { if (rule.id && confirm('Delete this detection rule?')) void mutate('/rules/'+encodeURIComponent(rule.id), 'DELETE') }}>Delete</button></td></tr>
       {/each}
     </tbody></table></div>{#if !status.policy.rules.length}<p class="muted">No detection rules.</p>{/if}
     {#if ruleDraft && allowWrites}
