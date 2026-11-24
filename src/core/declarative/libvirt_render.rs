@@ -180,6 +180,31 @@ pub(super) fn parse_domain(xml:&[u8])->Result<Domain>{
         arch:typ.attr("arch").into(),machine:typ.attr("machine").into(),os:typ.text.trim().into(),
         boot:os.child("boot")?.attr("dev").into(),disks,interface,video})
 }
+// Private XML is capture evidence only. Refuse state outside the supported
+// BIOS/standalone disk profile, including native extensions and backing chains.
+pub(super) fn validate_backup_xml(raw:&[u8],want:&Domain)->Result<()>{
+    let actual=parse_domain(raw)?;
+    ensure!(want.hardware_matches(&actual)&&want.id==actual.id&&want.fingerprint==actual.fingerprint&&want.runtime==actual.runtime,
+        "private Libvirt XML does not match managed identity/hardware");
+    let root=parse_xml(raw)?;
+    fn guard(node:&Node,parent:&str)->Result<()>{
+        if parent!="metadata" {
+            ensure!(node.ns.is_empty()&&node.attrs.keys().all(|key|!key.contains(':')),"unsupported Libvirt XML extension");
+        }
+        ensure!(!matches!(node.name.as_str(),"loader"|"nvram"|"varstore"|"kernel"|"initrd"|"dtb"|"tpm"|"filesystem"|"hostdev"|"shmem"|"crypto"|"launchSecurity"|"sysinfo"|"commandline"|"encryption"|"dataStore"|"memoryBacking"),"Libvirt guest has unsupported state dependencies");
+        if node.name=="memory" {ensure!(parent=="domain","additional memory device needs explicit capture support");}
+        if node.name=="backingStore"{ensure!(node.attrs.is_empty()&&node.children.is_empty(),"Libvirt backing chain requires explicit capture support");}
+        if node.name=="source"&&parent=="disk"{
+            ensure!(node.attrs.keys().all(|key|matches!(key.as_str(),"file"|"index"|"startupPolicy"))&&node.children.iter().all(|n|n.name=="seclabel"),"unsupported Libvirt disk source");
+        }
+        if matches!(node.name.as_str(),"serial"|"console"){ensure!(matches!(node.attr("type"),"pty"|"null"),"external serial/console dependency");}
+        if node.name=="metadata"{ensure!(node.children.len()==1&&node.children[0].name=="managed","additional private native metadata needs review");return Ok(())}
+        for child in &node.children{guard(child,&node.name)?;}Ok(())
+    }
+    guard(&root,"")?;
+    Ok(())
+}
+
 pub(super) fn valid_kvm_capabilities(xml:&[u8])->bool{
     parse_xml(xml).is_ok_and(|root|root.name=="domainCapabilities"&&root.ns.is_empty()
         &&root.value("domain").is_ok_and(|s|s=="kvm")&&root.value("arch").is_ok_and(|s|s=="x86_64")
