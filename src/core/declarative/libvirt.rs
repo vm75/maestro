@@ -82,6 +82,9 @@ impl LibvirtProvider{
         ensure!(xml::valid_kvm_capabilities(&caps),"configured Libvirt connection returned unrecognized KVM capabilities");
         Ok(())
     }
+    pub(super) fn recovery_targets(&self,previous:&Config,desired:&Config,id:&str)->Result<Vec<super::artifact_recovery::Target>>{
+        Ok(vec![super::artifact_recovery::Target::dedicated("Native libvirt definition",self.directory(id),"domain.xml",self.artifact(previous,id)?,self.artifact(desired,id)?)?])
+    }
     fn artifact(&self,config:&Config,id:&str)->Result<Option<Vec<u8>>>{
         if config.services.contains_key(id){Ok(Some(xml::render(config,id,&self.storage_base)?.into_bytes()))}else{Ok(None)}
     }

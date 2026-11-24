@@ -391,6 +391,14 @@ impl ComposeProvider {
         optional(store::open_child_directory(&base, id))
     }
 
+    pub(super) fn recovery_targets(&self,change:&Change,previous:&Config,desired:&Config,id:&str)->Result<Vec<super::artifact_recovery::Target>>{
+        if !self.runner.is_test_mode(){return self.native_recovery_targets(previous,desired,id)}
+        // Test-mode Compose publishes only its simulated definition using the
+        // plan fingerprint, not a runtime fingerprint or a systemd launcher.
+        let defs=self.definitions(change,previous,desired)?;
+        Ok(vec![super::artifact_recovery::Target::dedicated("Native Compose definition",self.base_dir.join(id),"compose.yaml",
+            defs.before.map(String::into_bytes),defs.after.map(String::into_bytes))?])
+    }
     fn definitions(
         &self,
         change: &Change,

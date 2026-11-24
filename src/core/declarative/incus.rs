@@ -240,6 +240,9 @@ impl IncusProvider{
         ensure!(actual.status_code>0,"Incus instance state is unavailable");
         Ok(Some(actual))
     }
+    pub(super) fn recovery_targets(&self,previous:&Config,desired:&Config,id:&str)->Result<Vec<super::artifact_recovery::Target>>{
+        Ok(vec![super::artifact_recovery::Target::dedicated("Native Incus definition",self.directory(id),"instance.yaml",self.artifact(previous,id)?,self.artifact(desired,id)?)?])
+    }
     fn artifact(&self,config:&Config,id:&str)->Result<Option<Vec<u8>>>{
         if config.services.contains_key(id){Ok(Some(encode(&render(config,id)?)?))}else{Ok(None)}
     }

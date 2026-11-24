@@ -38,6 +38,8 @@ pub struct ApplyJournal {
     pub mode: ApplyMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) failed_resource: Option<String>,
+    #[serde(default,skip_serializing_if="std::ops::Not::not")]
+    pub(super) artifact_conflict: bool,
     #[serde(default)]
     pub(super) updated_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -98,6 +100,7 @@ impl ApplyJournal {
             completed: 0,
             mode,
             failed_resource: None,
+            artifact_conflict: false,
             updated_at: Some(chrono::Utc::now()),
             superseded: superseded.map(Box::new),
             alternate_candidate,
@@ -110,9 +113,10 @@ impl ApplyJournal {
         Ok(journal)
     }
 
-    pub(super) fn failed(&mut self, directory: &File, resource: String) -> Result<()> {
+    pub(super) fn failed(&mut self, directory: &File, resource: String, error:&anyhow::Error) -> Result<()> {
         // Preserve legacy publication ordering while recording recovery failure.
         self.failed_resource = Some(resource);
+        self.artifact_conflict=super::artifact_recovery::is_conflict(error);
         self.persist(directory)
     }
 
@@ -165,6 +169,7 @@ fn validate(journal: &ApplyJournal) -> Result<()> {
             },
         "invalid apply journal"
     );
+    ensure!(!journal.artifact_conflict||journal.failed_resource.is_some(),"invalid artifact conflict journal marker");
     if let Some(failed) = &journal.failed_resource {
         ensure!(
             journal.phase == ApplyPhase::Applying
@@ -207,9 +212,10 @@ fn status(journal: &ApplyJournal) -> serde_json::Value {
         };
         let mut value = serde_json::json!({"fingerprint":change.after.as_ref().or(change.before.as_ref()),"state":state});
         if failed {
-            value["message"] = serde_json::json!(
-                "Native publication or verification failed; inspect backend state before retry."
-            );
+            value["message"] = serde_json::json!(if journal.artifact_conflict {
+                super::artifact_recovery::CONFLICT_REMEDY
+            } else {"Native publication or verification failed; inspect backend state before retry."});
+            if journal.artifact_conflict{value["artifactRecovery"]=serde_json::json!(true);}
         }
         resources.insert(change.resource.clone(), value);
     }

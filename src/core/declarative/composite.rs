@@ -80,6 +80,19 @@ pub struct CompositeProvider {
 }
 
 impl CompositeProvider {
+    pub(super) fn recovery_targets(&self,change:&Change,previous:&Config,desired:&Config)->Result<Vec<super::artifact_recovery::Target>>{
+        let Some(id)=change.resource.strip_prefix("service/") else{return Ok(vec![])};
+        ensure!(super::id_valid(id),"invalid service resource");
+        match change.backend.as_str(){
+            "incus"=>self.incus.recovery_targets(previous,desired,id),
+            "libvirt"=>self.libvirt.recovery_targets(previous,desired,id),
+            "docker/compose"=>self.docker_compose.recovery_targets(change,previous,desired,id),
+            "podman/compose"=>self.podman_compose.recovery_targets(change,previous,desired,id),
+            "podman/quadlet"=>self.quadlet.as_ref().map_or_else(||Ok(vec![]),|q|q.recovery_targets(previous,desired,id)),
+            _=>Ok(vec![]),
+        }
+    }
+
     pub fn new(config: &AppConfig, runner: CommandRunner) -> Self {
         let quadlet_artifacts = config.paths.quadlet_dir.as_ref().and_then(|directory| {
             QuadletArtifacts::new(directory.clone(), config.paths.storage_dir.clone()).ok()
@@ -465,6 +478,9 @@ impl ApplyProvider for CompositeProvider {
         if mode == ApplyMode::Now {
             return self.apply(change, previous, desired).await;
         }
+        let targets=self.recovery_targets(change,previous,desired)?;
+        let seals=super::artifact_recovery::before_publication(&targets)?;
+        let result=async {
         self.check_native_scope(change)?;
         if change.backend == "storage" {
             return self
@@ -488,6 +504,10 @@ impl ApplyProvider for CompositeProvider {
             }
         }
         anyhow::bail!("next-start publication is unavailable for this provider")
+        }.await;
+        result?;
+        super::artifact_recovery::after_publication(&targets,&seals)
+
     }
 
     async fn preflight(&self, change: &Change, previous: &Config, desired: &Config) -> Result<()> {
@@ -533,6 +553,9 @@ impl ApplyProvider for CompositeProvider {
     }
 
     async fn apply(&self, change: &Change, previous: &Config, desired: &Config) -> Result<()> {
+        let targets=self.recovery_targets(change,previous,desired)?;
+        let seals=super::artifact_recovery::before_publication(&targets)?;
+        let result=async {
         self.check_native_scope(change)?;
         if change.resource.starts_with("storage/") {
             return self.storage.apply(change, previous, desired).await;
@@ -566,6 +589,10 @@ impl ApplyProvider for CompositeProvider {
             }
         }
         Ok(())
+        }.await;
+        result?;
+        super::artifact_recovery::after_publication(&targets,&seals)
+
     }
 }
 
@@ -580,6 +607,9 @@ impl RecoveryProvider for CompositeProvider {
         if mode == ApplyMode::Now {
             return self.observe(change, previous, desired).await;
         }
+        let targets=self.recovery_targets(change,previous,desired)?;
+        super::artifact_recovery::check_observation(&targets)?;
+        let result=async {
         self.check_native_scope(change)?;
         if change.backend == "storage" {
             return self
@@ -603,6 +633,11 @@ impl RecoveryProvider for CompositeProvider {
             }
         }
         anyhow::bail!("next-start inspection is unavailable for this provider")
+        }.await;
+        let observed=result?;
+        super::artifact_recovery::check_observed_state(&targets,observed)?;
+        Ok(observed)
+
     }
 
     async fn observe(
@@ -611,6 +646,9 @@ impl RecoveryProvider for CompositeProvider {
         previous: &Config,
         desired: &Config,
     ) -> Result<ObservedResource> {
+        let targets=self.recovery_targets(change,previous,desired)?;
+        super::artifact_recovery::check_observation(&targets)?;
+        let result=async {
         if self.check_native_scope(change).is_err() {
             return Ok(ObservedResource::Unknown);
         }
@@ -646,6 +684,11 @@ impl RecoveryProvider for CompositeProvider {
             }
         }
         Ok(ObservedResource::Unknown)
+        }.await;
+        let observed=result?;
+        super::artifact_recovery::check_observed_state(&targets,observed)?;
+        Ok(observed)
+
     }
 }
 

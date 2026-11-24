@@ -44,6 +44,8 @@ enum Tool {
     BackupRecover,
     BackupPublish,
     BackupRelease,
+    ArtifactReview,
+    ArtifactReconcile,
     ManagedConfigRead,
     ManagedConfigValidate,
     ManagedConfigHealth,
@@ -81,7 +83,7 @@ enum Tool {
 }
 
 impl Tool {
-    const ALL: [Self; 53] = [
+    const ALL: [Self; 55] = [
         Self::Status,
         Self::Capabilities,
         Self::JobsList,
@@ -101,6 +103,8 @@ impl Tool {
         Self::BackupRecover,
         Self::BackupPublish,
         Self::BackupRelease,
+        Self::ArtifactReview,
+        Self::ArtifactReconcile,
         Self::ManagedConfigRead,
         Self::ManagedConfigValidate,
         Self::ManagedConfigHealth,
@@ -209,6 +213,8 @@ impl Tool {
             Self::BackupRecoveryStatus => ("managed_backup_recovery_status","Review backup recovery","Inspect durable workload and staged capture progress without activating workloads."),
             Self::BackupRecover => ("managed_backup_recover","Resume interrupted backup workloads","Recover only previously running workloads whose stop was attempted; never replay capture."),
             Self::BackupPublish => ("managed_backup_publish","Verify and finish capture publication","Verify a recorded capture against its manifest and publish without replacing data."),
+            Self::ArtifactReview => ("managed_artifact_review","Review generated artifact conflict","Inspect exact generated files and publication metadata without disclosing contents or paths."),
+            Self::ArtifactReconcile => ("managed_artifact_reconcile","Preserve and reconcile generated-artifact metadata","Preserve conflicting private sidecars and repair only canonical metadata after review; never retry apply or change workloads."),
             Self::BackupRelease => ("managed_backup_release","Leave backup workloads as they are","Release reviewed recovery blocker without starting workloads, publishing or deleting data."),
             Self::ManagedConfigRead => (
                 "managed_config_read",
@@ -485,6 +491,7 @@ fn modules(state: &AppState) -> Value {
         {"id": "updates", "title": "System package updates", "available": package_updates::available(state)},
         {"id": "workloads", "title": "Applications", "available": true, "writable": writes_allowed(state)},
         {"id":"managed_backup","title":"Portable backup planning","available":true,"writable":writes_allowed(state)},
+        {"id":"managed_artifact_recovery","title":"Generated artifact recovery","available":true,"writable":writes_allowed(state)},
         {"id": "shares", "title": "File sharing", "available": true}
     ])
 }
@@ -504,6 +511,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                 Tool::ServicesList | Tool::ServicesDetails | Tool::ServicesLogs => "systemd",
                 Tool::MonitorSnapshot | Tool::MonitorProcesses => "monitor",
                 Tool::UpdatesStatus | Tool::PackagesInstall | Tool::DependenciesInstall => "updates",
+                Tool::ArtifactReview | Tool::ArtifactReconcile => "managed_artifact_recovery",
                 Tool::BackupInventory | Tool::BackupPrepare | Tool::BackupRecoveryStatus | Tool::BackupRecover | Tool::BackupPublish | Tool::BackupRelease => "managed_backup",
                 Tool::ManagedConfigRead
                 | Tool::ManagedConfigValidate
@@ -550,9 +558,11 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     | Tool::SharesSambaPassword
                     | Tool::SharesSetup
                     | Tool::ManagedSharePublish
-                    | Tool::BackupPrepare | Tool::BackupRecover | Tool::BackupPublish | Tool::BackupRelease
+                    | Tool::BackupPrepare | Tool::BackupRecover | Tool::BackupPublish | Tool::BackupRelease | Tool::ArtifactReconcile
             );
             let input_schema = match tool {
+                Tool::ArtifactReview => json!({"type":"object","additionalProperties":false,"properties":{"resource":{"type":"string","minLength":1,"maxLength":80}},"required":["resource"]}),
+                Tool::ArtifactReconcile => json!({"type":"object","additionalProperties":false,"properties":{"resource":{"type":"string","minLength":1,"maxLength":80},"revision":{"type":"string","minLength":64,"maxLength":64},"reviewToken":{"type":"string","minLength":64,"maxLength":64}},"required":["resource","revision","reviewToken"]}),
                 Tool::BackupPrepare => json!({"type":"object","additionalProperties":false,"properties":{
                     "revision":{"type":"string","minLength":1,"maxLength":64},
                     "destination":{"type":"string","minLength":1,"maxLength":4096},
@@ -800,7 +810,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     tool,
                     Tool::WorkloadsApply | Tool::WorkloadsResume | Tool::WorkloadsRevert
                         | Tool::ApplicationsAction | Tool::PackagesInstall | Tool::DependenciesInstall
-                        | Tool::ManagedResourceSave | Tool::ManagedConfigSave | Tool::ManagedConfigRevert | Tool::ManagedApplyRetry | Tool::SharesSambaPassword | Tool::SharesSetup | Tool::ManagedSharePublish | Tool::BackupPrepare | Tool::BackupRecover | Tool::BackupPublish | Tool::BackupRelease
+                        | Tool::ManagedResourceSave | Tool::ManagedConfigSave | Tool::ManagedConfigRevert | Tool::ManagedApplyRetry | Tool::SharesSambaPassword | Tool::SharesSetup | Tool::ManagedSharePublish | Tool::BackupPrepare | Tool::BackupRecover | Tool::BackupPublish | Tool::BackupRelease | Tool::ArtifactReconcile
                 ),
                 "inputSchema": input_schema
             })
@@ -1008,7 +1018,7 @@ pub async fn execute_tool(
             | "managed_storage_create"
             | "managed_service_enable"
             | "managed_service_disable"
-            | "managed_share_publish" | "shares_setup" | "managed_backup_prepare"
+            | "managed_share_publish" | "shares_setup" | "managed_backup_prepare" | "managed_artifact_reconcile"
     ) {
         if let Err(error) = crate::core::linux_config::mutation_ready(&state.config, store) {
             return (
@@ -1413,7 +1423,7 @@ pub async fn execute_tool(
                     (job.tool.starts_with("services_")
                         || job.tool.starts_with("updates_")
                         || job.tool.starts_with("workloads_")
-                        || job.tool.starts_with("managed_backup_")
+                        || job.tool.starts_with("managed_backup_") || job.tool=="managed_artifact_reconcile"
                         || matches!(
                             job.tool,
                             "applications_action"
@@ -2093,6 +2103,39 @@ pub async fn execute_tool(
             }
         }
 
+        "managed_artifact_review" | "managed_artifact_reconcile" => {
+            if !writes_allowed(state){return (StatusCode::FORBIDDEN,json_err("writes_disabled","Private artifact recovery is disabled with management writes."));}
+            if name=="managed_artifact_review"{
+                let Some(resource)=arguments.get("resource").and_then(Value::as_str).filter(|s|s.len()<=80) else{
+                    return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected a managed service resource."));
+                };
+                if arguments.len()!=1{return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected only resource."));}
+                return match crate::core::declarative::artifact_recovery::review(store,provider,resource){
+                    Ok(review)=>(StatusCode::OK,json!(review)),
+                    Err(_)=>(StatusCode::CONFLICT,json_err("artifact_review_unavailable","No matching failed generated-artifact publication can be reviewed.")),
+                };
+            }
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all="camelCase",deny_unknown_fields)]
+            struct Input{resource:String,revision:String,review_token:String}
+            let Ok(input)=serde_json::from_value::<Input>(Value::Object(arguments)) else{
+                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected resource, revision and reviewToken."));
+            };
+            if input.resource.len()>80||input.revision.len()!=64||input.review_token.len()!=64{
+                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Invalid artifact recovery review."));
+            }
+            let store=store.clone();let provider=provider.clone();let config=state.config.clone();
+            start_job_value(jobs,"managed_artifact_reconcile",move |running| async move{
+                let result=tokio::task::spawn_blocking(move ||{
+                    crate::core::linux_config::mutation_ready(&config,&store)?;
+                    crate::core::declarative::artifact_recovery::reconcile(&store,&provider,&input.resource,&input.revision,&input.review_token)
+                }).await.unwrap_or_else(|_|Err(anyhow::anyhow!("artifact recovery worker failed")));
+                match result{
+                    Ok(review)=>running.finish(Outcome::Succeeded(json!(review))),
+                    Err(_)=>running.finish(Outcome::Failed("Publication metadata changed or could not be preserved; retain the failed journal and re-review.".into()))
+                }
+            }).await
+        }
         "managed_backup_inventory" => {
             // The frozen reference requires the private-configuration policy
             // even though inventory does not mutate native state.

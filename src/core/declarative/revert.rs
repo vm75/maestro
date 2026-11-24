@@ -123,7 +123,7 @@ impl Store {
             .await;
             if let Err(error) = result {
                 let resource = change.resource.clone();
-                journal.failed(&directory, resource)?;
+                journal.failed(&directory, resource,&error)?;
                 return Err(error);
             }
             journal.completed += 1;

@@ -27,6 +27,16 @@ pub struct QuadletStatus {
 }
 
 impl QuadletProvider {
+    pub(in crate::core::declarative) fn recovery_targets(&self,previous:&Config,desired:&Config,id:&str)->Result<Vec<crate::core::declarative::artifact_recovery::Target>>{
+        use crate::core::declarative::{artifact_recovery::Target,plan::service_fingerprint};
+        let render=|config:&Config|->Result<std::collections::BTreeMap<String,Vec<u8>>>{
+            if !config.services.contains_key(id){return Ok(Default::default())}
+            let fingerprint=service_fingerprint(config,id)?;
+            Ok(super::render_quadlet(config,id,&self.artifacts.storage_base,&fingerprint)?.into_iter().map(|(k,v)|(k,v.into_bytes())).collect())
+        };
+        Ok(vec![Target::quadlet(self.artifacts.directory.clone(),id,render(previous)?,render(desired)?)?])
+    }
+
     pub fn new(
         artifacts: QuadletArtifacts,
         runner: CommandRunner,

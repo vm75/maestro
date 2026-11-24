@@ -153,7 +153,7 @@ impl Store {
         for change in &journal.plan.changes {
             if let Err(error) = provider.apply_mode(change, &previous, &desired, mode).await {
                 let resource = change.resource.clone();
-                journal.failed(&directory, resource)?;
+                journal.failed(&directory, resource,&error)?;
                 return Err(error);
             }
             journal.completed += 1;
@@ -264,9 +264,16 @@ impl Store {
         // entries that could have drifted while the process was down.
         let mut observed = Vec::with_capacity(journal.plan.changes.len());
         for (index, change) in journal.plan.changes.iter().enumerate() {
-            let state = provider
-                .observe_mode(change, &previous, &desired, journal.mode)
-                .await?;
+            let state = match provider.observe_mode(change,&previous,&desired,journal.mode).await{
+                Ok(state)=>state,
+                Err(error)=>{
+                    if index==journal.completed && journal.phase==ApplyPhase::Applying && super::artifact_recovery::is_conflict(&error){
+                        let resource=change.resource.clone();
+                        journal.failed(&directory,resource,&error)?;
+                    }
+                    return Err(error);
+                }
+            };
             ensure!(
                 state != ObservedResource::Unknown
                     && (index >= journal.completed || state == ObservedResource::After),
@@ -289,6 +296,7 @@ impl Store {
             self.save_locked(&directory, &bytes, &base, &desired)?;
         }
         journal.failed_resource = None;
+        journal.artifact_conflict=false;
         if journal.phase == ApplyPhase::Prepared {
             journal.phase = ApplyPhase::Applying;
             journal.superseded = None;
@@ -328,7 +336,7 @@ impl Store {
             .await;
             if let Err(error) = result {
                 let resource = change.resource.clone();
-                journal.failed(&directory, resource)?;
+                journal.failed(&directory, resource,&error)?;
                 return Err(error);
             }
             journal.completed += 1;

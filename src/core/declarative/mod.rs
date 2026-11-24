@@ -1,5 +1,6 @@
 mod apply;
 mod artifacts;
+pub mod artifact_recovery;
 pub mod backup_inventory;
 pub mod backup_capture;
 pub mod browse;

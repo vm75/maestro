@@ -189,6 +189,14 @@ impl Drop for TempDefinition {fn drop(&mut self){let _=fs::remove_file(self.0.jo
 
 impl ComposeProvider {
     fn unit_file(&self,id:&str)->PathBuf{self.unit_dir.join(id).join(unit(id))}
+    pub(in crate::core::declarative) fn native_recovery_targets(&self,previous:&Config,desired:&Config,id:&str)->Result<Vec<crate::core::declarative::artifact_recovery::Target>>{
+        use crate::core::declarative::artifact_recovery::Target;
+        let before=self.artifacts(previous,id)?;let after=self.artifacts(desired,id)?;
+        Ok(vec![
+            Target::dedicated("Native Compose definition",self.base_dir.join(id),"compose.yaml",before.as_ref().map(|a|a.compose.clone()),after.as_ref().map(|a|a.compose.clone()))?,
+            Target::dedicated("Native boot launcher",self.unit_dir.join(id),&unit(id),before.map(|a|a.boot),after.map(|a|a.boot))?,
+        ])
+    }
     fn artifacts(&self,config:&Config,id:&str)->Result<Option<Artifacts>>{
         let Some(service)=config.services.get(id) else{return Ok(None)};
         ensure!(self.matches(service),"resource belongs to another Compose provider");
