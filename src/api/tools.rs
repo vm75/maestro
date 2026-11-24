@@ -39,6 +39,11 @@ enum Tool {
     PackagesInstall,
     DependenciesInstall,
     BackupInventory,
+    BackupPrepare,
+    BackupRecoveryStatus,
+    BackupRecover,
+    BackupPublish,
+    BackupRelease,
     ManagedConfigRead,
     ManagedConfigValidate,
     ManagedConfigHealth,
@@ -76,7 +81,7 @@ enum Tool {
 }
 
 impl Tool {
-    const ALL: [Self; 48] = [
+    const ALL: [Self; 53] = [
         Self::Status,
         Self::Capabilities,
         Self::JobsList,
@@ -91,6 +96,11 @@ impl Tool {
         Self::PackagesInstall,
         Self::DependenciesInstall,
         Self::BackupInventory,
+        Self::BackupPrepare,
+        Self::BackupRecoveryStatus,
+        Self::BackupRecover,
+        Self::BackupPublish,
+        Self::BackupRelease,
         Self::ManagedConfigRead,
         Self::ManagedConfigValidate,
         Self::ManagedConfigHealth,
@@ -195,6 +205,11 @@ impl Tool {
                 "Review backup inputs",
                 "Read bounded private source metadata and native prerequisites; not a restorable backup.",
             ),
+            Self::BackupPrepare => ("managed_backup_prepare","Capture backup inputs","Capture a reviewed revision into a private checksummed non-restorable bundle; optionally quiesce and resume workloads."),
+            Self::BackupRecoveryStatus => ("managed_backup_recovery_status","Review backup recovery","Inspect durable workload and staged capture progress without activating workloads."),
+            Self::BackupRecover => ("managed_backup_recover","Resume interrupted backup workloads","Recover only previously running workloads whose stop was attempted; never replay capture."),
+            Self::BackupPublish => ("managed_backup_publish","Verify and finish capture publication","Verify a recorded capture against its manifest and publish without replacing data."),
+            Self::BackupRelease => ("managed_backup_release","Leave backup workloads as they are","Release reviewed recovery blocker without starting workloads, publishing or deleting data."),
             Self::ManagedConfigRead => (
                 "managed_config_read",
                 "Inspect authoritative configuration",
@@ -469,6 +484,7 @@ fn modules(state: &AppState) -> Value {
         {"id": "monitor", "title": "Resource monitoring", "available": !state.config.test_mode},
         {"id": "updates", "title": "System package updates", "available": package_updates::available(state)},
         {"id": "workloads", "title": "Applications", "available": true, "writable": writes_allowed(state)},
+        {"id":"managed_backup","title":"Portable backup planning","available":true,"writable":writes_allowed(state)},
         {"id": "shares", "title": "File sharing", "available": true}
     ])
 }
@@ -488,8 +504,8 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                 Tool::ServicesList | Tool::ServicesDetails | Tool::ServicesLogs => "systemd",
                 Tool::MonitorSnapshot | Tool::MonitorProcesses => "monitor",
                 Tool::UpdatesStatus | Tool::PackagesInstall | Tool::DependenciesInstall => "updates",
-                Tool::BackupInventory
-                | Tool::ManagedConfigRead
+                Tool::BackupInventory | Tool::BackupPrepare | Tool::BackupRecoveryStatus | Tool::BackupRecover | Tool::BackupPublish | Tool::BackupRelease => "managed_backup",
+                Tool::ManagedConfigRead
                 | Tool::ManagedConfigValidate
                 | Tool::ManagedConfigHealth
                 | Tool::ManagedConfigModel
@@ -534,9 +550,25 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     | Tool::SharesSambaPassword
                     | Tool::SharesSetup
                     | Tool::ManagedSharePublish
-                    | Tool::BackupInventory
+                    | Tool::BackupPrepare | Tool::BackupRecover | Tool::BackupPublish | Tool::BackupRelease
             );
             let input_schema = match tool {
+                Tool::BackupPrepare => json!({"type":"object","additionalProperties":false,"properties":{
+                    "revision":{"type":"string","minLength":1,"maxLength":64},
+                    "destination":{"type":"string","minLength":1,"maxLength":4096},
+                    "quiesce":{"type":"boolean"},
+                    "deadlineSeconds":{"type":"integer","minimum":30,"maximum":86400}
+                },"required":["revision","destination"]}),
+                Tool::BackupRecover | Tool::BackupRelease | Tool::BackupPublish => {
+                    let mut schema=json!({"type":"object","additionalProperties":false,"properties":{
+                        "revision":{"type":"string","minLength":1,"maxLength":64},
+                        "reviewToken":{"type":"string","minLength":1,"maxLength":64}
+                    },"required":["revision","reviewToken"]});
+                    if matches!(tool,Tool::BackupPublish){schema["properties"]["deadlineSeconds"]=json!({"type":"integer","minimum":30,"maximum":86400});}
+                    schema
+                },
+                Tool::BackupInventory | Tool::BackupRecoveryStatus => json!({"type":"object","properties":{},"required":[],"additionalProperties":false}),
+
                 Tool::SharesList => json!({"additionalProperties":false,"properties":{"protocol":{"type":"string","description":"Optional protocol filter","enum":["samba","nfs"]}},"required":[],"type":"object"}),
                 Tool::ManagedConfigReadiness | Tool::ManagedConfigCheck | Tool::ManagedServices => json!({"type":"object","properties":{},"required":[],"additionalProperties":false}),
                 Tool::ManagedApplyStatus => json!({"type":"object","properties":{},"required":[],"additionalProperties":false}),
@@ -768,7 +800,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     tool,
                     Tool::WorkloadsApply | Tool::WorkloadsResume | Tool::WorkloadsRevert
                         | Tool::ApplicationsAction | Tool::PackagesInstall | Tool::DependenciesInstall
-                        | Tool::ManagedResourceSave | Tool::ManagedConfigSave | Tool::ManagedConfigRevert | Tool::ManagedApplyRetry | Tool::SharesSambaPassword | Tool::SharesSetup | Tool::ManagedSharePublish
+                        | Tool::ManagedResourceSave | Tool::ManagedConfigSave | Tool::ManagedConfigRevert | Tool::ManagedApplyRetry | Tool::SharesSambaPassword | Tool::SharesSetup | Tool::ManagedSharePublish | Tool::BackupPrepare | Tool::BackupRecover | Tool::BackupPublish | Tool::BackupRelease
                 ),
                 "inputSchema": input_schema
             })
@@ -976,6 +1008,7 @@ pub async fn execute_tool(
             | "managed_storage_create"
             | "managed_service_enable"
             | "managed_service_disable"
+            | "managed_share_publish" | "shares_setup" | "managed_backup_prepare"
     ) {
         if let Err(error) = crate::core::linux_config::mutation_ready(&state.config, store) {
             return (
@@ -1219,7 +1252,7 @@ pub async fn execute_tool(
             | "monitor_snapshot"
             | "updates_status"
             | "workloads_get"
-            | "managed_backup_inventory"
+            | "managed_backup_inventory" | "managed_backup_recovery_status"
             | "managed_config_read"
             | "managed_config_health"
             | "managed_config_readiness"
@@ -1380,6 +1413,7 @@ pub async fn execute_tool(
                     (job.tool.starts_with("services_")
                         || job.tool.starts_with("updates_")
                         || job.tool.starts_with("workloads_")
+                        || job.tool.starts_with("managed_backup_")
                         || matches!(
                             job.tool,
                             "applications_action"
@@ -2072,13 +2106,7 @@ pub async fn execute_tool(
                 );
             }
             // Never perform native mutation or claim the result can be restored.
-            let authority_path = store.path();
-            let root = authority_path.parent().expect("store path has a parent");
-            match crate::core::declarative::backup_inventory::inventory(
-                store,
-                root,
-                &state.config.paths.storage_dir,
-            ) {
+            match crate::core::declarative::backup_capture::inventory(store,&state.config.paths.storage_dir,provider).await {
                 Ok(snapshot) => (StatusCode::OK, json!(snapshot)),
                 Err(_) => (
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -2088,6 +2116,62 @@ pub async fn execute_tool(
                     ),
                 ),
             }
+        }
+
+        "managed_backup_recovery_status" => {
+            if !writes_allowed(state) {
+                return (StatusCode::FORBIDDEN,json_err("writes_disabled","Private backup recovery is disabled with management writes."));
+            }
+            match crate::core::declarative::backup_capture::status(store) {
+                Ok(value)=>(StatusCode::OK,json!(value)),
+                Err(error)=>(StatusCode::CONFLICT,json_err("backup_recovery_unavailable",&error.to_string())),
+            }
+        }
+        "managed_backup_prepare" => {
+            if !writes_allowed(state){
+                return (StatusCode::FORBIDDEN,json_err("writes_disabled","Backup preparation is disabled with management writes."));
+            }
+            let Ok(opts)=serde_json::from_value::<crate::core::declarative::backup_capture::PrepareOptions>(Value::Object(arguments)) else{
+                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected revision, absolute destination and optional quiesce/deadlineSeconds."));
+            };
+            if crate::core::declarative::backup_capture::deadline(opts.deadline_seconds).is_err(){
+                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","deadlineSeconds must be between 30 and 86400."));
+            }
+            let store=store.clone();let provider=provider.clone();let root=state.config.paths.storage_dir.clone();let config=state.config.clone();
+            start_job_value(jobs,"managed_backup_prepare",move |running| async move {
+                let result=async{
+                    crate::core::linux_config::mutation_ready(&config,&store)?;
+                    crate::core::declarative::backup_capture::prepare(&store,&root,&provider,opts).await
+                }.await;
+                match result{Ok(value)=>running.finish(Outcome::Succeeded(value)),Err(error)=>running.finish(Outcome::Failed(error.to_string()))}
+            }).await
+        }
+        "managed_backup_recover" | "managed_backup_publish" | "managed_backup_release" => {
+            if !writes_allowed(state){
+                return (StatusCode::FORBIDDEN,json_err("writes_disabled","Private backup recovery is disabled with management writes."));
+            }
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all="camelCase",deny_unknown_fields)]
+            struct Input{revision:String,review_token:String,deadline_seconds:Option<u64>}
+            let Ok(input)=serde_json::from_value::<Input>(Value::Object(arguments)) else{
+                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected revision and reviewToken."));
+            };
+            if input.revision.is_empty()||input.revision.len()>64||input.review_token.len()!=64||
+                (name!="managed_backup_publish"&&input.deadline_seconds.is_some())||
+                crate::core::declarative::backup_capture::deadline(input.deadline_seconds.unwrap_or(0)).is_err(){
+                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Invalid review or deadline."));
+            }
+            let tool=match name{"managed_backup_recover"=>"managed_backup_recover","managed_backup_publish"=>"managed_backup_publish",_=>"managed_backup_release"};
+            let store=store.clone();let provider=provider.clone();let root=state.config.paths.storage_dir.clone();
+            start_job_value(jobs,tool,move |running| async move{
+                use crate::core::declarative::backup_capture as backup;
+                let result=match tool{
+                    "managed_backup_recover"=>backup::recover(&store,&provider,&input.revision,&input.review_token).await,
+                    "managed_backup_publish"=>tokio::task::spawn_blocking(move ||backup::publish(&store,&root,&input.revision,&input.review_token,input.deadline_seconds.unwrap_or(0))).await.unwrap_or_else(|_|Err(anyhow::anyhow!("backup publication worker failed"))),
+                    _=>backup::release(&store,&input.revision,&input.review_token),
+                };
+                match result{Ok(value)=>running.finish(Outcome::Succeeded(json!(value))),Err(error)=>running.finish(Outcome::Failed(error.to_string()))}
+            }).await
         }
 
         "managed_config_plan"
