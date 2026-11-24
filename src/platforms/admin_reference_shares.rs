@@ -289,6 +289,91 @@ async fn inspect(protocol: &str, definitions: &[Definition]) -> OperationResult<
     Ok(result)
 }
 
+// Candidate checks mirror shares/backend.go definitionsTransaction and
+// shares/samba.go validateSamba. Validation has no activation or publication.
+async fn validate_samba(next: &[Definition], previous: &[Definition], candidate: &defs::Candidate) -> OperationResult<()> {
+    let fail = |error: anyhow::Error| Failure::failed(error.to_string());
+    let main = defs::read_file(Path::new(SAMBA_MAIN), false).ok()
+        .filter(|snapshot| snapshot.exists).ok_or_else(|| Failure::failed("Samba main config is inaccessible"))?;
+    let directory = Path::new("/etc/samba");
+    let shadow_file = defs::Candidate::new(directory, &shadow(&main.data,candidate.text()).map_err(fail)?, 0o600).map_err(fail)?;
+    let empty = defs::Candidate::new(directory, &defs::render("samba",&[]).map_err(fail)?, 0o600).map_err(fail)?;
+    let unmanaged_file = defs::Candidate::new(directory, &shadow(&main.data,empty.text()).map_err(fail)?, 0o600).map_err(fail)?;
+    let unmanaged = samba_effective(unmanaged_file.text()).await.map_err(fail)?;
+    for managed in next.iter().chain(previous) {
+        if unmanaged.iter().any(|other| managed.name == share_key(&other.name)) {
+            return Err(Failure::failed("An unmanaged Samba section conflicts with a managed share name"));
+        }
+    }
+    let effective = samba_effective(shadow_file.text()).await.map_err(fail)?;
+    for d in next {
+        if !effective.iter().find(|actual| share_key(&actual.name) == d.name)
+            .is_some_and(|actual| same_samba(d,actual)) {
+            return Err(Failure::failed("Samba effective configuration does not match the managed share; check includes and overrides"));
+        }
+    }
+    if !defs::read_file(Path::new(SAMBA_MAIN),false).is_ok_and(|latest| latest.data == main.data) {
+        return Err(Failure::failed("Samba main config changed during validation"));
+    }
+    Ok(())
+}
+
+fn check_nfs_conflicts(previous: &[Definition], next: &[Definition], configured: &[Export], active: &[Export]) -> OperationResult<()> {
+    let old_pairs = pairs(previous);
+    let mut touched = pairs(previous);
+    touched.extend(pairs(next));
+    let safe_options = regex::Regex::new(r"^[A-Za-z0-9_,=:.+/-]+$").unwrap();
+    for e in active {
+        if touched.contains_key(&key(e)) && !safe_options.is_match(&e.options.join(",")) {
+            return Err(Failure::failed("Existing runtime options cannot be safely restored; resolve them with native NFS tools first"));
+        }
+    }
+    for d in previous.iter().chain(next) {
+        if configured.iter().any(|e| e.path == d.path) {
+            return Err(Failure::invalid("An unmanaged NFS export already uses this path"));
+        }
+    }
+    for d in next {
+        if active.iter().any(|e| e.path == d.path && !old_pairs.contains_key(&key(e))) {
+            return Err(Failure::invalid("An unmanaged runtime NFS export already uses this path"));
+        }
+    }
+    Ok(())
+}
+
+async fn validate_candidate(protocol: &str, old: &Snapshot, previous: &[Definition], next: &[Definition]) -> OperationResult<()> {
+    let fail = |error: anyhow::Error| Failure::failed(error.to_string());
+    let data = defs::render(protocol,next).map_err(|e|Failure::invalid(e.to_string()))?;
+    if protocol == "samba" {
+        if program("testparm").is_none() || program("smbcontrol").is_none() {
+            return Err(Failure::unavailable("Samba testparm and smbcontrol are required"));
+        }
+        let effective = samba_effective(SAMBA_MAIN).await.map_err(fail)?;
+        let desired: BTreeSet<_> = next.iter().map(|d| d.name.as_str()).collect();
+        let owned: BTreeSet<_> = previous.iter().map(|d| d.name.as_str()).collect();
+        for d in effective {
+            let name = share_key(&d.name);
+            if desired.contains(name.as_str()) && !owned.contains(name.as_str()) {
+                return Err(Failure::invalid("An unmanaged Samba share already uses this name"));
+            }
+        }
+    } else {
+        if program("exportfs").is_none() { return Err(Failure::unavailable("exportfs is required")); }
+        let configured = nfs_configured().map_err(|_| Failure::failed("Cannot safely inspect unmanaged NFS exports"))?;
+        let active = nfs_active().await.map_err(|_| Failure::failed("Cannot snapshot the current NFS export table"))?;
+        check_nfs_conflicts(previous,next,&configured,&active)?;
+    }
+    let path = Path::new(file(protocol));
+    let candidate = defs::Candidate::new(path.parent().expect("fixed managed path"),&data,
+        if old.exists { old.mode } else { 0o644 })
+        .map_err(|e| Failure::failed(format!("Create managed fragment candidate: {e}")))?;
+    if protocol == "samba" { validate_samba(next,previous,&candidate).await?; }
+    if !defs::read_file(path,true).is_ok_and(|current| current.revision() == old.revision()) {
+        return Err(Failure::failed("Managed fragment changed during validation; refresh and retry"));
+    }
+    Ok(())
+}
+
 pub(super) async fn execute(operation: &str, input: &Map<String,Value>) -> OperationResult<Value> {
     let protocol = string(input,"protocol");
     if operation == "shares_list" { return list(protocol).await; }
@@ -299,12 +384,36 @@ pub(super) async fn execute(operation: &str, input: &Map<String,Value>) -> Opera
     let definitions = defs::normalize(protocol,definitions,operation != "shares_definitions_inspect")
         .map_err(|e|Failure::invalid(e.to_string()))?;
     if operation == "shares_definitions_inspect" { return inspect(protocol,&definitions).await; }
-    Err(Failure::unavailable("Native reference share validation and publication have not yet been ported"))
+    let snapshot = defs::read_file(Path::new(file(protocol)),true)
+        .map_err(|e|Failure::failed(if operation == "shares_definitions_apply" { "managed share output is inaccessible".into() } else { e.to_string() }))?;
+    if operation == "shares_definitions_apply" && snapshot.revision() != string(input,"revision") {
+        return Err(Failure::new("conflict",409,"Managed share output changed; recheck configuration"));
+    }
+    let previous = defs::load(protocol,&snapshot).map_err(|e|Failure::failed(e.to_string()))?;
+    if operation == "shares_definitions_validate" {
+        validate_candidate(protocol,&snapshot,&previous,&definitions).await?;
+        return Ok(json!({"valid":true}));
+    }
+    // Publication remains gated until the native rollback and cancellation
+    // paths are ported and the root policy is applied to the mutation.
+    Err(Failure::unavailable("Native reference share publication has not yet been ported"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nfs_conflicts_block_unmanaged_and_unrestorable_entries() {
+        let next = defs::normalize("nfs", defs::decode(r#"[{"name":"docs","path":"/srv/docs","clients":["192.0.2.0/24"],"rootSquash":true,"security":"sys"}]"#).unwrap(), false).unwrap();
+        let owned: Vec<_> = pairs(&next).into_values().collect();
+        assert!(check_nfs_conflicts(&[],&next,&[],&owned).is_err());
+        assert!(check_nfs_conflicts(&next,&next,&owned,&[]).is_err());
+        assert!(check_nfs_conflicts(&next,&next,&[],&owned).is_ok());
+        let mut unsafe_active = owned;
+        unsafe_active[0].options.push("bad option".into());
+        assert!(check_nfs_conflicts(&next,&next,&[],&unsafe_active).is_err());
+    }
 
     #[test]
     fn reference_samba_include_and_nfs_flags() {
