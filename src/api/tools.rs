@@ -2650,15 +2650,19 @@ pub async fn execute_tool(
                     let snapshot = store.read()?.ok_or_else(|| anyhow::anyhow!("configuration is unavailable"))?;
                     let mut desired = snapshot.config()?;
                     let service = desired.services.get(&id).ok_or_else(|| anyhow::anyhow!("unknown managed service"))?;
-                    anyhow::ensure!(service.backend == "quadlet", "native boot policy is not verified for this backend");
-                    let native = provider.quadlet.as_ref().ok_or_else(|| anyhow::anyhow!("rootless Quadlet provider is unavailable"))?;
-                    let status = native.status_details(&desired, &id).await?;
-                    anyhow::ensure!(status.state != "unknown", "managed runtime identity cannot be verified");
+                    anyhow::ensure!(matches!(service.backend.as_str(),"quadlet"|"compose"), "native boot policy is not verified for this backend");
+                    let compose = if service.engine == "docker" {&provider.docker_compose} else {&provider.podman_compose};
+                    if service.backend == "compose" {
+                        compose.verify_boot_policy(&desired,&id).await?;
+                    } else {
+                        let native = provider.quadlet.as_ref().ok_or_else(|| anyhow::anyhow!("rootless Quadlet provider is unavailable"))?;
+                        let status = native.status_details(&desired,&id).await?;
+                        anyhow::ensure!(status.state != "unknown","managed runtime identity cannot be verified");
+                    }
                     if enable {
                         crate::core::declarative::preflight::check_startup_files(&state, &store, &desired, &id)?;
                     }
                     if service.enabled == enable {
-                        native.verify_boot_policy(&desired, &id).await?;
                         return Ok::<_, anyhow::Error>(json!({"service":id,"enabled":enable,"revision":snapshot.revision}));
                     }
                     desired.services.get_mut(&id).unwrap().enabled = enable;
