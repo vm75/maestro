@@ -4,7 +4,7 @@ use std::{collections::{BTreeMap, BTreeSet}, fs, path::{Path, PathBuf}};
 use anyhow::{Result, ensure};
 use serde_json::{Map, Value, json};
 
-use super::{Failure, OperationResult, SYSTEMD_ENV, capture, capture_in, program, string};
+use super::{Failure, OperationResult, Policy, SYSTEMD_ENV, capture, capture_in, program, string};
 use crate::core::declarative::{
     native_shares::{Definition, Export, connections, option_flag, option_value, parse_exports, parse_samba, share_key},
     share_definitions::{self as defs, Snapshot},
@@ -374,16 +374,22 @@ async fn validate_candidate(protocol: &str, old: &Snapshot, previous: &[Definiti
     Ok(())
 }
 
-pub(super) async fn execute(operation: &str, input: &Map<String,Value>) -> OperationResult<Value> {
+pub(super) async fn execute(operation: &str, input: &Map<String,Value>, policy: &Policy) -> OperationResult<Value> {
     let protocol = string(input,"protocol");
     if operation == "shares_list" { return list(protocol).await; }
     if operation == "shares_setup" {
+        if !policy.share_writes || !policy.package_writes {
+            return Err(Failure::denied("Share server setup is disabled by root-owned policy"));
+        }
         return Err(Failure::unavailable("Native reference share setup has not yet been ported"));
     }
     let definitions = defs::decode(string(input,"definitions")).map_err(|e|Failure::invalid(e.to_string()))?;
     let definitions = defs::normalize(protocol,definitions,operation != "shares_definitions_inspect")
         .map_err(|e|Failure::invalid(e.to_string()))?;
     if operation == "shares_definitions_inspect" { return inspect(protocol,&definitions).await; }
+    if operation == "shares_definitions_apply" && !policy.share_writes {
+        return Err(Failure::denied("Share publication is disabled by root-owned policy"));
+    }
     let snapshot = defs::read_file(Path::new(file(protocol)),true)
         .map_err(|e|Failure::failed(if operation == "shares_definitions_apply" { "managed share output is inaccessible".into() } else { e.to_string() }))?;
     if operation == "shares_definitions_apply" && snapshot.revision() != string(input,"revision") {
