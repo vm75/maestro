@@ -1,6 +1,6 @@
 //! Direct port of Server Man libvirt.go. Native commands always address a
 //! verified persistent UUID on an explicitly selected local connection.
-use std::{path::{Path,PathBuf},time::Duration};
+use std::{path::PathBuf,time::Duration};
 use anyhow::{Result,anyhow,ensure};
 use crate::command::CommandRunner;
 use super::{ApplyMode,ApplyProvider,Change,Config,ObservedResource,Operation,RecoveryProvider,Service,
@@ -303,6 +303,117 @@ impl RecoveryProvider for LibvirtProvider{
 #[cfg(test)]
 mod tests{
     use super::*;
+    // Direct port of the reference recorder lifecycle tests. No real libvirt,
+    // disk image, KVM device or host service is needed.
+    #[tokio::test]
+    async fn reference_define_defer_restart_and_remove(){
+        use std::{fs,os::unix::fs::PermissionsExt};
+        let tmp=tempfile::tempdir().unwrap();
+        fs::set_permissions(tmp.path(),fs::Permissions::from_mode(0o700)).unwrap();
+        let log=tmp.path().join("commands");
+        let persistent=tmp.path().join("persistent.xml");
+        let active=tmp.path().join("active.xml");
+        let running=tmp.path().join("running");
+        let enabled=tmp.path().join("enabled");
+        let fail=tmp.path().join("fail-shutdown");
+        let binary=tmp.path().join("virsh");
+        let validator=tmp.path().join("virt-xml-validate");
+        let uuid="c3d699a2-921d-4009-8b63-1d0144fbb7dc";
+        let script=format!(r#"#!/bin/sh
+printf '%s\n' "$*" >> '{log}'
+[ "$1" = --connect ] && [ "$2" = qemu:///session ] || exit 1
+shift 2
+case "$1" in
+ uri) echo qemu:///session;;
+ domcapabilities) echo '<domainCapabilities><domain>kvm</domain><arch>x86_64</arch><machine>q35</machine></domainCapabilities>';;
+ list) if [ -f '{persistent}' ]; then
+  if [ "$3" = --uuid ]; then echo '{uuid}'; else echo sm-guest; fi
+ fi;;
+ dumpxml) if [ "$4" != --inactive ] && [ -f '{running}' ]; then cat '{active}'; else cat '{persistent}'; fi;;
+ domstate) if [ -f '{running}' ]; then echo running; else echo 'shut off'; fi;;
+ dominfo) echo 'Persistent: yes'
+ if [ -f '{enabled}' ]; then echo 'Autostart: enable'; else echo 'Autostart: disable'; fi;;
+ define) cp "$2" '{persistent}';;
+ autostart) if [ "$4" = --disable ]; then rm -f '{enabled}'; else : > '{enabled}'; fi;;
+ start) cp '{persistent}' '{active}'; : > '{running}';;
+ shutdown) [ ! -f '{fail}' ] || exit 1; rm -f '{running}';;
+ undefine) [ ! -f '{running}' ] || exit 1; rm -f '{persistent}' '{enabled}';;
+ *) exit 1;;
+esac
+"#,log=log.display(),persistent=persistent.display(),uuid=uuid,running=running.display(),
+active=active.display(),enabled=enabled.display(),fail=fail.display());
+        fs::write(&binary,script).unwrap();
+        fs::write(&validator,"#!/bin/sh\n[ -f \"$1\" ] && [ \"$2\" = domain ]\n").unwrap();
+        for path in [&binary,&validator]{fs::set_permissions(path,fs::Permissions::from_mode(0o700)).unwrap();}
+        let disk=tmp.path().join("root.qcow2");
+        fs::write(&disk,b"fixture disk; do not delete").unwrap();
+        let mut provider=LibvirtProvider::new(binary,CommandRunner::new(false))
+            .native_paths(tmp.path().join("generated"),tmp.path().into()).validator(validator);
+        provider.uri=Some("qemu:///session".into());
+        let config=super::super::parse(br#"version: 1
+storage:
+  root: {kind: file, format: qcow2, path: root.qcow2}
+bindings:
+  lan: {kind: network, name: default}
+services:
+  guest:
+    kind: vm
+    backend: libvirt
+    enabled: false
+    vm:
+      uuid: "c3d699a2-921d-4009-8b63-1d0144fbb7dc"
+      mac: "52:54:00:12:34:56"
+      cpus: 2
+      memory_mib: 1024
+      network: lan
+      disks: [root]
+"#).unwrap();
+        let empty=Config{version:1,..Default::default()};
+        let change=|op,before:Option<&Config>,after:Option<&Config>|Change{
+            resource:"service/guest".into(),backend:"libvirt".into(),operation:op,
+            before:before.map(|c|super::super::plan::service_fingerprint(c,"guest").unwrap()),
+            after:after.map(|c|super::super::plan::service_fingerprint(c,"guest").unwrap()),
+        };
+        let create=change(Operation::Create,None,Some(&config));
+        provider.apply(&create,&empty,&config).await.unwrap();
+        assert!(!running.exists());
+        assert_eq!(provider.status_details(&config,"guest").await.unwrap().state,"stopped");
+        provider.native_action(&config,"guest","start").await.unwrap();
+        let mut next=config.clone();next.services.get_mut("guest").unwrap().vm.as_mut().unwrap().memory_mib=2048;
+        let update=change(Operation::Update,Some(&config),Some(&next));
+        assert!(provider.apply(&update,&config,&next).await.is_err());
+        provider.apply_mode(&update,&config,&next,ApplyMode::NextStart).await.unwrap();
+        assert!(provider.status_details(&next,"guest").await.unwrap().restart_required);
+        fs::write(&fail,b"fail").unwrap();
+        let before=fs::read_to_string(&log).unwrap();
+        assert!(provider.native_action(&next,"guest","restart").await.is_err());
+        assert!(!fs::read_to_string(&log).unwrap()[before.len()..].lines().any(|line|line.contains(" start ")||line.contains(" destroy ")||line.contains(" reboot ")));
+        fs::remove_file(&fail).unwrap();
+        provider.native_action(&next,"guest","restart").await.unwrap();
+        assert!(provider.status_details(&next,"guest").await.unwrap().runtime_matches);
+        let prior=next.clone();next.services.get_mut("guest").unwrap().enabled=true;
+        let toggle=change(Operation::Update,Some(&prior),Some(&next));
+        let before=fs::read_to_string(&log).unwrap();
+        provider.apply(&toggle,&prior,&next).await.unwrap();
+        assert!(enabled.exists()&&running.exists());
+        assert!(!fs::read_to_string(&log).unwrap()[before.len()..].lines().any(|line|line.contains(" shutdown ")||line.contains(" start ")));
+        let remove=change(Operation::Remove,Some(&next),None);
+        assert!(provider.apply(&remove,&next,&empty).await.is_err());
+        provider.native_action(&next,"guest","stop").await.unwrap();
+        let owned=fs::read_to_string(&persistent).unwrap();
+        fs::write(&persistent,owned.replace(xml::NS,"https://foreign.invalid/")).unwrap();
+        assert!(provider.apply(&remove,&next,&empty).await.is_err());
+        fs::write(&persistent,&owned).unwrap();
+        provider.apply(&remove,&next,&empty).await.unwrap();
+        assert_eq!(provider.observe(&remove,&next,&empty).await.unwrap(),ObservedResource::After);
+        assert_eq!(fs::read(&disk).unwrap(),b"fixture disk; do not delete");
+        let commands=fs::read_to_string(&log).unwrap();
+        assert!(commands.contains("undefine --domain"));
+        assert!(commands.contains("--keep-nvram --keep-tpm"));
+        assert!(!commands.contains("--remove-all-storage"));
+        assert!(!commands.lines().any(|line|line.contains(" destroy ")));
+    }
+
     #[tokio::test]
     async fn lifecycle_does_not_require_native_capture_in_simulation(){
         let provider=LibvirtProvider::new("/nonexistent/virsh".into(),CommandRunner::new(true));
