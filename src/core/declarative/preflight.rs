@@ -586,12 +586,24 @@ async fn backend_prerequisites(
             }
         }
         "incus" => {
-            if probe(state, &commands.incus, &["query", "local:/1.0"]).await.is_none() {
-                issues.push(backend_issue(backend, "error", "incus_unavailable",
-                    "The local Incus daemon is unavailable."));
+            let provider = super::incus::IncusProvider::new(commands.incus.clone(),state.runner.clone())
+                .native_paths(state.config.paths.applications_dir.clone());
+            if let Err(error) = provider.check_prerequisites().await {
+                issues.push(issue("error","backend/incus","runtime","incus_unavailable",
+                    error.to_string(),"Check local daemon, QEMU SPICE support and workload account permissions."));
+            } else {
+                use futures_util::{StreamExt,stream};
+                let mut checks = stream::iter(config.services.iter().filter(|(_,s)|s.backend=="incus"))
+                    .map(|(id,_)| { let provider=&provider; async move {
+                        (id,provider.check_resource(config,id).await)
+                    }}).buffer_unordered(4);
+                while let Some((id,result))=checks.next().await {
+                    if let Err(error)=result {
+                        issues.push(issue("error",&format!("service/{id}"),"bindings","incus_prerequisite",
+                            error.to_string(),"Check the explicit Incus project, pool, network and supported VM settings."));
+                    }
+                }
             }
-            issues.push(backend_issue(backend, "unknown", "provider_checks_pending",
-                "QEMU, project, pool, network and native guest prerequisites are not yet verified."));
         }
         "samba" | "nfs" => {
             let provider = super::shares::ShareProvider::from_config(&state.config,state.runner.is_test_mode());
