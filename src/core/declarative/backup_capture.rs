@@ -150,7 +150,7 @@ fn reviewed(store:&Store,dir:&File,revision:&str,token:&str)->Result<Recovery>{
     Ok(j)
 }
 pub fn release(store:&Store,revision:&str,token:&str)->Result<RecoveryStatus>{
-    let dir=store.lock_directory()?;let mut j=reviewed(store,&dir,revision,token)?;
+    let dir=store::LockedDirectory::try_acquire(store.directory()?)?;let mut j=reviewed(store,&dir,revision,token)?;
     if pending(&j){j.stage="released".into();if !matches!(j.artifact.stage.as_str(),"published"|"discarded"){j.artifact.stage="released".into();}persist(store,&dir,&mut j)?;}
     status(store)
 }
@@ -540,6 +540,8 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
     }
     ensure!(opts.quiesce||running.is_empty(),"running workloads must be quiesced");
     let publication=Publication::new(&opts.destination,source_root)?;
+    let required=inv.inputs.iter().filter_map(|i|i.allocated_bytes.or(i.logical_bytes)).try_fold(METADATA_RESERVE,|a,b|a.checked_add(b).context("capture capacity estimate overflow"))?;
+    ensure!(available_bytes(&publication.root)? >= required,"insufficient disk space at destination");
     let mut j=Recovery{version:1,revision:snapshot.revision.clone(),destination:opts.destination.clone(),stage:"capturing".into(),updated_at:Utc::now(),
         services:running.iter().map(|id|(id.clone(),"untouched".into())).collect(),artifact:publication.artifact.clone()};
     persist(store,&dir,&mut j)?;
