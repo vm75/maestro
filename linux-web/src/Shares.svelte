@@ -102,8 +102,9 @@
       {#each sharesStatus.shares as native}
         <article class="service-card">
           <strong>{native.protocol.toUpperCase()} · {native.name}</strong>
-          <p><code>{native.path || 'Path unavailable'}</code></p>
-          <p>{native.configured ? 'Configured' : 'Not observed in configuration'} · {native.runtime.replaceAll('_', ' ')}{native.connections === undefined ? '' : ' · ' + native.connections + ' connections'}</p>
+          {#if native.path}<p><code>{native.path}</code></p>{/if}
+          {#if !native.configured && native.runtime === 'connected'}<p>Active Samba connection reported by the host, without a matching current configuration entry. This may be an automatic home share or a session retaining earlier settings; it is not a Maestro share definition.</p>{/if}
+          <p>{native.configured ? 'Configured on host' : 'No matching host configuration entry'} · {native.runtime.replaceAll('_', ' ')}{native.connections === undefined ? '' : ' · ' + native.connections + ' connections'}</p>
         </article>
       {:else}
         <p>No native shares were observed with the current permissions.</p>

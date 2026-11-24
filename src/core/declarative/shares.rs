@@ -130,7 +130,7 @@ impl ShareProvider {
             "native share publication requires authorized configuration and optional helper grants");
         let definitions = self.definitions(protocol,config,true)?;
         let state = self.inspect(protocol,&definitions).await?;
-        ensure!(state.available,"native share dependencies, permissions or setup are unavailable");
+        ensure!(state.available,"{}", state.unavailable_reason());
         let (result,_) = admin::share_operation("shares_definitions_validate",definition_args(protocol,&definitions)?).await?;
         ensure!(result["valid"] == true,"native share validation failed");
         Ok(())
@@ -211,7 +211,7 @@ impl ShareProvider {
         ensure!(admin::probe().await.permits_shares(), "native share publication requires an authorized optional helper");
         let next = self.definitions(protocol,desired,true)?;
         let current = self.inspect(protocol,&next).await?;
-        ensure!(current.available, "native share dependencies, permissions or setup are unavailable");
+        ensure!(current.available, "{}", current.unavailable_reason());
         if current.exact() { return Ok(()); }
         // Refuse unrelated owned-fragment drift before a central YAML commit.
         // A missing or externally changed runtime is not automatically replayed.
@@ -228,7 +228,7 @@ impl ShareProvider {
         ensure!(self.native_enabled, "native share publication is disabled");
         let next = self.definitions(protocol,desired,true)?;
         let state = self.inspect(protocol,&next).await?;
-        ensure!(state.available, "native share dependencies, permissions or setup are unavailable");
+        ensure!(state.available, "{}", state.unavailable_reason());
         // Several share changes can describe one protocol. The first operation
         // publishes the complete set; subsequent journal entries are no-ops.
         if state.exact() { return Ok(()); }
@@ -258,8 +258,18 @@ struct DefinitionState {
     matches: bool,
     runtime_matches: bool,
     available: bool,
+    #[serde(default)]
+    reason: String,
 }
 impl DefinitionState {
+    fn unavailable_reason(&self) -> String {
+        if self.reason.is_empty() {
+            "Native share dependencies or permissions are unavailable; check File shares service status.".into()
+        } else {
+            format!("{}. Check File shares service status; run Set up server if host setup is required.", self.reason)
+        }
+    }
+
     fn exact(&self) -> bool { self.available && self.matches && self.runtime_matches }
 }
 
@@ -377,7 +387,7 @@ shares:
     #[test]
     fn inspection_requires_both_configured_and_runtime_state() {
         let make = |matches,runtime_matches,available| DefinitionState {
-            revision:"a".repeat(64),matches,runtime_matches,available
+            revision:"a".repeat(64),matches,runtime_matches,available,reason:String::new()
         };
         assert!(make(true,true,true).exact());
         assert!(!make(true,false,true).exact());

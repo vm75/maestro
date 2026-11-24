@@ -947,3 +947,43 @@ Repository-wide formatting checks still report existing differences outside
 this corrective change. Linux Clippy with `-D warnings` reports seven existing
 findings in command argument counts, capture return/cast expressions and a
 preflight conditional; these are separate from the fixed compilation blockers.
+
+### Samba setup and password UI correction
+
+Operator feedback exposed a setup deadlock: File shares offered native server setup
+only for protocols already present in saved definitions, while saving an enabled
+share required setup first. Setup is now offered for unavailable Samba/NFS backends
+even with no definitions. Native save errors retain the helper inspection reason.
+Removed the duplicate password dialog, which incorrectly expected a job from the
+synchronous secret-bearing password API; the existing direct password form remains.
+Connection-only Samba rows now explain that a live host session can exist without
+a current configuration entry or Maestro definition. These observations are retained
+rather than treated as authoritative definitions. Svelte/TypeScript checks and the
+Linux UI production build, Linux-only cargo check and the focused share inspection
+test passed (test build reports an existing unused import in backup_capture.rs);
+native setup and browser interaction acceptance
+remain pending. Helper installation continues to authorize operations without
+installing or starting share servers.
+
+### Explicit Samba lease policy during setup
+
+At the operator's request, Samba setup now sets `smb2 leases = no` and
+`smb3 directory leases = no` in a final global section, including when the
+managed include already exists, and reloads Samba after enabling/starting it.
+This intentionally adjusts the reference setup defaults for host-side rename/move
+visibility. Existing unrelated configuration is preserved and repeated setup
+is idempotent. Focused setup tests passed; native testparm on a temporary config
+confirmed both effective settings are No. Existing Windows sessions still need
+to reconnect. Live setup and Windows Explorer acceptance remain pending.
+
+### Optional global Samba change notifications
+
+At the operator's request, Samba setup now exposes one checkbox controlling
+both `change notify` and `kernel change notify` for all shares, enabled by
+default. These are global options in the supported native Samba version. The
+existing `shares_setup` operation accepts optional `changeNotify` (default true);
+the daemon forwards it to the same helper implementation. Setup remains
+available after initial provisioning so operators can change the option.
+Three focused helper setup tests, Svelte/TypeScript checks and the UI production
+build passed. Native testparm on temporary files confirmed both Yes and No
+values. Live setup and Windows Explorer acceptance remain pending.

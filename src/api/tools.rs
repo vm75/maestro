@@ -659,6 +659,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                 Tool::SharesSetup => json!({
                     "type":"object","properties":{
                         "protocol":{"type":"string","enum":["samba","nfs"],"description":"Server protocol"},
+                        "changeNotify":{"type":"boolean","default":true,"description":"Enable both Samba change notification settings for all shares"},
                         "confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."}
                     },"required":["protocol","confirm"],"additionalProperties":false
                 }),
@@ -1610,7 +1611,8 @@ pub async fn execute_tool(
         "shares_setup" => {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct SetupArgs { protocol: String, confirm: bool }
+            struct SetupArgs { protocol: String, confirm: bool, #[serde(default = "default_change_notify", rename = "changeNotify")] change_notify: bool }
+            fn default_change_notify() -> bool { true }
             let Ok(input) = serde_json::from_value::<SetupArgs>(Value::Object(arguments)) else {
                 return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected a protocol and confirm=true."));
             };
@@ -1628,7 +1630,7 @@ pub async fn execute_tool(
                 return (StatusCode::SERVICE_UNAVAILABLE,json_err("helper_unavailable","Share setup requires authorized share and package grants."));
             }
             start_job_value(jobs,"shares_setup",move |running| async move {
-                match admin::share_operation("shares_setup",json!({"protocol":input.protocol,"confirm":true})).await {
+                match admin::share_operation("shares_setup",json!({"protocol":input.protocol,"confirm":true,"changeNotify":input.change_notify})).await {
                     Ok((result,output)) => {
                         running.append_output(&output);
                         running.finish(Outcome::Succeeded(result));

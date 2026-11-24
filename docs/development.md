@@ -75,7 +75,10 @@ and `server.privileged_operations: true` in the native Linux format. For the
 legacy layout use `system.allow_workload_writes`, `system.allow_package_writes`
 and `system.allow_share_writes`. The helper target intentionally does not
 rewrite this workload-owned configuration. Restart with `make run-linux`
-and check Agent access > Capabilities. Use `sudoedit /etc/maestro/admin-policy.json`
+and check Agent access > Capabilities. Before saving an enabled file share,
+open File shares and run **Set up server** for Samba or NFS. Samba setup adds
+the managed include to `smb.conf`; the managed fragment is published when
+share definitions are applied. Use `sudoedit /etc/maestro/admin-policy.json`
 to narrow or change the reviewed grants.
 
 ```sh

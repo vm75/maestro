@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import DefinitionEditor from '../lib/DefinitionEditor.svelte'
-  import SambaPasswordDialog from '../lib/SambaPasswordDialog.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import NativeShares from '../Shares.svelte'
   import { invokeTool, startJob, type Job, type Discovery, type Status } from '../lib/api'
@@ -20,32 +19,13 @@
   let activeJob = $state<string | null>(null)
   let pending = $state<ShareItem | null>(null)
   let setupPending = $state(false)
-  let passwordOpen = $state(false)
+  let changeNotify = $state(true)
   let sambaUsername = $state('')
-  let passwordJob = $state<string | null>(null)
   let protocol = $state('samba')
   let controller: AbortController | undefined
   let stopped = false
 
-  const neededProtocols = $derived(Array.from(new Set(shares.map(s => s.definition.protocol))))
-  const unavailableProtocols = $derived(
-    neededProtocols.filter(p => {
-      if (servers[p] !== undefined) {
-        if (p === 'samba' && servers[p].available && servers[p].discoveryAvailable === false) {
-          return true
-        }
-        return !servers[p].available || !!servers[p].setupRequired
-      }
-      return shares.some(s => s.definition.protocol === p && s.issues.some(i => i.code === 'share_setup'))
-    })
-  )
-
-  $effect(() => {
-    if (unavailableProtocols.length > 0 && !unavailableProtocols.includes(protocol)) {
-      protocol = unavailableProtocols[0]
-    }
-  })
-
+  const neededProtocols = ['samba', 'nfs']
   async function load() {
     controller?.abort(); controller = new AbortController()
     const signal = controller.signal
@@ -73,7 +53,7 @@
   async function setup() {
     setupPending = false
     if (!canSetup) return
-    try { const job = await startJob('shares_setup', { protocol, confirm: true }); activeJob = job.id; feedback = 'Host share-server setup started.' }
+    try { const job = await startJob('shares_setup', { protocol, confirm: true, changeNotify }); activeJob = job.id; feedback = 'Host share-server setup started.' }
     catch (e) { error = e instanceof Error ? e.message : 'Could not start host setup' }
   }
   onMount(() => {
@@ -81,8 +61,7 @@
       const job = (e as CustomEvent<Job>).detail
       if (job.id !== activeJob) return
       activeJob = null
-      feedback = job.state === 'succeeded' ? (job.id === passwordJob ? `Samba password updated for ${sambaUsername}.` : 'Share configuration applied. Existing clients may retain earlier access until reconnecting.') : job.error || `Operation ${job.state}.`
-      passwordJob = null
+      feedback = job.state === 'succeeded' ? 'Share configuration applied. Existing clients may retain earlier access until reconnecting.' : job.error || `Operation ${job.state}.`
       void load()
     }
     const onKey = (e: KeyboardEvent) => {
@@ -99,45 +78,43 @@
 
 <div class="shares-toolbar">
   <button class="primary" disabled={!allowWrites || activeJob !== null} onclick={() => { editor = { id: '' } }}>Define file share</button>
-  <button disabled={!allowWrites || activeJob !== null || !sambaUsername || discovery.permissions?.sambaPassword?.status !== 'ready'} onclick={() => { passwordOpen = true }}>Set Samba password…</button>
   <button disabled={loading} onclick={load}>{loading ? 'Reading…' : 'Refresh shares'}</button>
 </div>
 
 {#if error}<div class="notice error" role="alert"><p>{error}</p><button onclick={load}>Retry</button></div>{/if}
 {#if feedback}<div class="job-feedback" role="status">{feedback}</div>{/if}
 
-{#if unavailableProtocols.length > 0}
+{#if Object.keys(servers).length > 0}
   <section class="panel host-server-card">
     <h2>Host share server</h2>
     <p>
-      {#if protocol === 'samba' && servers.samba?.available && servers.samba?.discoveryAvailable === false}
+      {#if protocol === 'samba' && servers.samba?.available && !servers.samba?.setupRequired && servers.samba?.discoveryAvailable === false}
         Samba is available, but the WS-Discovery server service could not be found. Install or repair the <code>wsdd</code> server so Windows can discover shares in Network.
       {:else}
-        Install and configure the native server as an explicit host operation, separate from share definitions.
+        Set up the native server before saving an enabled share. This prepares the Samba managed include or NFS export directory. Installing the privileged helper only authorizes this operation.
       {/if}
     </p>
     <div class="host-server-controls">
       <label class="protocol-select">
         <span>Server protocol</span>
         <select bind:value={protocol}>
-          {#each unavailableProtocols as p}
+          {#each neededProtocols as p}
             <option value={p}>{p === 'samba' ? 'Samba' : 'NFS'}</option>
           {/each}
         </select>
       </label>
+      {#if protocol === 'samba'}
+        <label><input type="checkbox" bind:checked={changeNotify} /> Notify clients of filesystem changes (all Samba shares)</label>
+      {/if}
       <button disabled={!canSetup || activeJob !== null} onclick={() => { setupPending = true }}>
-        {protocol === 'samba' && servers.samba?.available && servers.samba?.discoveryAvailable === false ? 'Install wsdd…' : 'Set up server…'}
+        {protocol === 'samba' && servers.samba?.available && !servers.samba?.setupRequired && servers.samba?.discoveryAvailable === false ? 'Install wsdd…' : 'Set up server…'}
       </button>
     </div>
   </section>
 {/if}
 
 {#if !canPublish}<p class="policy-note">{discovery.permissions?.shareWrites?.reason ?? "Native share publication requires authorized helper grants."}</p>{/if}
-<p class="resource-hint intro-hint">Authenticated Samba shares use the Linux account running Maestro{ sambaUsername ? ` (${sambaUsername})` : '' }. Set its Samba password here. Host packages, daemon setup and directory permissions are managed separately.</p>
-
-{#if passwordOpen}
-  <SambaPasswordDialog username={sambaUsername} onClose={() => { passwordOpen = false }} onStarted={(id) => { passwordOpen = false; activeJob = id; passwordJob = id; feedback = 'Samba password update started.' }} />
-{/if}
+<p class="resource-hint intro-hint">Authenticated Samba shares use the Linux account running Maestro{ sambaUsername ? ` (${sambaUsername})` : '' }. Use the Samba account password form below to set its password. Host packages, daemon setup and directory permissions are managed separately.</p>
 
 {#if editor}
   <div class="modal-backdrop" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) editor = null }}>

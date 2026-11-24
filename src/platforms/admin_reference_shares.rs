@@ -574,26 +574,60 @@ fn ensure_native_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn samba_setup_data(original: &Snapshot) -> Result<Option<Vec<u8>>> {
+fn samba_setup_data(original: &Snapshot, change_notify: bool) -> Result<Option<Vec<u8>>> {
     let text = std::str::from_utf8(&original.data)?;
-    for line in text.split('\n') {
-        if let Some((key,value)) = line.trim().split_once('=') {
+    let mut included = false;
+    let mut global = true;
+    let mut smb2 = false;
+    let mut smb3 = false;
+    let mut notify = None;
+    let mut kernel_notify = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with(['#', ';']) { continue; }
+        if let Some(section) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            global = section.trim().eq_ignore_ascii_case("global");
+        }
+        if let Some((key,value)) = line.split_once('=') {
             if key.trim().eq_ignore_ascii_case("include") && value.trim() == SAMBA_MANAGED {
-                shadow(&original.data,SAMBA_MANAGED)?;
-                return Ok(None);
+                included = true;
+            }
+            if global {
+                let disabled = matches!(value.trim().to_ascii_lowercase().as_str(), "no" | "false" | "0");
+                match share_key(key).as_str() {
+                    "changenotify" => notify = Some(!disabled),
+                    "kernelchangenotify" => kernel_notify = Some(!disabled),
+                    "smb2leases" => smb2 = disabled,
+                    "smb3directoryleases" => smb3 = disabled,
+                    _ => {}
+                }
             }
         }
     }
-    if original.exists {
-        let mut data = original.data.clone();
-        data.extend_from_slice(format!("\ninclude = {SAMBA_MANAGED}\n").as_bytes());
-        Ok(Some(data))
+    if included { shadow(&original.data,SAMBA_MANAGED)?; }
+    let notifications_match = notify == Some(change_notify) && kernel_notify == Some(change_notify);
+    if included && smb2 && smb3 && notifications_match { return Ok(None); }
+    let mut data = if original.exists {
+        original.data.clone()
     } else {
-        Ok(Some(format!("[global]\n\tworkgroup = WORKGROUP\n\tserver string = %h server (Samba)\n\tserver role = standalone server\n\tmulticast dns register = yes\ninclude = {SAMBA_MANAGED}\n").into_bytes()))
+        b"[global]\n\tworkgroup = WORKGROUP\n\tserver string = %h server (Samba)\n\tserver role = standalone server\n\tmulticast dns register = yes\n".to_vec()
+    };
+    // A final global section overrides earlier values without rewriting custom
+    // sections. Keep the managed include unique on repeated setup runs.
+    if !smb2 || !smb3 {
+        data.extend_from_slice(b"\n[global]\nsmb2 leases = no\nsmb3 directory leases = no\n");
     }
+    if !notifications_match {
+        let value = if change_notify { "yes" } else { "no" };
+        data.extend_from_slice(format!("\n[global]\nchange notify = {value}\nkernel change notify = {value}\n").as_bytes());
+    }
+    if !included {
+        data.extend_from_slice(format!("\ninclude = {SAMBA_MANAGED}\n").as_bytes());
+    }
+    Ok(Some(data))
 }
 
-async fn prepare_server(protocol: &str) -> Result<()> {
+async fn prepare_server(protocol: &str, change_notify: bool) -> Result<()> {
     if protocol == "nfs" {
         return ensure_native_directory(Path::new(NFS_DIR));
     }
@@ -604,7 +638,7 @@ async fn prepare_server(protocol: &str) -> Result<()> {
     let original = defs::read_file(path,true)?;
     let directory = path.parent().expect("fixed Samba path");
     ensure_native_directory(directory)?;
-    let Some(data) = samba_setup_data(&original)? else { return Ok(()) };
+    let Some(data) = samba_setup_data(&original, change_notify)? else { return Ok(()) };
     let candidate = defs::Candidate::new(directory,&data,if original.exists { original.mode } else { 0o644 })?;
     samba_effective(candidate.text()).await?;
     ensure!(defs::same_file(path,&original), "Samba configuration changed during setup; retry");
@@ -624,7 +658,7 @@ async fn setup_action(unit: &str, action: &str, policy: &Policy, output: &mut Ta
     service(&format!("services_{action}"),args.as_object().expect("fixed service input"),policy,output).await
 }
 
-async fn setup(protocol: &str, policy: &Policy, output: &mut Tail) -> OperationResult<Value> {
+async fn setup(protocol: &str, change_notify: bool, policy: &Policy, output: &mut Tail) -> OperationResult<Value> {
     if !policy.share_writes || !policy.package_writes {
         return Err(Failure::denied("Share server setup is disabled by root-owned policy"));
     }
@@ -642,8 +676,11 @@ async fn setup(protocol: &str, policy: &Policy, output: &mut Tail) -> OperationR
     let names = admin_packages::dependency_packages(family,&backend.distribution_id,protocol)
         .map_err(|_| Failure::invalid("unsupported dependency target or package manager"))?;
     backend.install(Some(names),output).await?;
-    prepare_server(protocol).await.map_err(|e|Failure::failed(e.to_string()))?;
+    prepare_server(protocol, change_notify).await.map_err(|e|Failure::failed(e.to_string()))?;
     for action in ["enable","start"] { setup_action(unit,action,policy,output).await?; }
+    if protocol == "samba" {
+        reload_samba().await.map_err(|e| Failure::failed(e.to_string()))?;
+    }
     if let Some(discovery) = discovery {
         for action in ["enable","start"] {
             setup_action(discovery,action,policy,output).await
@@ -661,7 +698,14 @@ async fn setup(protocol: &str, policy: &Policy, output: &mut Tail) -> OperationR
 pub(super) async fn execute(operation: &str, input: &Map<String,Value>, policy: &Policy, output: &mut Tail, cancel: watch::Receiver<bool>) -> OperationResult<Value> {
     let protocol = string(input,"protocol");
     if operation == "shares_list" { return list(protocol).await; }
-    if operation == "shares_setup" { return setup(protocol,policy,output).await; }
+    if operation == "shares_setup" {
+        let change_notify = match input.get("changeNotify") {
+            None => true,
+            Some(Value::Bool(value)) => *value,
+            _ => return Err(Failure::invalid("changeNotify must be a boolean")),
+        };
+        return setup(protocol,change_notify,policy,output).await;
+    }
     let definitions = defs::decode(string(input,"definitions")).map_err(|e|Failure::invalid(e.to_string()))?;
     let definitions = defs::normalize(protocol,definitions,operation != "shares_definitions_inspect")
         .map_err(|e|Failure::invalid(e.to_string()))?;
@@ -689,17 +733,46 @@ mod tests {
     #[test]
     fn setup_preserves_main_file_and_uses_fixed_units() {
         let original = Snapshot { data:b"[global]\nworkgroup = CUSTOM\n[existing]\npath = /srv/data\n".to_vec(), exists:true, mode:0o640 };
-        let added = samba_setup_data(&original).unwrap().unwrap();
+        let added = samba_setup_data(&original, true).unwrap().unwrap();
         assert!(added.starts_with(&original.data));
         assert!(String::from_utf8_lossy(&added).ends_with(&format!("\ninclude = {SAMBA_MANAGED}\n")));
+        assert!(String::from_utf8_lossy(&added).contains("[global]\nsmb2 leases = no\nsmb3 directory leases = no\n"));
         let configured = Snapshot { data:added.clone(), exists:true, mode:0o640 };
-        assert!(samba_setup_data(&configured).unwrap().is_none());
+        assert!(samba_setup_data(&configured, true).unwrap().is_none());
         let duplicate = Snapshot { data:[added,format!("include = {SAMBA_MANAGED}\n").into_bytes()].concat(),exists:true,mode:0o640 };
-        assert!(samba_setup_data(&duplicate).is_err());
+        assert!(samba_setup_data(&duplicate, true).is_err());
         assert_eq!(setup_units("samba",admin_packages::Family::Apt).unwrap(),("smbd.service",Some("wsdd-server.service")));
         assert_eq!(setup_units("samba",admin_packages::Family::Dnf).unwrap(),("smb.service",Some("wsdd.service")));
         assert_eq!(setup_units("nfs",admin_packages::Family::Pacman).unwrap(),("nfs-server.service",None));
         assert!(setup_units("unknown",admin_packages::Family::Apt).is_err());
+    }
+
+    #[test]
+    fn setup_disables_leases_in_existing_global_configuration() {
+        for text in [
+            format!("[global]\nsmb2 leases = yes\nsmb3 directory leases = auto\ninclude = {SAMBA_MANAGED}\n[docs]\npath = /srv/docs\n"),
+            format!("[docs]\npath = /srv/docs\nsmb2 leases = no\nsmb3 directory leases = no\ninclude = {SAMBA_MANAGED}\n"),
+            String::new(),
+        ] {
+            let original = Snapshot { data:text.into_bytes(), exists:true, mode:0o644 };
+            let data = samba_setup_data(&original, true).unwrap().unwrap();
+            assert!(data.starts_with(&original.data));
+            assert!(String::from_utf8_lossy(&data).contains("[global]\nsmb2 leases = no\nsmb3 directory leases = no\n"));
+            let configured = Snapshot { data, exists:true, mode:0o644 };
+            assert!(samba_setup_data(&configured, true).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn setup_toggles_both_notification_settings_together() {
+        let mut snapshot = Snapshot::default();
+        for enabled in [true, false, true] {
+            let data = samba_setup_data(&snapshot, enabled).unwrap().unwrap();
+            let value = if enabled { "yes" } else { "no" };
+            assert!(String::from_utf8_lossy(&data).ends_with(&format!("change notify = {value}\nkernel change notify = {value}\n")) || !snapshot.exists);
+            snapshot = Snapshot { data, exists:true, mode:0o644 };
+            assert!(samba_setup_data(&snapshot, enabled).unwrap().is_none());
+        }
     }
 
     #[test]

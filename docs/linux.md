@@ -553,6 +553,15 @@ system units in `system_units`: APT Samba uses `smbd.service` and
 `wsdd-server.service`; other supported Samba distributions use
 `smb.service` and `wsdd.service`; NFS uses `nfs-server.service`.
 Optional NetBIOS services are attempted only when authorized.
+Samba setup sets `smb2 leases = no` and `smb3 directory leases = no` in
+`[global]` and reloads Samba, prioritizing visibility of host-side filesystem
+changes over client caching. A single **Notify clients of filesystem changes**
+checkbox in Samba setup controls both global `change notify` and
+`kernel change notify`, enabling both by default. Clear it to set both to `no`.
+The `shares_setup` tool accepts the optional boolean `changeNotify` (default
+`true`) for the same behavior. Existing Windows connections must reconnect to
+negotiate the changed settings. Repeating setup also updates existing configs;
+unrelated settings and shares are preserved.
 The Linux daemon now uses the same native share operations for the fixed
 reference configuration paths and enabled management policy. The
 `managed_share_publish` tool changes the authoritative YAML publication
