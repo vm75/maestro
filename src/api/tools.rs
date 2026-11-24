@@ -1738,6 +1738,9 @@ pub async fn execute_tool(
                 .map(str::to_owned)
                 .collect();
             if !apply {
+                if let Err(error)=provider.review_incus_changes(store,&candidate,&preview).await {
+                    return (StatusCode::CONFLICT,json_err("incus_transition",&error.to_string()));
+                }
                 return (
                     StatusCode::OK,
                     json!({
@@ -2213,6 +2216,9 @@ pub async fn execute_tool(
                 }
             };
             if !save {
+                if let Err(error)=provider.review_incus_changes(store,input.content.as_bytes(),&plan).await {
+                    return (StatusCode::CONFLICT,json_err("incus_transition",&error.to_string()));
+                }
                 return (
                     StatusCode::OK,
                     json!({"unavailable":provider.blocked_resources(&plan.changes),"plan":plan}),
@@ -2288,13 +2294,15 @@ pub async fn execute_tool(
                 candidate.as_bytes(),
                 expected,
             ) {
-                Ok(plan) => (
-                    StatusCode::OK,
-                    json!({
-                        "plan": plan,
-                        "blockedResources": provider.blocked_resources(&plan.changes),
-                    }),
-                ),
+                Ok(plan) => {
+                    if let Err(error)=provider.review_incus_changes(store,candidate.as_bytes(),&plan).await {
+                        return (StatusCode::CONFLICT,json_err("incus_transition",&error.to_string()));
+                    }
+                    (StatusCode::OK,json!({
+                        "plan":plan,
+                        "blockedResources":provider.blocked_resources(&plan.changes),
+                    }))
+                },
                 Err(e) => (
                     StatusCode::BAD_REQUEST,
                     json_err("plan_error", &e.to_string()),
