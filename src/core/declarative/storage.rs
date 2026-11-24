@@ -373,12 +373,15 @@ impl StorageProvider {
         consumers.sort();
         let uid = unsafe { libc::geteuid() };
         let gid = if info.mode() & 0o2000 != 0 { info.gid() } else { unsafe { libc::getegid() } };
-        let marker = managed_directory(storage).then(|| StorageMeta {
-            resource: format!("storage/{id}"),
-            fingerprint: super::revision(&serde_json::to_vec(&serde_json::json!({
+        let marker = if managed_directory(storage) {
+            let bytes = serde_json::to_vec(&serde_json::json!({
                 "key":format!("storage/{id}"),"definition":storage,
-            })).expect("serializable storage definition")),
-        });
+            }))?;
+            Some(StorageMeta {
+                resource: format!("storage/{id}"),
+                fingerprint: super::revision(&bytes),
+            })
+        } else { None };
         let token = super::revision(&serde_json::to_vec(&serde_json::json!([
             revision,id,destination,kind,storage.format,size_gib,info.dev(),info.ino(),
             storage.mount,uid,gid,consumers,
@@ -416,8 +419,9 @@ impl StorageProvider {
         revision: &str,
         size_gib: u64,
         token: &str,
+        cancellation: &tokio::sync::watch::Receiver<bool>,
     ) -> Result<ProvisionPlan> {
-        use std::os::fd::AsRawFd;
+        use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
         let lock_store = store.clone();
         let authority = tokio::task::spawn_blocking(move || lock_store.lock_directory()).await??;
         super::journal::ensure_idle(&authority)?;
@@ -427,21 +431,32 @@ impl StorageProvider {
         let parent = &prepared.parent;
         let temp = format!(".maestro-new-storage-{}", uuid::Uuid::new_v4().simple());
         let directory = prepared.plan.kind == "directory";
-        if directory {
+        ensure!(!*cancellation.borrow(), "provisioning cancelled before staging");
+        let staged = if directory {
             fs::mkdirat(parent, &temp, fs::Mode::from_bits_truncate(0o700))?;
-        }
+            match store::open_child_directory(parent, &temp) {
+                Ok(staged) => staged,
+                Err(error) => {
+                    // Do not remove a directory whose identity could not be verified.
+                    return Err(error.context("staging directory could not be verified; inspect storage parent"));
+                }
+            }
+        } else {
+            let descriptor = fs::openat(parent, &temp,
+                fs::OFlags::RDWR | fs::OFlags::CREATE | fs::OFlags::EXCL | fs::OFlags::NOFOLLOW | fs::OFlags::CLOEXEC,
+                fs::Mode::from_bits_truncate(0o600))?;
+            File::from(descriptor)
+        };
+        let identity = staged.metadata()?;
+        let same_staging = || fs::statat(parent, &temp, fs::AtFlags::SYMLINK_NOFOLLOW)
+            .is_ok_and(|info| info.st_dev == identity.dev() && info.st_ino == identity.ino());
         let result = async {
             if directory {
-                let staged = store::open_child_directory(parent, &temp)?;
                 if let Some(marker) = &prepared.marker {
                     store::publish(&staged, MARKER, &serde_json::to_vec(marker)?, true)?;
                 }
                 staged.sync_all()?;
             } else {
-                let descriptor = fs::openat(parent, &temp,
-                    fs::OFlags::RDWR | fs::OFlags::CREATE | fs::OFlags::EXCL | fs::OFlags::NOFOLLOW | fs::OFlags::CLOEXEC,
-                    fs::Mode::from_bits_truncate(0o600))?;
-                let staged = File::from(descriptor);
                 let bytes = size_gib << 30;
                 if prepared.plan.format == "raw" {
                     staged.set_len(bytes)?;
@@ -463,16 +478,18 @@ impl StorageProvider {
             ensure!(latest.plan.review_token == token, "provisioning conditions changed; review again");
             ensure!(store::current(&authority, &store.filename)?.is_some_and(|snapshot| snapshot.revision == revision),
                 "configuration changed; review again");
+            ensure!(!*cancellation.borrow(), "provisioning cancelled before publication");
+            ensure!(same_staging(), "staging identity changed; refusing publication");
             fs::renameat_with(parent, &temp, parent, &prepared.name, fs::RenameFlags::NOREPLACE)?;
             parent.sync_all().map_err(|_| anyhow!("data was published but parent sync failed; inspect destination before retrying"))?;
             Ok::<_, anyhow::Error>(())
         }.await;
-        if result.is_err() {
+        if result.is_err() && same_staging() {
             if directory {
-                if let Ok(staged) = store::open_child_directory(parent, &temp) {
+                if prepared.marker.is_some() {
                     let _ = fs::unlinkat(&staged, MARKER, fs::AtFlags::empty());
-                    let _ = fs::unlinkat(parent, &temp, fs::AtFlags::REMOVEDIR);
                 }
+                let _ = fs::unlinkat(parent, &temp, fs::AtFlags::REMOVEDIR);
             } else {
                 let _ = fs::unlinkat(parent, &temp, fs::AtFlags::empty());
             }
