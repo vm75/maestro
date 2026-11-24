@@ -20,8 +20,26 @@
   let adStatus = $state<AdStatus | null>(null)
   let password = $state('')
   let rewrites = $state<Rewrite[]>([])
-  let rewriteDomain = $state('')
-  let rewriteAnswer = $state('')
+  let rewriteDraft = $state<Rewrite[] | null>(null)
+  let pollError = $state('')
+  let pollController: AbortController | undefined
+  let polling = false
+  const pauseMinutes = [1, 10, 30, 60]
+  function remaining(seconds?: number) { return seconds == null ? 'Indefinite' : Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's' }
+  function launchAdGuard() {
+    try { const url = new URL(ad?.launch_url || ''); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Invalid launch URL'); window.open(url.href, '_blank', 'noopener,noreferrer') }
+    catch { errors['Launch'] = 'Configure a valid HTTP or HTTPS launch URL.' }
+  }
+  async function pollStatus() {
+    if (loading || busy || polling || (section !== 'wol' && section !== 'adguard') || (section === 'adguard' && !ad?.enabled)) return
+    const current = section; const active = new AbortController(); pollController = active; polling = true
+    try {
+      if (current === 'wol') { const value = await request<MachineStatus[]>('/api/shared/wol/status', {signal: active.signal}); if (!active.signal.aborted && section === current && !busy && !loading) machineStatus = value }
+      else { const value = await request<AdStatus>('/api/shared/adguard/status', {signal: active.signal}); if (!active.signal.aborted && section === current && !busy && !loading) adStatus = value }
+      if (!active.signal.aborted) pollError = ''
+    } catch (e) { if (!active.signal.aborted) pollError = String(e) }
+    finally { polling = false }
+  }
   type Peer = {public_key: string; allowed_ips: string; endpoint: string | null; persistent_keepalive: number | null}
   type PeerConfig = {revision: string; peers: Peer[]; address: string; listen_port: number | null; is_running: boolean}
   let wg = $state<WireGuard | null>(null)
@@ -48,7 +66,7 @@
   let message = $state('')
   let controller: AbortController | undefined
   async function refresh() {
-    controller?.abort(); const active = new AbortController(); controller = active
+    pollController?.abort(); controller?.abort(); const active = new AbortController(); controller = active
     errors = {}; loading = true
     async function read<T>(key: string, path: string, apply: (value: T) => void) {
       try { const data = await request<T>('/api/shared/' + path, {signal: active.signal}); if (!active.signal.aborted) apply(data) }
@@ -76,8 +94,9 @@
     if (!allowWrites || busy) return false
     busy = true; errors = {}; message = ''
     try {
-      await request('/api/shared/' + path, {method, body: body === undefined ? undefined : JSON.stringify(body)}, timeout)
-      message = 'Operation completed'; await refresh(); return true
+      pollController?.abort()
+      const result = await request<{message?: string; machine?: string; packets_sent?: number; simulated?: boolean}>('/api/shared/' + path, {method, body: body === undefined ? undefined : JSON.stringify(body)}, timeout)
+      message = result.packets_sent !== undefined ? `${result.simulated ? 'Simulated' : 'Sent'} ${result.packets_sent} packets to ${result.machine}` : result.message || 'Operation completed'; await refresh(); return true
     } catch (failure) { errors['Operation'] = failure instanceof Error ? failure.message : String(failure); return false }
     finally { busy = false }
   }
@@ -90,20 +109,18 @@
     try { await mutate('adguard/config', 'PUT', {...ad, ...(password ? {password} : {})}) }
     finally { password = '' }
   }
-  async function addRewrite() {
-    if (await mutate('adguard/rewrites', 'PUT', [...rewrites, {domain: rewriteDomain.trim(), answer: rewriteAnswer.trim()}])) {
-      rewriteDomain = ''; rewriteAnswer = ''
-    }
-  }
-  onMount(() => { section = availableTabs[0]?.id || 'wol'; void refresh(); return () => controller?.abort() })
+  async function saveRewrites() { if (rewriteDraft && await mutate('adguard/rewrites', 'PUT', rewriteDraft)) rewriteDraft = null }
+  function switchTab(id: string) { if (rewriteDraft && !confirm('Discard unsaved DNS rewrite edits?')) return; rewriteDraft = null; section = id; message = ''; password = ''; pollError = ''; void refresh() }
+  onMount(() => { section = availableTabs[0]?.id || 'wol'; void refresh(); const timer = setInterval(pollStatus, 3000); return () => { clearInterval(timer); controller?.abort(); pollController?.abort() } })
 </script>
 
 <div class="connection-tabs">
-  {#each availableTabs as tab}<button class:active={section === tab.id} disabled={busy} onclick={() => { section = tab.id; message = ''; password = ''; void refresh() }}>{tab.label}</button>{/each}
+  {#each availableTabs as tab}<button class:active={section === tab.id} disabled={busy} onclick={() => switchTab(tab.id)}>{tab.label}</button>{/each}
   <button disabled={busy || loading} onclick={refresh}>{loading ? 'Refreshing…' : 'Refresh'}</button>
 </div>
 {#each Object.entries(errors) as [key, error]}<p class="form-error" role="alert">{key}: {error}</p>{/each}
 {#if message}<p role="status">{message}</p>{/if}
+{#if pollError}<p class="form-error" role="alert">Status refresh: {pollError} (showing last known status)</p>{/if}
 {#if section === 'wol'}
   <section class="panel"><h2>Wake-on-LAN machines</h2><p>Send magic packets from this server to machines on a reachable LAN.</p>
     <div class="shared-table"><table><thead><tr><th>Machine</th><th>MAC address</th><th>Reachability</th><th>Actions</th></tr></thead><tbody>
@@ -121,7 +138,7 @@
       <h3>{machine.id ? 'Edit machine' : 'Add machine'}</h3>
       <label>Name <input bind:value={machine.name} required /></label><label>MAC address <input bind:value={machine.mac} placeholder="aa:bb:cc:dd:ee:ff" required /></label>
       <label>Broadcast address <input bind:value={machine.broadcast} required /></label><label>UDP port <input type="number" min="1" max="65535" bind:value={machine.port} required /></label>
-      <label>Notes <input bind:value={machine.notes} /></label><button disabled={busy}>Save machine</button><button type="button" disabled={busy} onclick={() => machine = emptyMachine()}>Reset</button>
+      <label>Notes <textarea bind:value={machine.notes} rows="3"></textarea></label><button disabled={busy}>Save machine</button><button type="button" disabled={busy} onclick={() => machine = emptyMachine()}>Reset</button>
     </form>{/if}
   </section>
 {:else if section === 'adguard'}
@@ -139,15 +156,32 @@
     </form>{/if}
   </section>
   {#if adStatus?.enabled}<section class="panel"><h2>Protection and filtering</h2>
-    <p>Protection: {adStatus.protection_enabled ? 'Enabled' : 'Disabled'} · Filtering: {adStatus.filtering_enabled ? 'Enabled' : 'Disabled'}</p>
-    <button disabled={!allowWrites || busy} onclick={() => { if (adStatus && (!adStatus.protection_enabled || confirm('Disable DNS protection?'))) void mutate('adguard/protection', 'POST', {enabled: !adStatus.protection_enabled}) }}>{adStatus.protection_enabled ? 'Disable protection' : 'Enable protection'}</button>
-    <button disabled={!allowWrites || busy} onclick={() => { if (adStatus && (!adStatus.filtering_enabled || confirm('Disable DNS filtering?'))) void mutate('adguard/filtering', 'POST', {enabled: !adStatus.filtering_enabled}) }}>{adStatus.filtering_enabled ? 'Disable filtering' : 'Enable filtering'}</button>
+    <button type="button" onclick={launchAdGuard}>Launch Web UI</button>
+    {#each ['protection', 'filtering'] as kind}
+      {@const enabled = kind === 'protection' ? adStatus.protection_enabled : adStatus.filtering_enabled}
+      {@const seconds = kind === 'protection' ? adStatus.protection_remaining_seconds : adStatus.filtering_remaining_seconds}
+      <h3>DNS {kind}</h3><p>{enabled ? 'Enabled' : 'Paused · ' + remaining(seconds)}</p>
+      {#if enabled}
+        {#each pauseMinutes as duration}
+          <button disabled={!allowWrites || busy} onclick={() => mutate('adguard/' + kind, 'POST', {enabled: false, duration_minutes: duration})}>{duration} min</button>
+        {/each}
+      {:else}<button disabled={!allowWrites || busy} onclick={() => mutate('adguard/' + kind, 'POST', {enabled: true})}>Resume</button>{/if}
+    {/each}
   </section>{/if}
   {#if ad?.enabled && !errors['DNS rewrites'] && !loading}<section class="panel"><h2>DNS rewrites</h2><p>{rewrites.length} editable rewrites. Nginx-managed names are excluded.</p>
     <div class="shared-table"><table><thead><tr><th>Domain</th><th>Answer</th><th>Action</th></tr></thead><tbody>
-      {#each rewrites as rewrite, index}<tr><td>{rewrite.domain}</td><td>{rewrite.answer}</td><td><button disabled={!allowWrites || busy} onclick={() => { if (confirm('Remove this DNS rewrite?')) void mutate('adguard/rewrites', 'PUT', rewrites.filter((_, i) => i !== index)) }}>Remove</button></td></tr>{/each}
+      {#each rewrites as rewrite, index}<tr><td>{rewrite.domain}</td><td>{rewrite.answer}</td><td><button disabled={!allowWrites || busy || !!rewriteDraft} onclick={() => { if (confirm('Remove this DNS rewrite?')) void mutate('adguard/rewrites', 'PUT', rewrites.filter((_, i) => i !== index)) }}>Remove</button></td></tr>{/each}
     </tbody></table></div>
-    {#if allowWrites}<form onsubmit={e => { e.preventDefault(); void addRewrite() }}><label>Domain <input bind:value={rewriteDomain} required /></label><label>Answer <input bind:value={rewriteAnswer} required /></label><button disabled={busy}>Add rewrite</button></form>{/if}
+    {#if allowWrites}
+      {#if rewriteDraft}
+        <form onsubmit={e => { e.preventDefault(); void saveRewrites() }}>
+          {#each rewriteDraft as rewrite, index}
+            <div class="editor-grid"><label>Domain <input bind:value={rewrite.domain} required /></label><label>Answer <input bind:value={rewrite.answer} required /></label><button type="button" disabled={busy} onclick={() => { if (rewriteDraft) rewriteDraft = rewriteDraft.filter((_, i) => i !== index) }}>Delete</button></div>
+          {/each}
+          <button type="button" disabled={busy} onclick={() => { if (rewriteDraft) rewriteDraft = [...rewriteDraft, {domain: '', answer: ''}] }}>Add rewrite</button><button disabled={busy}>Save rewrites</button><button type="button" disabled={busy} onclick={() => rewriteDraft = null}>Cancel</button>
+        </form>
+      {:else}<button disabled={busy} onclick={() => rewriteDraft = rewrites.map(r => ({...r}))}>Manage DNS rewrites</button>{/if}
+    {/if}
   </section>{/if}
 {:else}
   <section class="panel"><h2>WireGuard</h2><p>Manage the native wg-quick@wg0.service using the optional restricted admin helper. Peer editing requires the separate wireguard_peers grant. Interface private keys, hooks and addresses remain administrator-owned.</p>
