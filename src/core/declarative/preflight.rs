@@ -569,6 +569,9 @@ async fn backend_prerequisites(
             if let Err(error) = provider.check_prerequisites().await {
                 issues.push(issue("error",&format!("backend/{backend}"),"runtime","compose_unavailable",
                     error.to_string(),"Check local engine/provider installation and user systemd."));
+            } else if let Err(error) = provider.check_autostart().await {
+                issues.push(issue("error",&format!("backend/{backend}"),"autostart","compose_boot_unavailable",
+                    error.to_string(),"Check the distribution's native boot prerequisites; current-run actions remain separate."));
             }
         }
         "libvirt" => {
