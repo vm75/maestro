@@ -561,17 +561,15 @@ async fn backend_prerequisites(
                 "Quadlet generator, boot and resource prerequisites are not fully verified."));
         }
         "podman/compose" | "docker/compose" => {
-            let (program, args): (&Path, &[&str]) = if backend == "podman/compose" {
-                (&commands.podman, &["--remote=false", "compose", "version"])
-            } else {
-                (&commands.docker, &["compose", "version"])
-            };
-            if probe(state, program, args).await.is_none() {
-                issues.push(backend_issue(backend, "error", "compose_unavailable",
-                    "A compatible Compose provider is unavailable."));
+            let engine = if backend == "podman/compose" {"podman"} else {"docker"};
+            let binary = if engine == "podman" {commands.podman.clone()} else {commands.docker.clone()};
+            let provider = super::compose::ComposeProvider::new(engine,binary,
+                state.config.paths.applications_dir.clone(),state.config.paths.storage_dir.clone(),state.runner.clone())
+                .native_paths(commands.systemctl.clone());
+            if let Err(error) = provider.check_prerequisites().await {
+                issues.push(issue("error",&format!("backend/{backend}"),"runtime","compose_unavailable",
+                    error.to_string(),"Check local engine/provider installation and user systemd."));
             }
-            issues.push(backend_issue(backend, "unknown", "provider_checks_pending",
-                "Native Compose ownership, boot policy and resource prerequisites are not yet verified."));
         }
         "libvirt" => {
             // Never select an implicit remote connection for readiness.
