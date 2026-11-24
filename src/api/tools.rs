@@ -2166,7 +2166,7 @@ pub async fn execute_tool(
             start_job_value(jobs,tool,move |running| async move{
                 use crate::core::declarative::backup_capture as backup;
                 let result=match tool{
-                    "managed_backup_recover"=>backup::recover(&store,&provider,&input.revision,&input.review_token).await,
+                    "managed_backup_recover"=>backup::recover(&store,&root,&provider,&input.revision,&input.review_token).await,
                     "managed_backup_publish"=>tokio::task::spawn_blocking(move ||backup::publish(&store,&root,&input.revision,&input.review_token,input.deadline_seconds.unwrap_or(0))).await.unwrap_or_else(|_|Err(anyhow::anyhow!("backup publication worker failed"))),
                     _=>backup::release(&store,&input.revision,&input.review_token),
                 };
