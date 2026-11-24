@@ -2838,14 +2838,13 @@ shares:
     // Host Services must control the entire managed application through the
     // same lifecycle jobs, not the ordinary systemctl path. Test mode has no
     // native systemd bus and therefore also detects accidental direct routing.
-    for (action, managed_tool) in [
-        ("stop", "managed_service_stop"),
-        ("start", "managed_service_start"),
-        ("restart", "managed_service_restart"),
+    for (action, tool, managed_tool) in [
+        ("stop", "services_stop", "managed_service_stop"),
+        ("start", "services_start", "managed_service_start"),
+        ("restart", "services_restart", "managed_service_restart"),
     ] {
-        let tool = format!("services_{action}");
         let (status, started) = call(
-            &tool,
+            tool,
             serde_json::json!({"scope":"user","unit":"maestro-compose-web.service","confirm":true}),
         )
         .await;
