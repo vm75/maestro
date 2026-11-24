@@ -51,7 +51,7 @@ pub(super) fn validate(containers: &BTreeMap<String, Container>) -> Result<()> {
 }
 
 // Positive Go time.ParseDuration syntax, bounded to its signed nanosecond range.
-fn duration(value: &str) -> bool {
+pub(super) fn duration(value: &str) -> bool {
     if value.is_empty() {
         return true;
     }
