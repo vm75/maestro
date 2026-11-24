@@ -43,7 +43,7 @@ fi
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/etc/init.d/S99maestro'
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/libexec/maestro/setup-merlin.sh'
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/share/maestro/dehydrated-dns01-hook.sh'
-tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/var/lib/maestro/dehydrated/dehydrated-dns01-hook.sh'
+! tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/var/lib/maestro/dehydrated/dehydrated-dns01-hook.sh'
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/share/maestro/maestro.example.yaml'
 # Exercise the packaged init script without touching host services or /opt.
 mkdir -p "$TMP/bin"

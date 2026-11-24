@@ -48,7 +48,7 @@ before an upgrade or removal; it does not delete persistent data.
 ### Upgrade from Maestro 0.11.0
 
 The router must be prepared offline before installing the new package. Maestro
-does not convert TOML or import earlier layouts at runtime or during install.
+does not convert TOML or import earlier layouts at runtime or during install. The router installer refuses to create a fresh YAML if its existing TOML configuration is still present.
 Linux is a fresh installation and has no migration procedure.
 
 1. Make an independent backup using the installed version and separately copy

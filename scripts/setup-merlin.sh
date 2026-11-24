@@ -17,13 +17,22 @@ if [ "${MAESTRO_DEFER_START:-0}" != 1 ] && [ -x /opt/etc/init.d/S99maestro ]; th
     /opt/etc/init.d/S99maestro stop
 fi
 
-if [ ! -f "$CONFIG_DIR/maestro.yaml" ]; then
+# Fail closed on an existing router deployment without prepared YAML.
+# This is only an installation guard, not a conversion or fallback path.
+if [ ! -e "$CONFIG_DIR/maestro.yaml" ] && [ -e "$CONFIG_DIR/maestro.toml" ]; then
+    echo "Prepare the router YAML offline before installing this version." >&2
+    exit 1
+fi
+if [ ! -e "$CONFIG_DIR/maestro.yaml" ] && [ ! -L "$CONFIG_DIR/maestro.yaml" ]; then
     cp "$EXAMPLES_DIR/maestro.example.yaml" "$CONFIG_DIR/maestro.yaml"
     chmod 0600 "$CONFIG_DIR/maestro.yaml"
     TOKEN="$(openssl rand -hex 24)"
     sed -i "s/REPLACE-WITH-AT-LEAST-24-RANDOM-CHARACTERS/$TOKEN/" "$CONFIG_DIR/maestro.yaml"
     echo "Created $CONFIG_DIR/maestro.yaml. Review rendered_page and menu_tree before starting."
 fi
+
+# Validate authored YAML before changing the live nginx configuration.
+/opt/bin/maestro --config "$CONFIG_DIR/maestro.yaml" check-config
 
 # Install the embedded main configuration, backing up a different nginx.conf.
 # Saved inputs, existing shared fragments, and configured nginx paths are retained.
@@ -32,7 +41,7 @@ fi
 # Respect the configured executable and challenge hook paths.
 HOOK=$(/opt/bin/maestro --config "$CONFIG_DIR/maestro.yaml" config-value certificates.dns01_hook)
 DEHYDRATED_BIN=$(/opt/bin/maestro --config "$CONFIG_DIR/maestro.yaml" config-value commands.dehydrated)
-if [ ! -e "$HOOK" ]; then
+if [ ! -e "$HOOK" ] && [ ! -L "$HOOK" ]; then
     mkdir -p "$(dirname "$HOOK")"
     if [ -f "$EXAMPLES_DIR/dehydrated-dns01-hook.sh" ]; then
         install -m 0755 "$EXAMPLES_DIR/dehydrated-dns01-hook.sh" "$HOOK"
@@ -56,8 +65,9 @@ elif [ -n "$MOSQUITTO_USER" ] || [ -n "$MOSQUITTO_PASS" ]; then
 fi
 # Repair permissions on existing installations as well as new ones.
 chmod 0600 "$CONFIG_DIR/maestro.yaml"
-if [ -d /opt/etc/nginx/certs ]; then
-    find /opt/etc/nginx/certs -type f -name 'privkey*.pem' -exec chmod 0600 {} \;
+NGINX_ROOT=$(/opt/bin/maestro --config "$CONFIG_DIR/maestro.yaml" config-value nginx.root_dir)
+if [ -n "$NGINX_ROOT" ] && [ -d "$NGINX_ROOT/certs" ]; then
+    find "$NGINX_ROOT/certs" -type f -name 'privkey*.pem' -exec chmod 0600 {} \;
 fi
 if [ ! -f "$CONFIG_DIR/firewall-policy.json" ] && [ -f "$EXAMPLES_DIR/firewall-policy.example.json" ]; then
     cp "$EXAMPLES_DIR/firewall-policy.example.json" "$CONFIG_DIR/firewall-policy.json"

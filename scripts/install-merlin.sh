@@ -47,14 +47,7 @@ if [ "$BINARY" != "/opt/bin/maestro" ]; then
     cp "$BINARY" /opt/bin/maestro
 fi
 chmod 0755 /opt/bin/maestro
-if [ -f "$SCRIPT_DIR/dehydrated-dns01-hook.sh" ]; then
-    cp "$SCRIPT_DIR/dehydrated-dns01-hook.sh" /opt/var/lib/maestro/dehydrated/dehydrated-dns01-hook.sh
-    chmod 0755 /opt/var/lib/maestro/dehydrated/dehydrated-dns01-hook.sh
-fi
-if [ -f "$SCRIPT_DIR/dehydrated" ]; then
-    cp "$SCRIPT_DIR/dehydrated" /opt/var/lib/maestro/dehydrated/dehydrated
-    chmod 0700 /opt/var/lib/maestro/dehydrated/dehydrated
-fi
+# setup-merlin installs the hook and updates dehydrated at configured paths.
 cp "$SCRIPT_DIR/S99maestro" /opt/etc/init.d/S99maestro
 chmod 0755 /opt/etc/init.d/S99maestro
 

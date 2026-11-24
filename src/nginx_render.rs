@@ -1092,7 +1092,15 @@ impl FileTransaction {
             }
         }
         for (path, content) in files {
-            nginx::atomic_write(&path, content.as_bytes())?;
+            use std::os::unix::fs::PermissionsExt;
+            let private_key = path.file_name().and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("privkey") && name.ends_with(".pem"));
+            if private_key {
+                let permissions = std::fs::Permissions::from_mode(0o600);
+                nginx::atomic_write_with_permissions(&path, content.as_bytes(), Some(&permissions))?;
+            } else {
+                nginx::atomic_write(&path, content.as_bytes())?;
+            }
         }
         for path in removals {
             std::fs::remove_file(path)?;
@@ -1371,6 +1379,17 @@ mod tests {
         config.nginx.inputs_dir = root.join("maestro/nginx");
         std::fs::create_dir_all(config.nginx.root_dir.join("settings")).unwrap();
         config
+    }
+
+    #[test]
+    fn certificate_transaction_publishes_private_keys_as_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let config = transaction_config(root.path());
+        let path = config.nginx.root_dir.join("certs/example/privkey.pem");
+        FileTransaction::apply(&config, [(path.clone(), "private key".into())].into())
+            .unwrap().commit();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
     }
 
     #[test]
