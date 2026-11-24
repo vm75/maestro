@@ -74,7 +74,7 @@
   }
   function action(unit: string, action: string) { if (['start', 'enable'].includes(action)) void perform(unit, action); else pending = { unit, action } }
   function confirmation() { if (!pending) return ''; if (pending.action === 'disable') return `Disable startup links for ${pending.unit}. The current service is not stopped. Other units, sockets or timers may still activate it.`; return `${serviceActions[pending.action]} ${pending.unit} in the ${inventory?.scope ?? 'configured'} manager. This can interrupt its workload.` }
-  function blocked(action: string) { return !canWrite || (details !== null && ((action === 'start' && !details.canStart) || (action === 'stop' && !details.canStop) || (action === 'reload' && !details.canReload))) }
+  function blocked(action: string) { if (!canWrite) return true; if (selected?.managedApplication || details?.managedApplication) return action === 'reload'; return details !== null && ((action === 'start' && !details.canStart) || (action === 'stop' && !details.canStop) || (action === 'reload' && !details.canReload)) }
 
   onMount(() => {
     const finished = async (event: Event) => {
@@ -179,8 +179,8 @@
           <p class="resource-hint">Reading service properties…</p>
         {/if}
 
-        {#if details?.managedApplication}
-          <p class="resource-hint">Managed by application {details.managedApplication}. Lifecycle and startup changes apply to that application; edit its definition in Applications.</p>
+        {#if selected.managedApplication || details?.managedApplication}
+          <p class="resource-hint">Managed by application {selected.managedApplication || details?.managedApplication}. Lifecycle and startup changes apply to that application; edit its definition in Applications.</p>
         {/if}
 
         {#if details}

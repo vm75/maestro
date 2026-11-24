@@ -987,6 +987,31 @@ async fn invoke(
     (status, Json(val)).into_response()
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostServiceActionArgs {
+    #[serde(default)]
+    scope: systemd::Scope,
+    unit: String,
+    confirm: Option<bool>,
+}
+
+fn host_unit_config(store: &Store) -> Option<crate::core::declarative::Config> {
+    store.read().ok().flatten().and_then(|snapshot| snapshot.config().ok())
+}
+
+fn annotate_managed_unit(
+    value: &mut Value,
+    config: &crate::core::declarative::Config,
+    unit: &str,
+    writable: bool,
+) {
+    if let Some(owner) = crate::core::declarative::quadlet::managed_unit_owner(config, unit) {
+        value["managedApplication"] = json!(owner);
+        value["writable"] = json!(writable);
+    }
+}
+
 pub async fn execute_tool(
     ctx: &ToolContext<'_>,
     name: &str,
@@ -1003,6 +1028,58 @@ pub async fn execute_tool(
     let monitor = ctx.monitor;
     let store = ctx.store;
     let provider = ctx.provider;
+    // Route application-owned user units through the same reviewed lifecycle
+    // and boot-policy dispatcher as the Applications page. Never use direct
+    // systemctl writes for a generated unit, including stale definitions.
+    let name = if let Some(action) = name.strip_prefix("services_")
+        .filter(|action| systemd::ACTIONS.contains(action))
+    {
+        let parsed = serde_json::from_value::<HostServiceActionArgs>(
+            Value::Object(arguments.clone()),
+        );
+        if let Ok(input) = parsed {
+            if matches!(input.scope, systemd::Scope::User)
+                && systemd::valid_unit(&input.unit)
+                && (matches!(action, "start" | "enable") || input.confirm == Some(true))
+                && crate::core::declarative::managed_unit(&input.unit)
+            {
+                let owner = host_unit_config(store).and_then(|config| {
+                    crate::core::declarative::quadlet::managed_unit_owner(&config, &input.unit)
+                        .map(str::to_owned)
+                });
+                let Some(owner) = owner else {
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        json_err("unavailable", "Unknown, stale or ambiguous generated unit; repair its application definition."),
+                    );
+                };
+                let managed_tool = match action {
+                    "start" => "managed_service_start",
+                    "stop" => "managed_service_stop",
+                    "restart" => "managed_service_restart",
+                    "enable" => "managed_service_enable",
+                    "disable" => "managed_service_disable",
+                    "reload" => return (
+                        StatusCode::BAD_REQUEST,
+                        json_err("invalid_arguments", "Apply the application definition instead of reloading its generated unit."),
+                    ),
+                    _ => unreachable!(),
+                };
+                arguments.clear();
+                arguments.insert("service".into(), json!(owner));
+                if action != "start" {
+                    arguments.insert("confirm".into(), json!(true));
+                }
+                managed_tool
+            } else {
+                name
+            }
+        } else {
+            name
+        }
+    } else {
+        name
+    };
     if matches!(
         name,
         "managed_config_save"
@@ -1175,15 +1252,7 @@ pub async fn execute_tool(
             .into_iter()
             .find(|candidate| *candidate == action)
     }) {
-        #[derive(serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct ActionArgs {
-            #[serde(default)]
-            scope: systemd::Scope,
-            unit: String,
-            confirm: Option<bool>,
-        }
-        let Ok(input) = serde_json::from_value::<ActionArgs>(Value::Object(arguments)) else {
+        let Ok(input) = serde_json::from_value::<HostServiceActionArgs>(Value::Object(arguments)) else {
             return (
                 StatusCode::BAD_REQUEST,
                 json_err("invalid_arguments", "Expected a scope and service unit."),
@@ -1478,7 +1547,21 @@ pub async fn execute_tool(
                 );
             };
             match systemd::inventory(state, input.scope).await {
-                Ok(inventory) => (StatusCode::OK, json!(inventory)),
+                Ok(inventory) => {
+                    let mut value = json!(inventory);
+                    if matches!(input.scope, systemd::Scope::User) {
+                        if let Some(config) = host_unit_config(store) {
+                            if let Some(services) = value["services"].as_array_mut() {
+                                for service in services {
+                                    if let Some(unit) = service["name"].as_str().map(str::to_owned) {
+                                        annotate_managed_unit(service, &config, &unit, writes_allowed(state));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    (StatusCode::OK, value)
+                }
                 Err(_) => (
                     StatusCode::SERVICE_UNAVAILABLE,
                     json_err("unavailable", "Systemd inventory exceeds its limits."),
@@ -1510,7 +1593,15 @@ pub async fn execute_tool(
                 );
             }
             match systemd::details(state, input.scope, &input.unit).await {
-                Ok(details) => (StatusCode::OK, json!(details)),
+                Ok(details) => {
+                    let mut value = json!(details);
+                    if matches!(input.scope, systemd::Scope::User) {
+                        if let Some(config) = host_unit_config(store) {
+                            annotate_managed_unit(&mut value, &config, &input.unit, writes_allowed(state));
+                        }
+                    }
+                    (StatusCode::OK, value)
+                }
                 Err(error) if error.to_string() == "service unit not found" => (
                     StatusCode::NOT_FOUND,
                     json_err("not_found", "Service unit not found."),
