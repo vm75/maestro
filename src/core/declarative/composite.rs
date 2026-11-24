@@ -110,7 +110,8 @@ impl CompositeProvider {
             runner.clone(),
         ).native_paths(config.commands.systemctl.clone());
 
-        let incus = IncusProvider::new(config.commands.incus.clone(), runner.clone());
+        let incus = IncusProvider::new(config.commands.incus.clone(), runner.clone())
+            .native_paths(config.paths.applications_dir.clone());
         let mut libvirt = LibvirtProvider::new(config.commands.virsh.clone(), runner.clone())
             .native_paths(config.paths.applications_dir.clone(),config.paths.storage_dir.clone());
         if let Some(authority) = config.linux_authority.as_ref() {
@@ -180,7 +181,7 @@ impl CompositeProvider {
         let targets: Vec<_> = apps
             .iter()
             .enumerate()
-            .filter(|(_, app)| matches!(app.backend.as_str(),"compose"|"libvirt") || (app.backend == "quadlet" && self.quadlet.is_some()))
+            .filter(|(_, app)| matches!(app.backend.as_str(),"compose"|"libvirt"|"incus") || (app.backend == "quadlet" && self.quadlet.is_some()))
             .map(|(index, app)| (index, app.id.clone(), app.backend.clone(), app.engine.clone()))
             .collect();
         let mut inspections = stream::iter(targets)
@@ -188,6 +189,9 @@ impl CompositeProvider {
                 let result = if backend == "compose" {
                     self.compose_provider(&engine).status_details(config,&id).await
                         .map(|status| (status.state,status.runtime_matches,status.restart_required,status.members,true))
+                } else if backend == "incus" {
+                    self.incus.status_details(config,&id).await
+                        .map(|status| (status.state,status.runtime_matches,status.restart_required,Vec::new(),true))
                 } else if backend == "libvirt" {
                     self.libvirt.status_details(config,&id).await
                         .map(|status| (status.state,status.runtime_matches,status.restart_required,Vec::new(),false))
@@ -252,6 +256,9 @@ impl CompositeProvider {
         if !self.simulated && service.backend == "libvirt" {
             return self.libvirt.native_action(config,id,action).await;
         }
+        if !self.simulated && service.backend == "incus" {
+            return self.incus.native_action(config,id,action).await;
+        }
         if !self.simulated && service.backend == "quadlet" {
             let provider = self
                 .quadlet
@@ -295,6 +302,9 @@ impl CompositeProvider {
         if !self.simulated && service.backend == "compose" {
             return self.compose_provider(&service.engine).native_logs(config,id,tail).await;
         }
+        if !self.simulated && service.backend == "incus" {
+            return self.incus.native_logs(config,id,tail).await;
+        }
         if !self.simulated && service.backend == "quadlet" {
             let provider = self
                 .quadlet
@@ -328,6 +338,9 @@ impl CompositeProvider {
             .ok_or_else(|| anyhow!("service not found: {id}"))?;
         if !self.simulated && service.backend == "compose" {
             return Ok(self.compose_provider(&service.engine).native_logs(config,id,tail).await?.display_text());
+        }
+        if !self.simulated && service.backend == "incus" {
+            return Ok(self.incus.native_logs(config,id,tail).await?.display_text());
         }
         if !self.simulated && service.backend == "quadlet" {
             let provider = self
@@ -375,7 +388,7 @@ impl CompositeProvider {
                     && matches!(change.backend.as_str(), "samba" | "nfs")
                     && self.shares.native_enabled())
                 || (change.resource.starts_with("service/")
-                    && matches!(change.backend.as_str(),"docker/compose"|"podman/compose"|"libvirt"))
+                    && matches!(change.backend.as_str(),"docker/compose"|"podman/compose"|"libvirt"|"incus"))
                 || (change.resource.starts_with("service/")
                     && change.backend == "podman/quadlet"
                     && self.quadlet.is_some()),
@@ -405,6 +418,9 @@ impl ApplyProvider for CompositeProvider {
         }
         if change.backend == "libvirt" {
             return self.libvirt.preflight_mode(change,previous,desired,mode).await;
+        }
+        if change.backend == "incus" {
+            return self.incus.preflight_mode(change,previous,desired,mode).await;
         }
         if matches!(change.backend.as_str(),"docker/compose"|"podman/compose") {
             return self.compose_provider(if change.backend == "docker/compose" {"docker"} else {"podman"})
@@ -438,6 +454,9 @@ impl ApplyProvider for CompositeProvider {
         }
         if change.backend == "libvirt" {
             return self.libvirt.apply_mode(change,previous,desired,mode).await;
+        }
+        if change.backend == "incus" {
+            return self.incus.apply_mode(change,previous,desired,mode).await;
         }
         if matches!(change.backend.as_str(),"docker/compose"|"podman/compose") {
             return self.compose_provider(if change.backend == "docker/compose" {"docker"} else {"podman"})
@@ -550,6 +569,9 @@ impl RecoveryProvider for CompositeProvider {
         }
         if change.backend == "libvirt" {
             return self.libvirt.observe_mode(change,previous,desired,mode).await;
+        }
+        if change.backend == "incus" {
+            return self.incus.observe_mode(change,previous,desired,mode).await;
         }
         if matches!(change.backend.as_str(),"docker/compose"|"podman/compose") {
             return self.compose_provider(if change.backend == "docker/compose" {"docker"} else {"podman"})
