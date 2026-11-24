@@ -285,6 +285,15 @@ pub(super) async fn run(program: &Path, args: &[&str], environment: &[(&str,&str
                     group.0 = None;
                 }
             }
+            // Ensure a timed-out native mutator is stopped before its caller
+            // starts a rollback. Reap/drain within a bounded grace period.
+            if let Some(pid) = group.0 {
+                unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+                if let Ok(Ok((tail, _))) = timeout(Duration::from_secs(2), &mut future).await {
+                    output.merge(tail, MAX_TAIL);
+                    group.0 = None;
+                }
+            }
             anyhow::bail!("context deadline exceeded");
         }
     }?;
