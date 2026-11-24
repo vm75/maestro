@@ -115,8 +115,8 @@
     </details>
     <p class="muted">Save validates the full configuration, regenerates managed sites, tests Nginx and reloads if running. Invalid changes are rolled back by the server.</p>
     {#if error}<p class="form-error" role="alert">{error}</p>{/if}
-    <button type="submit">Save global settings</button><button type="button" onclick={onCancel}>Cancel</button>
-  </fieldset>
+    <button type="submit">Save global settings</button>
+  </fieldset><button type="button" onclick={onCancel}>Close editor</button>
 </form>
 <style>
   fieldset{border:0;padding:0;margin:0;min-width:0}
