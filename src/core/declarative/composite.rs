@@ -121,7 +121,10 @@ impl CompositeProvider {
             config.paths.samba_conf.clone(),
             config.paths.exports_file.clone(),
             config.paths.storage_dir.clone(),
-        );
+        ).with_mode(runner.is_test_mode(),
+            config.platform == crate::config::Platform::Linux && config.system.allow_share_writes
+                && config.linux_authority.as_ref().is_some_and(|authority|
+                    authority.settings.samba_config == "/etc/samba/smb.conf"));
 
         Self {
             simulated: runner.is_test_mode(),
@@ -354,6 +357,9 @@ impl CompositeProvider {
         ensure!(
             self.simulated
                 || (change.backend == "storage" && change.resource.starts_with("storage/"))
+                || (change.resource.starts_with("share/")
+                    && matches!(change.backend.as_str(), "samba" | "nfs")
+                    && self.shares.native_enabled())
                 || (change.resource.starts_with("service/")
                     && change.backend == "podman/quadlet"
                     && self.quadlet.is_some()),
