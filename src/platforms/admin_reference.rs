@@ -360,7 +360,7 @@ async fn service(operation: &str, input: &Map<String,Value>, policy: &Policy, ou
                 let name = row["name"].as_str().unwrap_or_default();
                 let item = merged.entry(name.to_owned()).or_insert_with(|| service_row(name));
                 for (key,value) in row.as_object().expect("parsed row") {
-                    item[key] = value.clone();
+                    item[key.as_str()] = value.clone();
                 }
                 if merged.len() > 4096 { return Err(Failure::unavailable("Service inventory exceeds 4096 units")); }
             }
