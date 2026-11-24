@@ -208,7 +208,7 @@ pub fn render_quadlet_at(
         let stop = if stop == 0 { 90 } else { u64::from(stop) + 30 };
         writeln!(body, "TimeoutStopSec={stop}")?;
         if container.cpus > 0 {
-            writeln!(body, "CPUQuota={}%", u64::from(container.cpus) * 100)?;
+            writeln!(body, "CPUQuota={}%", i128::from(container.cpus) * 100)?;
         }
         if service.enabled {
             writeln!(body, "\n[Install]\nWantedBy=default.target")?;

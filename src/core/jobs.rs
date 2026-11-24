@@ -37,6 +37,8 @@ pub struct Job {
     pub id: Uuid,
     pub tool: &'static str,
     pub state: JobState,
+    pub cancellable: bool,
+    pub cancellation_requested: bool,
     pub created_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<DateTime<Utc>>,
@@ -57,6 +59,14 @@ struct Entry {
 pub struct Jobs {
     entries: Arc<Mutex<VecDeque<Entry>>>,
     state_dir: Arc<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CancelRequest {
+    Requested,
+    NotFound,
+    NotCancellable,
+    Finished,
 }
 
 pub enum Outcome {
@@ -105,6 +115,8 @@ impl Jobs {
             id: Uuid::new_v4(),
             tool,
             state: JobState::Running,
+            cancellable: true,
+            cancellation_requested: false,
             created_at: Utc::now(),
             finished_at: None,
             output: String::new(),
@@ -151,19 +163,43 @@ impl Jobs {
             .map(|entry| entry.job.clone())
     }
 
-    pub fn cancel(&self, id: Uuid) -> bool {
-        let entries = self.entries.lock();
-        let Some(entry) = entries.iter().find(|entry| entry.job.id == id) else {
-            return false;
+    pub fn request_cancel(&self, id: Uuid) -> CancelRequest {
+        let mut entries = self.entries.lock();
+        let Some(entry) = entries.iter_mut().find(|entry| entry.job.id == id) else {
+            return CancelRequest::NotFound;
         };
-        if entry.job.state == JobState::Running {
-            entry.cancel.send_replace(true);
+        if entry.job.state != JobState::Running {
+            return CancelRequest::Finished;
         }
-        true
+        if !entry.job.cancellable {
+            return CancelRequest::NotCancellable;
+        }
+        entry.job.cancellation_requested = true;
+        entry.cancel.send_replace(true);
+        CancelRequest::Requested
+    }
+
+    #[cfg(test)]
+    fn cancel(&self, id: Uuid) -> bool {
+        matches!(self.request_cancel(id), CancelRequest::Requested | CancelRequest::Finished)
     }
 }
 
 impl RunningJob {
+    /// Atomically close the cancellation window before an irreversible mutation.
+    /// False means cancellation won the race; the caller must finish Cancelled.
+    pub fn begin_mutation(&self) -> bool {
+        let mut entries = self.jobs.entries.lock();
+        let Some(entry) = entries.iter_mut().find(|entry| entry.job.id == self.id && entry.job.state == JobState::Running) else {
+            return false;
+        };
+        if entry.job.cancellation_requested {
+            return false;
+        }
+        entry.job.cancellable = false;
+        true
+    }
+
     pub fn cancellation(&self) -> watch::Receiver<bool> {
         self.cancellation.clone()
     }
@@ -204,6 +240,7 @@ impl RunningJob {
         };
         let job = &mut entry.job;
         job.finished_at = Some(Utc::now());
+        job.cancellable = false;
         job.state = match outcome {
             Outcome::Succeeded(result) => {
                 job.result = Some(result);
@@ -305,6 +342,26 @@ mod tests {
         let (next, operation) = jobs.start("other").unwrap().unwrap();
         drop(operation);
         assert_eq!(jobs.get(next.id).unwrap().state, JobState::Failed);
+    }
+
+    #[test]
+    fn cancellation_and_mutation_boundary_are_atomic() {
+        let directory = tempfile::tempdir().unwrap();
+        let jobs = Jobs::new(directory.path().to_path_buf());
+        let (job, running) = jobs.start("native").unwrap().unwrap();
+        assert_eq!(jobs.request_cancel(job.id), CancelRequest::Requested);
+        assert!(!running.begin_mutation());
+        assert!(jobs.get(job.id).unwrap().cancellation_requested);
+        assert!(jobs.start("other").unwrap().is_none());
+        running.finish(Outcome::Cancelled);
+        assert_eq!(jobs.request_cancel(job.id), CancelRequest::Finished);
+
+        let (job, running) = jobs.start("native").unwrap().unwrap();
+        assert!(running.begin_mutation());
+        assert!(!jobs.get(job.id).unwrap().cancellable);
+        assert_eq!(jobs.request_cancel(job.id), CancelRequest::NotCancellable);
+        assert!(!*running.cancellation().borrow());
+        running.finish(Outcome::Succeeded(Value::Null));
     }
 
     #[test]

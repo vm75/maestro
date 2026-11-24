@@ -71,9 +71,9 @@
     <div class="job-list">{#each jobs as job}<button class:selected={selected?.id === job.id} class="job-row" onclick={() => select(job)}><span><strong>{job.tool.replaceAll('_', ' ')}</strong><time datetime={job.createdAt}>{new Date(job.createdAt).toLocaleTimeString()}</time></span><span class="job-state" class:failed={job.state === 'failed'}>{job.state}</span></button>{/each}</div>
     {#if selected}
       <div class="job-detail">
-        <div class="job-detail-heading"><strong>{selected.tool.replaceAll('_', ' ')}</strong>{#if selected.state === 'running' && allowWrites}<button class="small-button" disabled={cancelling} onclick={cancel}>{cancelling ? 'Cancelling…' : 'Cancel job'}</button>{/if}</div>
+        <div class="job-detail-heading"><strong>{selected.tool.replaceAll('_', ' ')}</strong>{#if selected.state === 'running' && allowWrites}<button class="small-button" disabled={cancelling || selected.cancellable === false || selected.cancellationRequested} onclick={cancel}>{selected.cancellationRequested ? 'Cancellation requested' : cancelling ? 'Cancelling…' : 'Cancel job'}</button>{/if}</div>
         {#if selected.error}<p class="form-error">{selected.error}</p>{/if}
-        {#if selected.tool.startsWith('updates_') && selected.state === 'running'}<p class="resource-hint">Cancellation is best-effort. The server may reject cancellation once a native operation has started.</p>{/if}
+        {#if selected.state === 'running' && selected.cancellable === false}<p class="resource-hint">A native mutation is in progress and cannot safely be interrupted.</p>{:else if selected.state === 'running'}<p class="resource-hint">Cancellation is cooperative. The job retains its lock until cleanup finishes; a completed publication is not undone.</p>{/if}
         {#if selected.truncated}<p class="muted">Showing the most recent 128 KiB of output.</p>{/if}
         <pre>{selected.output || (selected.state === 'running' ? 'Waiting for output…' : 'This operation produced no output.')}</pre>
       </div>

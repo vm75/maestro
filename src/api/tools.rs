@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     core::{
         declarative::{CompositeProvider, MISSING_REVISION, Store},
-        jobs::{Jobs, Outcome},
+        jobs::{CancelRequest, Jobs, Outcome},
         monitor::{Monitor, ProcessSort},
     },
     platforms::{admin, package_updates, systemd},
@@ -1409,6 +1409,7 @@ pub async fn execute_tool(
                     &cancellation).await;
                 match result {
                     Ok(plan) => running.finish(Outcome::Succeeded(json!(plan))),
+                    Err(error) if error.is::<crate::core::declarative::storage::ProvisionCancelled>() => running.finish(Outcome::Cancelled),
                     Err(error) => running.finish(Outcome::Failed(error.to_string())),
                 }
             }).await
@@ -1491,38 +1492,11 @@ pub async fn execute_tool(
                 );
             };
             if name == "jobs_cancel" {
-                if jobs.get(id).is_some_and(|job| {
-                    (job.tool.starts_with("services_")
-                        || job.tool.starts_with("updates_")
-                        || job.tool.starts_with("workloads_")
-                        || job.tool.starts_with("managed_backup_") || job.tool=="managed_artifact_reconcile"
-                        || matches!(
-                            job.tool,
-                            "applications_action"
-                                | "packages_install"
-                                | "dependencies_install"
-                                | "managed_resource_save"
-                                | "managed_config_save"
-                                | "managed_apply_retry"
-                                | "managed_config_revert"
-                        ))
-                        && job.state == crate::core::jobs::JobState::Running
-                }) {
-                    return (
-                        StatusCode::CONFLICT,
-                        json_err(
-                            "not_cancellable",
-                            "The native operation may already be in progress.",
-                        ),
-                    );
-                }
-                return if jobs.cancel(id) {
-                    (StatusCode::OK, json!({"status": "cancellation requested"}))
-                } else {
-                    (
-                        StatusCode::NOT_FOUND,
-                        json_err("not_found", "Job not found."),
-                    )
+                return match jobs.request_cancel(id) {
+                    CancelRequest::Requested => (StatusCode::OK, json!({"status": "cancellation requested"})),
+                    CancelRequest::NotFound => (StatusCode::NOT_FOUND, json_err("not_found", "Job not found.")),
+                    CancelRequest::NotCancellable => (StatusCode::CONFLICT, json_err("not_cancellable", "The native operation is already in progress.")),
+                    CancelRequest::Finished => (StatusCode::CONFLICT, json_err("not_cancellable", "The job has already finished.")),
                 };
             }
             match jobs.get(id) {
@@ -2930,13 +2904,16 @@ pub async fn execute_tool(
                     anyhow::ensure!(!plan.restart_required && plan.changes.len() == 1
                         && plan.changes[0].resource == format!("service/{id}"),
                         "boot-only update unexpectedly changes other definitions");
-                    anyhow::ensure!(!*running.cancellation().borrow(), "boot policy job cancelled before publication");
+                    if !running.begin_mutation() {
+                        return Err(crate::core::declarative::storage::ProvisionCancelled.into());
+                    }
                     let saved = store.apply_review_mode(&bytes, &snapshot.revision, &plan.fingerprint,
                         crate::core::declarative::ApplyMode::NextStart, &*provider).await?;
                     Ok(json!({"service":id,"enabled":enable,"revision":saved.revision}))
                 }.await;
                 match result {
                     Ok(value) => running.finish(Outcome::Succeeded(value)),
+                    Err(error) if error.is::<crate::core::declarative::storage::ProvisionCancelled>() => running.finish(Outcome::Cancelled),
                     Err(error) => running.finish(Outcome::Failed(error.to_string())),
                 }
             }).await
@@ -3039,6 +3016,10 @@ pub async fn execute_tool(
                         running.finish(Outcome::Failed(error.to_string()));
                         return;
                     }
+                }
+                if !running.begin_mutation() {
+                    running.finish(Outcome::Cancelled);
+                    return;
                 }
                 let result = if let Some(member) = &member {
                     provider_clone.container_action(&config, &id, member, &action).await
@@ -3308,7 +3289,24 @@ where
             );
         }
     };
-    tokio::spawn(run(running));
+    tokio::spawn(async move {
+        // These operations already carry cancellation into their bounded work,
+        // or explicitly close the window immediately before publication.
+        let cooperative = matches!(tool,
+            "managed_backup_prepare" | "managed_backup_publish" |
+            "managed_storage_create" | "managed_service_enable" | "managed_service_disable" |
+            "applications_action" | "managed_container_action" |
+            "managed_service_start" | "managed_service_stop" | "managed_service_restart");
+        if !cooperative && !running.begin_mutation() {
+            running.finish(Outcome::Cancelled);
+            return;
+        }
+        if cooperative && *running.cancellation().borrow() {
+            running.finish(Outcome::Cancelled);
+            return;
+        }
+        run(running).await;
+    });
     (StatusCode::OK, json!({ "job": job }))
 }
 

@@ -14,6 +14,14 @@ use super::{
 
 pub(super) const MARKER: &str = ".maestro-storage.json";
 
+/// Cooperative cancellation before storage publication.
+#[derive(Debug)]
+pub struct ProvisionCancelled;
+impl std::fmt::Display for ProvisionCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("operation cancelled before publication") }
+}
+impl std::error::Error for ProvisionCancelled {}
+
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct StorageMeta {
@@ -436,7 +444,7 @@ impl StorageProvider {
         let parent = &prepared.parent;
         let temp = format!(".maestro-new-storage-{}", uuid::Uuid::new_v4().simple());
         let directory = prepared.plan.kind == "directory";
-        ensure!(!*cancellation.borrow(), "provisioning cancelled before staging");
+        if *cancellation.borrow() { return Err(ProvisionCancelled.into()); }
         let staged = if directory {
             fs::mkdirat(parent, &temp, fs::Mode::from_bits_truncate(0o700))?;
             match store::open_child_directory(parent, &temp) {
@@ -480,7 +488,7 @@ impl StorageProvider {
                 if let Some(source) = &prepared.source {
                     let definition = prepared.plan.source.as_ref().ok_or_else(|| anyhow!("source definition missing"))?;
                     source.verify_checksum(&definition.sha256, cancellation).await?;
-                    ensure!(!*cancellation.borrow(), "provisioning cancelled before conversion");
+                    if *cancellation.borrow() { return Err(ProvisionCancelled.into()); }
                     let program = qemu_img().ok_or_else(|| anyhow!("native qemu-img disappeared"))?;
                     let input = descriptor_path(&source.file);
                     let output = descriptor_path(&staged);
@@ -496,7 +504,7 @@ impl StorageProvider {
             ensure!(latest.plan.review_token == token, "provisioning conditions changed; review again");
             ensure!(store::current(&authority, &store.filename)?.is_some_and(|snapshot| snapshot.revision == revision),
                 "configuration changed; review again");
-            ensure!(!*cancellation.borrow(), "provisioning cancelled before publication");
+            if *cancellation.borrow() { return Err(ProvisionCancelled.into()); }
             ensure!(same_staging(), "staging identity changed; refusing publication");
             fs::renameat_with(parent, &temp, parent, &prepared.name, fs::RenameFlags::NOREPLACE)?;
             parent.sync_all().map_err(|_| anyhow!("data was published but parent sync failed; inspect destination before retrying"))?;
@@ -612,7 +620,7 @@ impl SourceImage {
             let mut offset = 0u64;
             let mut buffer = vec![0u8; 1024 * 1024];
             loop {
-                ensure!(!*cancellation.borrow(), "provisioning cancelled while verifying source");
+                if *cancellation.borrow() { return Err(ProvisionCancelled.into()); }
                 let read = file.read_at(&mut buffer, offset)?;
                 if read == 0 { break; }
                 offset += read as u64;

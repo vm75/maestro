@@ -11,6 +11,8 @@ export interface Job {
   id: string
   tool: string
   state: 'running' | 'succeeded' | 'failed' | 'cancelled'
+  cancellable?: boolean
+  cancellationRequested?: boolean
   createdAt: string
   finishedAt?: string
   output: string
