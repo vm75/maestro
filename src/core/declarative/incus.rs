@@ -242,6 +242,24 @@ impl IncusProvider{
         ensure!(change.backend=="incus","resource belongs to another provider");
         Ok(id)
     }
+    /// Reference transition check: reject unsafe edits at review, and
+    /// repeat the same native guard in the serialized apply preflight.
+    pub async fn review_transition(&self,change:&Change,previous:&Config,desired:&Config)->Result<()> {
+        let id=self.check_change(change)?;
+        check_transition(previous,desired,id)?;
+        if self.runner.is_test_mode(){return Ok(())}
+        if desired.services.contains_key(id) {
+            let want=render(desired,id)?;
+            if let Some(actual)=self.read(desired,id).await? {
+                ensure!(actual.status_code==102||!running_update_needs_stop(&want,&actual),"{STOPPED_UPDATE}");
+            } else {
+                ensure!(image_valid(&vm(desired,id)?.image),"initial Incus creation requires a locally available image alias or fingerprint");
+            }
+        } else {
+            ensure!(self.read(previous,id).await?.is_none(),"Incus definition removal requires an explicit data-preserving export workflow");
+        }
+        Ok(())
+    }
     async fn preflight_state(&self,change:&Change,previous:&Config,desired:&Config,mode:ApplyMode)->Result<(Option<Vec<u8>>,Option<Vec<u8>>,Option<Instance>)>{
         let id=self.check_change(change)?;
         check_transition(previous,desired,id)?;
