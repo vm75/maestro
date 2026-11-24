@@ -44,6 +44,9 @@ impl IncusProvider{
 // Inspect without extracting. Require the reviewed portable root disk and
 // matching archive identity; reject additional volumes, snapshots and links.
 pub(crate) fn verify_archive(c:&Config,id:&str,object:&NativeObject,file:File,end:Instant)->Result<()>{
+    let want=render(c,id)?;
+    ensure!(object.backend=="incus"&&object.name==instance_name(id)&&object.project==project(c,id)?
+        &&object.pool==want.devices["root"]["pool"]&&object.content_type=="block","Incus archive object differs from the authoritative definition");
     let mut archive=tar::Archive::new(file);
     let mut members=BTreeMap::new();let mut index=None;
     for row in archive.entries()?{
@@ -68,6 +71,17 @@ pub(crate) fn verify_archive(c:&Config,id:&str,object:&NativeObject,file:File,en
             ensure!(count==size,"truncated Incus archive member");
         }
     }
+    // tar stops at a zero header; reject concatenated archives and
+    // non-zero bytes after the end marker.
+    let mut file=archive.into_inner();
+    let mut trailing=[0;65536];let mut count=0u64;
+    loop {
+        ensure!(Instant::now()<end,"Incus archive verification timed out");
+        let n=file.read(&mut trailing)?;if n==0{break}
+        ensure!(trailing[..n].iter().all(|b|*b==0),"unexpected data after Incus tar end");
+        count+=n as u64;
+    }
+    ensure!(count>=512,"Incus archive end marker is incomplete");
     let x=index.ok_or_else(||anyhow!("Incus archive index missing"))?;
     ensure!(x["name"]==object.name&&x["pool"]==object.pool&&x["type"]=="virtual-machine"
         &&x["optimized"].as_bool()==Some(false)&&x["optimized_header"].as_bool()==Some(false)
@@ -80,6 +94,9 @@ pub(crate) fn verify_archive(c:&Config,id:&str,object:&NativeObject,file:File,en
         &&cfg["pool"]["name"]==object.pool&&cfg["pool"]["driver"]==x["backend"]
         &&(cfg["dependent_volumes"].is_null()||cfg["dependent_volumes"].as_sequence().is_some_and(Vec::is_empty)),
         "Incus archive identity or dependency coverage differs");
+    let devices:BTreeMap<String,BTreeMap<String,String>>=serde_yaml::from_value(guest["devices"].clone())?;
+    ensure!(devices==want.devices&&(guest["profiles"].is_null()||guest["profiles"].as_sequence().is_some_and(Vec::is_empty))
+        &&guest["stateful"].as_bool()!=Some(true),"Incus archived device or state coverage differs");
     ensure!(members.get("backup/virtual-machine.img").is_some_and(|(dir,size)|!*dir&&*size>0)
         &&members.get("backup/virtual-machine").is_some_and(|(dir,_)|*dir),"Incus archive root payload missing");
     for name in members.keys(){
