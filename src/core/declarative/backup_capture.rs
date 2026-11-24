@@ -11,7 +11,7 @@ use super::{Config,Store,CompositeProvider,backup_inventory::{self,BackupInvento
 const MAX_ENTRIES:usize=50000;
 const MAX_MANIFEST:usize=64*1024*1024;
 const METADATA_RESERVE:u64=72*1024*1024;
-#[derive(Clone,Debug,Serialize,Deserialize,PartialEq,Eq)]
+#[derive(Clone,Debug,Serialize,Deserialize,PartialEq,Eq,PartialOrd,Ord)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct NativeObject{
     pub backend:String,pub name:String,
@@ -321,7 +321,7 @@ pub async fn inventory(store:&Store,storage_root:&Path,provider:&CompositeProvid
         let Some(id)=input.resources.first().and_then(|key|key.strip_prefix("service/"))else{continue};
         let result=match config.services.get(id).map(|s|s.backend.as_str()){
             Some("libvirt")=>provider.libvirt.backup_dependency(&config,id).await,
-            Some("incus")=>provider.incus.backup_dependency(&config,id).await,
+            Some("incus")=>continue,
             _=>Err(anyhow!("native export is unsupported")),
         };
         if let Ok(object)=result{
@@ -329,6 +329,13 @@ pub async fn inventory(store:&Store,storage_root:&Path,provider:&CompositeProvid
             inv.issues.retain(|issue|issue.resource!=format!("service/{id}")||issue.code!="backup_native_dependencies");
         }
     }
+    if let Ok(inputs) = provider.incus.backup_inputs(&config).await {
+        inv.inputs.retain(|i| i.kind != "incus_instance_export");
+        inv.issues.retain(|issue| issue.code != "backup_native_dependencies" ||
+            !issue.resource.strip_prefix("service/").and_then(|id|config.services.get(id)).is_some_and(|s|s.backend=="incus"));
+        inv.inputs.extend(inputs);
+    }
+    ensure!(inv.inputs.len()+inv.requirements.len()<=2048 && serde_json::to_vec(&inv)?.len()<=1024*1024, "backup inventory exceeds bounds");
     ensure!(store.read()?.is_some_and(|s|s.revision==inv.revision),"configuration changed during inventory");
     Ok(inv)
 }
@@ -336,7 +343,7 @@ async fn service_state(provider:&CompositeProvider,c:&Config,id:&str)->Result<&'
     let service=c.services.get(id).context("unknown backup workload")?;
     let state=match service.backend.as_str(){
         "libvirt"=>provider.libvirt.status_details(c,id).await?.state,
-        "incus"=>provider.incus.status_details(c,id).await?.state,
+        "incus"=>provider.incus.backup_state(c,id).await?,
         "compose"=>{
             let status=if service.engine=="docker"{provider.docker_compose.status_details(c,id).await?}
                 else{provider.podman_compose.status_details(c,id).await?};
@@ -379,7 +386,7 @@ async fn resume(store:&Store,dir:&File,storage_root:&Path,provider:&CompositePro
                     if c.services[id].backend=="compose"{
                         let adapter=if c.services[id].engine=="docker"{&provider.docker_compose}else{&provider.podman_compose};
                         adapter.resume_backup_workload(c,id).await?;
-                    }else{provider.action(c,id,"start").await?;}
+                    }else if c.services[id].backend=="incus"{provider.incus.backup_action(c,id,"start").await?;}else{provider.action(c,id,"start").await?;}
                     ensure!(service_state(provider,c,id).await?=="running","workload did not resume");Ok(())
                 },
                 _=>Err(anyhow!("unknown workload state")),
@@ -406,12 +413,15 @@ pub async fn recover(store:&Store,storage_root:&Path,provider:&CompositeProvider
 }
 async fn native_boundary(provider:&CompositeProvider,c:&Config,inv:&BackupInventory)->Result<()>{
     for id in c.services.keys(){ensure!(service_state(provider,c,id).await?=="stopped","all workloads must be verified stopped for capture");}
+    let fresh=provider.incus.backup_inputs(c).await?;
+    let reviewed:Vec<_>=inv.inputs.iter().filter(|i|i.native.as_ref().is_some_and(|n|n.backend=="incus")).collect();
+    ensure!(fresh.len()==reviewed.len()&&fresh.iter().all(|i|reviewed.iter().any(|r|r.kind==i.kind&&r.native==i.native&&r.resources==i.resources)), "Incus backup dependency graph changed");
     for input in inv.inputs.iter().filter(|i|i.strategy=="native_export"){
         let object=input.native.as_ref().context("unresolved native export")?;
         let id=input.resources.first().and_then(|s|s.strip_prefix("service/")).context("invalid native resource")?;
         match object.backend.as_str(){
             "libvirt"=>{provider.libvirt.validate_backup(c,id,object,true).await?;},
-            "incus"=>provider.incus.validate_backup(c,id,object,true).await?,
+            "incus"=>provider.incus.validate_backup(c,input,true).await?,
             _=>return Err(anyhow!("unsupported native exporter")),
         }
     }Ok(())
@@ -432,8 +442,10 @@ fn expected_paths(m:&Manifest)->Result<BTreeMap<String,(String,u64,String)>>{
     for export in &m.native_exports{
         ensure!(portable(&export.bundle_path)&&export.bundle_path.starts_with("native/")&&export.size_bytes>0
             &&store::valid_revision(&export.sha256)&&export.backend==export.native.backend
-            &&matches!((export.backend.as_str(),export.kind.as_str()),("incus","incus_instance_export")|("libvirt","libvirt_guest_state"))
-            &&export.resources.len()==1,"invalid native export");
+            &&matches!((export.backend.as_str(),export.kind.as_str()),("incus","incus_instance_export")|("incus","incus_custom_volume")|("libvirt","libvirt_guest_state"))
+            && !export.resources.is_empty() && export.resources.len()<=128
+            && (export.kind=="incus_custom_volume"||export.resources.len()==1)
+            && export.resources.windows(2).all(|w|w[0]<w[1]),"invalid native export");
         ensure!(expected.insert(export.bundle_path.clone(),("file".into(),export.size_bytes,export.sha256.clone())).is_none(),"duplicate native export");
     }
     let keys:Vec<_>=expected.keys().cloned().collect();
@@ -501,7 +513,12 @@ fn verify_bundle(root:&File,checksum:&str,revision:&str,source_root:&Path,storag
     let mut native_ids=BTreeSet::new();
     for exp in &manifest.native_exports{
         let id=exp.resources[0].strip_prefix("service/").filter(|id|super::id_valid(id)).context("invalid native capture resource")?;
-        ensure!(native_ids.insert(id),"duplicate native capture resource");
+        for resource in &exp.resources{
+            let id=resource.strip_prefix("service/").filter(|id|super::id_valid(id)).context("invalid native capture resource")?;
+            let service=config.services.get(id).context("unknown native capture consumer")?;
+            ensure!(service.backend==exp.backend&&service.kind=="vm","native capture consumer backend differs");
+        }
+        if exp.kind!="incus_custom_volume"{ensure!(native_ids.insert(id),"duplicate native capture resource");}
         let service=config.services.get(id).context("unknown captured native guest")?;
         ensure!(service.backend==exp.backend&&service.kind=="vm","native capture backend differs");
         match exp.backend.as_str(){
@@ -511,10 +528,11 @@ fn verify_bundle(root:&File,checksum:&str,revision:&str,source_root:&Path,storag
                 let raw=read_small(root,&exp.bundle_path,super::MAX_CONFIG_BYTES)?;
                 super::libvirt_render::validate_backup_xml(&raw,&want)?;
             },
-            "incus"=>super::incus::verify_backup_archive(&config,id,&exp.native,read_export(root,&exp.bundle_path)?,end)?,
+            "incus"=>{},
             _=>return Err(anyhow!("unsupported native capture")),
         }
     }
+    super::incus::verify_bundle_dependencies(&config,&manifest.native_exports,root,end)?;
     ensure!(config.services.iter().filter(|(_,s)|s.kind=="vm").all(|(id,_)|native_ids.contains(id.as_str())),"native guest capture is missing");
     Ok(manifest)
 }
@@ -542,7 +560,7 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
             tokio::time::timeout(end.saturating_duration_since(Instant::now()),async{
                 match object.backend.as_str(){
                     "libvirt"=>{provider.libvirt.validate_backup(&config,id,object,false).await?;},
-                    "incus"=>provider.incus.validate_backup(&config,id,object,false).await?,
+                    "incus"=>provider.incus.validate_backup(&config,input,false).await?,
                     _=>return Err(anyhow!("native export unsupported")),
                 }Ok(())
             }).await??;
@@ -566,7 +584,7 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
             for id in running.iter().rev(){
                 check_time(end)?;check_revision(store,&dir,&j.revision)?;
                 j.services.insert(id.clone(),"stop_attempted".into());persist(store,&dir,&mut j)?;
-                provider.action(&config,id,"stop").await?;
+                if config.services[id].backend=="incus"{provider.incus.backup_action(&config,id,"stop").await?;}else{provider.action(&config,id,"stop").await?;}
                 ensure!(service_state(provider,&config,id).await?=="stopped","workload did not reach verified stopped state");
                 j.services.insert(id.clone(),"stopped".into());persist(store,&dir,&mut j)?;
             }
@@ -588,7 +606,7 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
                 let id=input.resources[0].strip_prefix("service/").context("invalid native resource")?;
                 let exported=match object.backend.as_str(){
                     "libvirt"=>provider.libvirt.backup_export(&config,id,object,&publication.root,end).await?,
-                    "incus"=>provider.incus.backup_export(&config,id,object,&publication.root,end,available_bytes(&publication.root)?.saturating_sub(METADATA_RESERVE)).await?,
+                    "incus"=>provider.incus.backup_export(&config,input,&publication.root,end,available_bytes(&publication.root)?.saturating_sub(METADATA_RESERVE)).await?,
                     _=>return Err(anyhow!("native exporter unavailable")),
                 };
                 exports.push(exported);
