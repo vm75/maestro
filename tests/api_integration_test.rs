@@ -2110,6 +2110,112 @@ async fn linux_browser_session_can_sign_in_and_revoke() {
     );
 }
 
+#[cfg(feature = "linux")]
+#[tokio::test]
+async fn linux_browser_session_supports_explicit_lan_http_origin() {
+    let (_, mut state, _temp) = setup_test_app().await;
+    let config = std::sync::Arc::make_mut(&mut state.config);
+    config.platform = maestro::config::Platform::Linux;
+    config.server.allowed_origins = vec!["http://192.168.192.70:3030".into()];
+    let token = config.server.auth_token.clone();
+    let app = api::app(state).unwrap();
+    let request = |method, path| {
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::HOST, "192.168.192.70:3030")
+    };
+    for (origin, supplied, expected) in [
+        (None, token.as_str(), StatusCode::FORBIDDEN),
+        (
+            Some("http://other.example:3030"),
+            token.as_str(),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            Some("http://192.168.192.70:9999"),
+            token.as_str(),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            Some("http://192.168.192.70:3030"),
+            "wrong",
+            StatusCode::UNAUTHORIZED,
+        ),
+    ] {
+        let mut login =
+            request("POST", "/api/session").header(header::CONTENT_TYPE, "application/json");
+        if let Some(origin) = origin {
+            login = login.header(header::ORIGIN, origin);
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                login
+                    .body(Body::from(
+                        serde_json::json!({"token": supplied}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            request("POST", "/api/session")
+                .header(header::ORIGIN, "http://192.168.192.70:3030")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::json!({"token": token}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let set_cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
+    let attributes: Vec<_> = set_cookie.split("; ").collect();
+    assert!(attributes.contains(&"HttpOnly"));
+    assert!(attributes.contains(&"SameSite=Strict"));
+    assert!(!attributes.contains(&"Secure"));
+    let cookie = attributes[0];
+    let status_request = || {
+        request("GET", "/api/status")
+            .header(header::COOKIE, cookie)
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        app.clone()
+            .oneshot(status_request())
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    for (origin, expected) in [
+        (None, StatusCode::FORBIDDEN),
+        (Some("http://other.example:3030"), StatusCode::FORBIDDEN),
+        (Some("http://192.168.192.70:3030"), StatusCode::OK),
+    ] {
+        let mut logout = request("DELETE", "/api/session").header(header::COOKIE, cookie);
+        if let Some(origin) = origin {
+            logout = logout.header(header::ORIGIN, origin);
+        }
+        let response = app
+            .clone()
+            .oneshot(logout.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    assert_eq!(
+        app.oneshot(status_request()).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
+
 #[cfg(feature = "linux-ui")]
 #[tokio::test]
 async fn linux_shell_assets_are_served_only_on_linux() {

@@ -50,9 +50,29 @@ must not be deployed on unrelated production hosts.
 For development, run `npm --prefix linux-web ci`,
 `npm --prefix linux-web run build`, and add `--no-default-features --features linux-ui` to
 `cargo run`. Start the binary with a Linux configuration and open its root URL.
-Sign in with the configured access token. Browser sign-in accepts local HTTP
-or the HTTPS URL listed in `server.allowed_origins`. For HTTPS, the reverse
-proxy must preserve the public Host header.
+Sign in with the configured access token. Browser sign-in accepts loopback HTTP
+and exact HTTP or HTTPS origins listed in `server.allowed_origins`. For LAN
+access, add the full origin (for example,
+`http://192.168.192.70:3030`) and restart Maestro. HTTP sessions use cookies
+without the Secure attribute; use HTTPS when transport encryption is required.
+For HTTPS, the reverse proxy must preserve the public Host header.
+
+If Maestro will manage nginx and certificates, bootstrap over LAN HTTP first.
+Keep the existing server settings (including the token) and set:
+
+```yaml
+server:
+  bind: "0.0.0.0"
+  port: 3030
+  allowed_origins:
+    - "http://192.168.192.70:3030"
+```
+
+Replace the example address with the host's LAN address and restrict port 3030
+to the LAN. Restart Maestro, open that exact origin and complete sign-in/setup.
+After configuring nginx and certificates, add the public HTTPS origin to the
+list and restart before switching to it. If nginx runs on the same machine,
+you can then bind Maestro to loopback to restrict direct access.
 
 ## Non-root Linux mode and optional privileged helper (Phase 2 WIP)
 
@@ -578,7 +598,8 @@ page can create an administrator using the bootstrap token and a password of
 fixed-format password hash in the same YAML, revokes
 bootstrap cookies, and switches browser login to username/password. Bearer-token
 access remains available for agents. Browser sessions persist across restart;
-sign-out revokes the selected session. Setup requires loopback HTTP or HTTPS.
+sign-out revokes the selected session. Setup requires loopback HTTP or an
+explicitly allowed HTTP/HTTPS origin.
 The existing Linux lab layout remains available after its one-time YAML migration. The parity ledger tracks the
 remaining auth, installer, helper and native-provider acceptance work.
 

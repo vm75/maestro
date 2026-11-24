@@ -110,8 +110,10 @@ Credentials use fixed PBKDF2-SHA256 parameters in the same YAML authority;
 setup changes the durable session scope and invalidates bootstrap cookies.
 Login attempts are bounded by peer address, and password work has a concurrency
 limit. Host and Origin validation applies to the
-session and tool routes. Existing REST management routes use bearer
-authentication.
+session and tool routes. Browser authentication accepts loopback HTTP and exact
+configured HTTP/HTTPS origins, allowing LAN bootstrap before managed nginx and
+certificates are available. Cookies carry Secure on HTTPS origins only.
+Existing REST management routes use bearer authentication.
 
 The tool bridge exposes job history, details, and cancellation. The job store
 keeps up to 64 entries in memory and retains the latest 128 KiB of each job's

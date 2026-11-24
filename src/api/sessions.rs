@@ -151,7 +151,7 @@ pub(super) async fn login(
         return error(
             StatusCode::FORBIDDEN,
             "forbidden_origin",
-            "Sign in from the local or HTTPS browser interface.",
+            "Sign in from an allowed browser origin.",
         );
     };
     let Ok(Json(credentials)) = credentials else {
@@ -246,7 +246,7 @@ pub(super) async fn setup(
         return error(
             StatusCode::FORBIDDEN,
             "forbidden_origin",
-            "Setup requires the local or HTTPS browser interface.",
+            "Setup requires an allowed browser origin.",
         );
     };
     let Ok(Json(credentials)) = credentials else {
@@ -355,7 +355,7 @@ pub(super) async fn logout(
         return error(
             StatusCode::FORBIDDEN,
             "forbidden_origin",
-            "Sign out from the local or HTTPS browser interface.",
+            "Sign out from an allowed browser origin.",
         );
     };
     if let Some(key) = cookie_key(&headers) {
@@ -376,13 +376,12 @@ pub(super) async fn logout(
 }
 
 fn cookie_security(headers: &HeaderMap) -> Option<bool> {
-    // The origin middleware has already matched this origin to the request authority.
+    // The origin middleware has already matched this origin to the request authority
+    // and required an explicit allowed origin for non-loopback hosts.
     let origin = url::Url::parse(headers.get(header::ORIGIN)?.to_str().ok()?).ok()?;
     match (origin.scheme(), origin.host()?) {
         ("https", _) => Some(true),
-        ("http", url::Host::Domain("localhost")) => Some(false),
-        ("http", url::Host::Ipv4(ip)) if ip.is_loopback() => Some(false),
-        ("http", url::Host::Ipv6(ip)) if ip.is_loopback() => Some(false),
+        ("http", _) => Some(false),
         _ => None,
     }
 }
