@@ -4,6 +4,8 @@ use axum::{
     response::{Html, IntoResponse, Response},
 };
 
+include!(concat!(env!("OUT_DIR"), "/linux_ui_assets.rs"));
+
 pub(super) fn index() -> Response {
     (
         [(header::CACHE_CONTROL, "no-store")],
@@ -13,49 +15,8 @@ pub(super) fn index() -> Response {
 }
 
 pub(super) async fn asset(Path(name): Path<String>) -> Response {
-    let (content_type, content): (&str, &[u8]) = match name.as_str() {
-        "shell.js" => (
-            "text/javascript",
-            include_bytes!("../../linux-web/dist/shell.js"),
-        ),
-        "Overview.js" => (
-            "text/javascript",
-            include_bytes!("../../linux-web/dist/Overview.js"),
-        ),
-        "Applications.js" => (
-            "text/javascript",
-            include_bytes!("../../linux-web/dist/Applications.js"),
-        ),
-        "Services.js" => (
-            "text/javascript",
-            include_bytes!("../../linux-web/dist/Services.js"),
-        ),
-        "Shares.js" => (
-            "text/javascript",
-            include_bytes!("../../linux-web/dist/Shares.js"),
-        ),
-        "Updates.js" => (
-            "text/javascript",
-            include_bytes!("../../linux-web/dist/Updates.js"),
-        ),
-        "Activity.js" => (
-            "text/javascript",
-            include_bytes!("../../linux-web/dist/Activity.js"),
-        ),
-        "AgentAccess.js" => (
-            "text/javascript",
-            include_bytes!("../../linux-web/dist/AgentAccess.js"),
-        ),
-        "Configuration.js" => (
-            "text/javascript",
-            include_bytes!("../../linux-web/dist/Configuration.js"),
-        ),
-        "select.js" => (
-            "text/javascript",
-            include_bytes!("../../linux-web/dist/select.js"),
-        ),
-        "style.css" => ("text/css", include_bytes!("../../linux-web/dist/style.css")),
-        _ => return StatusCode::NOT_FOUND.into_response(),
+    let Some((content_type, content)) = embedded_asset(&name) else {
+        return StatusCode::NOT_FOUND.into_response();
     };
     (
         [
@@ -65,4 +26,29 @@ pub(super) async fn asset(Path(name): Path<String>) -> Response {
         content,
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embeds_current_vite_assets() {
+        assert_eq!(embedded_asset("shell.js").unwrap().0, "text/javascript");
+        assert_eq!(embedded_asset("style.css").unwrap().0, "text/css");
+        let dist = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("linux-web/dist");
+        for entry in std::fs::read_dir(dist).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if entry.file_type().unwrap().is_file()
+                && matches!(path.extension().and_then(|ext| ext.to_str()), Some("js" | "css"))
+            {
+                let name = entry.file_name();
+                let (_, embedded) = embedded_asset(name.to_str().unwrap()).unwrap();
+                assert_eq!(embedded, std::fs::read(path).unwrap().as_slice());
+            }
+        }
+        assert!(embedded_asset("../Cargo.toml").is_none());
+        assert!(embedded_asset("unknown.js").is_none());
+    }
 }
