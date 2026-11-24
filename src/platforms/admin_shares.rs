@@ -12,11 +12,11 @@ use tokio::{io::AsyncWriteExt, process::Command, time::timeout};
 
 use super::admin_packages::trusted_executable;
 
-const PASSWORD_TIMEOUT: Duration = Duration::from_secs(30);
+const PASSWORD_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub fn validate_password(password: &str) -> Result<()> {
     ensure!(
-        (1..=256).contains(&password.len())
+        (1..=256).contains(&password.chars().count()) && password.len() <= 1024
             && !password.trim().is_empty()
             && password
                 .chars()
@@ -26,7 +26,7 @@ pub fn validate_password(password: &str) -> Result<()> {
     Ok(())
 }
 
-fn caller_name(uid: u32) -> Result<String> {
+pub(super) fn caller_name(uid: u32) -> Result<String> {
     ensure!(uid > 0, "Samba password requires non-root workload caller");
     let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
     let mut found: *mut libc::passwd = std::ptr::null_mut();
