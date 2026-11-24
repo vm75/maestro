@@ -2664,16 +2664,28 @@ shares:
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
     let (status, logs) = call("managed_service_logs", serde_json::json!({"service":"web","tail":10})).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(logs["text"].is_string());
+    assert_eq!(status, StatusCode::OK, "managed logs response: {logs:?}");
+    assert!(logs["text"].as_str().unwrap().starts_with("SIMULATED:"));
     assert_eq!(logs["source"], "simulation");
     let (status, val) = call(
         "managed_service_restart",
         serde_json::json!({"service":"web","confirm":true}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(val["job"]["id"].is_string());
+    assert_eq!(status, StatusCode::OK, "restart response: {val:?}");
+    let restart_id = val["job"]["id"].as_str().unwrap();
+    let mut succeeded = false;
+    for _ in 0..50 {
+        let (status, job) = call("jobs_get", serde_json::json!({"id": restart_id})).await;
+        assert_eq!(status, StatusCode::OK, "restart job: {job:?}");
+        if job["state"] == "succeeded" {
+            succeeded = true;
+            break;
+        }
+        assert_ne!(job["state"], "failed", "restart job failed: {job:?}");
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+    assert!(succeeded, "restart job did not complete");
 
     // 7. Check shares_status
     let (status, val) = call("shares_status", serde_json::json!({})).await;

@@ -30,6 +30,9 @@ impl IncusProvider {
             "restart" => "restart",
             other => return Err(anyhow!("unsupported incus action: {other}")),
         };
+        if self.runner.is_test_mode() {
+            return Ok(format!("SIMULATED: Incus {cmd} on {service_id}"));
+        }
         let output = self
             .runner
             .capture_bounded(
@@ -43,6 +46,9 @@ impl IncusProvider {
     }
 
     pub async fn logs(&self, service_id: &str) -> Result<String> {
+        if self.runner.is_test_mode() {
+            return Ok(format!("SIMULATED: Incus logs for {service_id}"));
+        }
         let output = self
             .runner
             .capture_bounded(
@@ -197,5 +203,18 @@ impl RecoveryProvider for IncusProvider {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod simulation_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn lifecycle_and_logs_do_not_require_native_capture_in_simulation() {
+        let provider = IncusProvider::new("/nonexistent/incus".into(), CommandRunner::new(true));
+        assert!(provider.action("demo", "restart").await.unwrap().starts_with("SIMULATED:"));
+        assert!(provider.logs("demo").await.unwrap().starts_with("SIMULATED:"));
+        assert!(provider.action("demo", "invalid").await.is_err());
     }
 }

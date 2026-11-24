@@ -71,6 +71,9 @@ impl LibvirtProvider {
             "restart" | "reboot" => "reboot",
             other => return Err(anyhow!("unsupported libvirt action: {other}")),
         };
+        if self.runner.is_test_mode() {
+            return Ok(format!("SIMULATED: Libvirt {cmd} on {service_id}"));
+        }
         let output = self
             .runner
             .capture_bounded(
@@ -267,5 +270,17 @@ mod tests {
         assert!(xml.contains("<uuid>c3d699a2-921d-4009-8b63-1d0144fbb7dc</uuid>"));
         assert!(xml.contains("<mac address='52:54:00:12:34:56'/>"));
         assert!(xml.contains("service='debvm' fingerprint='fp001'"));
+    }
+}
+
+#[cfg(test)]
+mod simulation_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn lifecycle_does_not_require_native_capture_in_simulation() {
+        let provider = LibvirtProvider::new("/nonexistent/virsh".into(), CommandRunner::new(true));
+        assert!(provider.action("demo", "restart").await.unwrap().starts_with("SIMULATED:"));
+        assert!(provider.action("demo", "invalid").await.is_err());
     }
 }
