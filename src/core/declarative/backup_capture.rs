@@ -658,7 +658,76 @@ pub fn publish(store:&Store,storage_root:&Path,revision:&str,token:&str,seconds:
     if rename{
         let publication=Publication{parent,root,artifact:j.artifact.clone(),destination:j.destination.clone()};
         publication.rename()?;
-    }else{parent.sync_all()?;}
+    }else{
+        let current=open_absolute(dest,true)?;let m=current.metadata()?;
+        ensure!((m.dev(),m.ino())==(j.artifact.device,j.artifact.inode),"published capture identity changed");
+        parent.sync_all()?;
+    }
     j.artifact.stage="published".into();persist(store,&dir,&mut j)?;
     status(store)
+}
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt,symlink};
+    use crate::{command::CommandRunner,config::AppConfig};
+    fn fixture()->(tempfile::TempDir,Store,PathBuf,PathBuf){
+        let tmp=tempfile::tempdir().unwrap();
+        fs::set_permissions(tmp.path(),fs::Permissions::from_mode(0o700)).unwrap();
+        let root=tmp.path().join("source");
+        let store=Store::new(root.clone());
+        store.save(b"version: 1\nstorage:\n  data: {kind: directory, path: data}\n",super::super::MISSING_REVISION).unwrap();
+        let storage=root.join("storage");
+        fs::create_dir_all(storage.join("data")).unwrap();
+        fs::write(storage.join("data/payload"),b"private payload").unwrap();
+        let dest=tmp.path().join("backup");
+        (tmp,store,storage,dest)
+    }
+    #[tokio::test]
+    async fn capture_and_reviewed_publication_verify_exact_tree(){
+        let (_tmp,store,storage,dest)=fixture();
+        let provider=CompositeProvider::new(&AppConfig::default(),CommandRunner::new(true));
+        let snapshot=store.read().unwrap().unwrap();
+        let result=prepare(&store,&storage,&provider,PrepareOptions{revision:snapshot.revision.clone(),destination:dest.to_str().unwrap().into(),quiesce:true,deadline_seconds:30}).await.unwrap();
+        assert_eq!(result["stage"],"captured");
+        assert_eq!(fs::read(dest.join("storage/data/payload")).unwrap(),b"private payload");
+        assert_eq!(fs::read(dest.join("server-man.yaml")).unwrap(),snapshot.bytes);
+        assert_eq!(fs::metadata(dest.join("manifest.json")).unwrap().mode()&0o077,0);
+        let status_before=status(&store).unwrap();
+        let j=status_before.journal.as_ref().unwrap();
+        assert_eq!(j.stage,"complete");assert_eq!(j.artifact.stage,"published");
+        assert!(ensure_idle(&store).is_ok());
+        assert!(publish(&store,&storage,&snapshot.revision,"stale",30).is_err());
+        assert!(publish(&store,&storage,&snapshot.revision,&status_before.review_token,30).is_ok());
+        let current=status(&store).unwrap();
+        fs::write(dest.join("storage/data/payload"),b"tampered").unwrap();
+        assert!(publish(&store,&storage,&snapshot.revision,&current.review_token,30).is_err());
+        assert_eq!(fs::read(dest.join("storage/data/payload")).unwrap(),b"tampered");
+    }
+    #[tokio::test]
+    async fn interruption_blocks_writes_and_release_does_not_delete_staging(){
+        let (_tmp,store,storage,dest)=fixture();
+        let provider=CompositeProvider::new(&AppConfig::default(),CommandRunner::new(true));
+        let revision=store.read().unwrap().unwrap().revision;
+        symlink("/etc/passwd",storage.join("data/unsupported")).unwrap();
+        let result=prepare(&store,&storage,&provider,PrepareOptions{revision:revision.clone(),destination:dest.to_str().unwrap().into(),quiesce:true,deadline_seconds:30}).await;
+        assert!(result.is_err());assert!(!dest.exists());
+        let reviewed=status(&store).unwrap();
+        let staged=reviewed.journal.as_ref().unwrap().artifact.staging_path.clone();
+        assert!(Path::new(&staged).is_dir());assert!(ensure_idle(&store).is_err());
+        assert!(store.save(b"version: 1\n",&revision).is_err());
+        assert!(release(&store,&revision,"wrong").is_err());
+        let released=release(&store,&revision,&reviewed.review_token).unwrap();
+        assert_eq!(released.journal.unwrap().stage,"released");assert!(ensure_idle(&store).is_ok());
+        assert!(Path::new(&staged).is_dir());assert!(!dest.exists());
+    }
+    #[test]
+    fn publication_never_replaces_existing_directory(){
+        let (_tmp,store,_storage,dest)=fixture();
+        let source=store.path();
+        fs::create_dir(&dest).unwrap();fs::write(dest.join("keep"),b"keep").unwrap();
+        assert!(Publication::new(dest.to_str().unwrap(),source.parent().unwrap()).is_err());
+        assert_eq!(fs::read(dest.join("keep")).unwrap(),b"keep");
+    }
 }
