@@ -62,12 +62,14 @@ apply to the ASUSWRT/router executable or isolated simulation mode. The
 installer and guest validation for these rules are not yet complete.
 
 The separate, Linux-only `maestro-admin` is a root-owned one-shot program,
-invoked exclusively via fixed `sudo -n -- /usr/local/libexec/maestro-admin`
-without command-line arguments. Management operations use Server Man's
-one-shot JSON operation/arguments envelope on stdin. The earlier versioned
-capability probe remains transitional. The helper does not listen on a socket
-and has no general command execution verb.
-The root-owned private policy file is fixed at
+invoked exclusively via fixed `sudo -n -u root -- /usr/local/libexec/maestro-admin`
+without helper command-line arguments. Management operations use Server Man's
+one-shot JSON operation/arguments envelope on stdin. No private wire probe or
+protocol version is accepted. The helper does not listen on a socket and has
+no general command execution verb. Discovery checks the exact sudo authorization
+without executing the helper, and reads the same nonsecret root-owned grants
+that the helper independently enforces on every request.
+The root-owned policy file is fixed at
 `/etc/maestro/admin-policy.json`, with the following **illustrative** shape:
 
 ```json
@@ -82,8 +84,15 @@ The root-owned private policy file is fixed at
 ```
 
 Replace `1001` with the actual numeric UID of the chosen non-root workload
-account. Both this file and its parent directories must be root-owned, and the
-policy must be mode 0600. The helper executable must be a root-owned executable
+account. Both this file and its parent directories must be root-owned. The
+policy contains only authorization grants (no secrets) and the installer
+sets mode 0640 with the selected workload account's group, so the daemon
+can read its permissions but cannot modify them. The helper independently
+rejects group-write, other-user access, symlinks, unsafe parents, invalid
+contents and mismatched workload UIDs. Existing 0600 policies remain
+readable by the helper but disable daemon discovery until the reviewed
+helper installation is repeated; the installer preserves the grant contents.
+The helper executable must be a root-owned executable
 regular file under root-owned, nonwritable parent directories. An appropriate
 restricted sudoers line for a **reviewed** account is:
 
@@ -94,7 +103,7 @@ restricted sudoers line for a **reviewed** account is:
 The default `package_writes: false` denies package mutations in the
 root-owned policy. Enabling package operations also requires
 `server.allow_writes: true` and `server.privileged_operations: true` for native Linux YAML (or `system.allow_package_writes: true` in the legacy layout) in the non-root Maestro config,
-an authorized helper matching protocol 1 and a supported native manager.
+an authorized helper supporting the reference request/response contract and a supported native manager.
 Native package and dependency operations use fixed root-owned executables,
 validate 1–32 repository names, disallow URLs/flags/versions/repository
 overrides and do not execute a shell. Package refresh and installation may
@@ -373,9 +382,17 @@ system units in `system_units`: APT Samba uses `smbd.service` and
 `wsdd-server.service`; other supported Samba distributions use
 `smb.service` and `wsdd.service`; NFS uses `nfs-server.service`.
 Optional NetBIOS services are attempted only when authorized.
-The main daemon's native publication remains gated pending integration and
-native validation. These are source-level development contracts, not approval
-to install or enable the helper on production hosts.
+The Linux daemon now uses the same native share operations for the fixed
+reference configuration paths and enabled management policy. The
+`managed_share_publish` tool changes the authoritative YAML publication
+toggle through the revisioned apply journal; `shares_setup` is a separate
+confirmed job. The coordinator compares the complete protocol set against
+the reviewed before/after configuration and refuses unknown native state.
+Without authorized grants, native writes remain unavailable and read-only
+inventory remains accessible within the workload account's permissions.
+Native validation and differential helper acceptance remain outstanding.
+These are source-level development contracts, not approval to install or
+enable the helper on production hosts.
 
 Configuration's new backup panel is **metadata-only and non-restorable**.
 Private configuration history retains up to eight recent revisions and displays
