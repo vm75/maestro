@@ -934,3 +934,16 @@ Native start/restart also reject static data/dependency blockers. Other native
 boot providers remain gated; compilation and native validation are pending.
 
 Source image cloning uses protected, held file descriptors, explicit raw/qcow2 formats, header rejection of backing/external/encrypted qcow2 images, virtual-capacity checks, SHA-256 before and after conversion, and the same no-replacement publication. Native qemu-img testing remains outstanding.
+
+**Linux developer build checkpoint:** The stable-Rust Linux UI binary builds
+with `cargo build --locked --bin maestro --no-default-features --features linux-ui`.
+Fixed the Compose label parser delimiter and missing timeout import, Incus
+snapshot-variable shadowing, and capture-publication journal borrowing. Concurrent
+Incus prerequisite checks now own their service IDs so the shared HTTP/MCP
+dispatcher futures satisfy `Send`. This is compilation evidence only; native
+provider acceptance remains outstanding. All 26 focused library tests pass:
+4 native Compose, 14 capture/publication, 5 Incus and 3 preflight tests.
+Repository-wide formatting checks still report existing differences outside
+this corrective change. Linux Clippy with `-D warnings` reports seven existing
+findings in command argument counts, capture return/cast expressions and a
+preflight conditional; these are separate from the fixed compilation blockers.

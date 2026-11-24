@@ -5,6 +5,7 @@ use super::super::artifacts::{read_artifact,check_bytes,publish_artifact};
 use crate::core::declarative::{ApplyMode, composite::ManagedLogs, plan::service_fingerprint, quadlet::ContainerMemberStatus, revision};
 use serde_json::Value;
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 const ENV: &[(&str,&str)] = &[
     ("COMPOSE_ANSI","never"),("COMPOSE_DISABLE_ENV_FILE","1"),
@@ -113,7 +114,18 @@ struct Member { name: String, fingerprint: String, state: String, native_name: S
 
 fn labels(value: &Value) -> Result<BTreeMap<String,String>> {
     if let Some(map) = value.as_object() {
-        return map.iter().map(|(key,value)| Ok((key.clone(),value.as_str().ok_or_else(||anyhow!("invalid native label"))?.into())) .collect();
+        return map
+            .iter()
+            .map(|(key, value)| {
+                Ok((
+                    key.clone(),
+                    value
+                        .as_str()
+                        .ok_or_else(|| anyhow!("invalid native label"))?
+                        .into(),
+                ))
+            })
+            .collect();
     }
     let text = value.as_str().ok_or_else(|| anyhow!("native labels missing"))?;
     let mut result = BTreeMap::new();

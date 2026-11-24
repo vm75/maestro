@@ -4,7 +4,7 @@ use std::{collections::BTreeMap,fs::{self,File,Metadata},io::Read,path::{Path,Pa
 use anyhow::{Result,Context,ensure,anyhow};
 use rustix::{fs::{self as unix_fs,AtFlags,OFlags,Mode},io::Errno};
 use serde::Serialize;
-use super::{Config,Store,CompositeProvider,ObservedResource,ApplyPhase,store,journal};
+use super::{Store,CompositeProvider,ObservedResource,ApplyPhase,store,journal};
 
 pub(super) const CONFLICT_REMEDY:&str="Generated artifact publication conflict; review and reconcile private publication metadata before retry.";
 const SUFFIX:&str=".server-man-artifacts.json";

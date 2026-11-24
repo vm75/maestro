@@ -6,6 +6,12 @@
 
 - Rust 1.85 or newer.
 - A Unix-like environment with the standard Rust tooling.
+- For debugging in VS Code, install the CodeLLDB extension (`vadimcn.vscode-lldb`):
+
+  ```sh
+  code --install-extension vadimcn.vscode-lldb
+  ```
+
 - Python 3.11 or newer (for Linux lab setup scripts and nginx template validation). You can use `uv` to set up a virtual environment and install dependencies:
 
   ```sh
@@ -16,16 +22,48 @@
 
 ## Run locally
 
-```sh
-make run
-```
+Use `make help` to list the three development environments:
 
-Open <http://127.0.0.1:3030> with the fixture test token `maestro-test-token`.
-Fixture-backed test mode simulates external commands, skips ASUS menu changes,
-and does not send Wake-on-LAN packets.
+| Environment | First-time setup | Start | Browser access |
+| --- | --- | --- | --- |
+| Simulated router | None beyond Rust | `make run-simulated` | <http://127.0.0.1:3030>, token `maestro-test-token` |
+| Native Linux | `make init-linux` | `make run-linux` | <http://127.0.0.1:3030>, token from `data/linux/maestro.yaml` |
+| QEMU router | `make init-router` | `make run-router` | <http://127.0.0.1:8080/user20.asp>; see the [guest guide](../lab/aarch64/README.md) for credentials |
 
-For real services, see the [Linux integration guide](linux.md).
-For validating AArch64 packaging, Entware service startup, ASUS UI integration, and kernel WireGuard in an emulated guest, see the [AArch64 Router Lab guide](../lab/aarch64/README.md).
+Run one environment at a time: they share API port 3030, and Linux nginx uses
+the QEMU HTTP/HTTPS forwarding ports. Stop the foreground server with Ctrl+C;
+exit QEMU with Ctrl+A then X. Configuration and state are separate for each
+environment.
+
+Simulated router mode uses fixtures, simulates external commands, skips ASUS
+menu changes, and does not send Wake-on-LAN packets. `make run` remains an alias.
+
+Native Linux mode executes real operations as a non-root account. On Arch and
+Debian 12+ (including compatible derivatives), `make init-linux` installs system
+dependencies with `sudo` and prepares local configuration and frontend
+dependencies. Arch uses the existing pacman database; update the system normally
+before setup if it is out of date. Package managers may start the distribution's
+nginx service; Maestro's development nginx uses separate configuration and ports.
+
+When installed, mise manages Rust and Node; uv manages Python 3.11 and its
+dependencies in `.dev-tools/python`. Otherwise setup reuses compatible Rust or
+installs stable with rustup, uses distro Python/Jinja2/PyYAML, and reuses compatible
+Node/npm or downloads an official Node 22 archive with SHA-256 verification into
+`.dev-tools/node`. Toolchains and npm run as your account. Global tool defaults
+and existing Maestro configuration are preserved. Both init and run select the
+same tools without requiring shell activation. Each run rebuilds the Svelte UI
+before compiling and starting Maestro. See the [Linux integration guide](linux.md).
+
+QEMU router mode runs the real AArch64 router binary with Entware and mocked
+ASUS firmware interfaces in an Alpine guest. Setup builds the release IPK,
+downloads guest media and runs the guest installer; it requires the AArch64
+cross-compilation toolchain and [QEMU prerequisites](../lab/aarch64/README.md).
+After installation powers off, use `make run-router` for subsequent boots.
+This environment exercises packaging, service startup, ASUS UI integration and
+kernel WireGuard; it does not establish actual Asuswrt firmware compatibility.
+`make init-lab` and `make run-lab` remain available; the former requires an
+already-built IPK. `make test-router` checks guest scripts using mocked QEMU
+without booting a VM (`make test-lab` is an alias).
 
 ## Sync router data
 
@@ -64,6 +102,10 @@ This uses the same cross-compilation toolchain as `make release`.
 With the Python environment active, run `make test-nginx` for the bundled
 nginx policy and loopback tests. `make test-linux` exercises the API with real
 nginx, including managed-site persistence, regeneration, and HTTPS.
+
+`python3 -m unittest discover -s tests -p 'test_linux_dev.py' -v` checks Arch/Debian
+bootstrap selection, tool manager preference, version gates and download checksum
+handling with mocked commands. It installs no packages and changes no live state.
 
 `make test-quadlet` runs the opt-in native Quadlet generator test against rendered
 Maestro definitions. It generates into a temporary directory and starts no units.

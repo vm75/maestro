@@ -20,11 +20,17 @@ python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ requir
     echo 'Activate a Python 3.11+ environment with requirements.txt installed.' >&2
     exit 2
 }
+api_port=3030
+nginx_port=8080
+nginx_tls_port=8443
+umask 077
+mkdir -p "$lab"/{state,run,logs/nginx,nginx/conf.d,nginx/domains-available,nginx/domains-enabled,nginx/snippets,init.d,wireguard,certs}
+mkdir -p "$lab/tmp" "$lab/nginx/logs"
+
 nginx_bin=$(command -v nginx)
 dehydrated_bin=$(command -v dehydrated || true)
 if [[ -z "$dehydrated_bin" ]]; then
     dehydrated_bin="$lab/certs/dehydrated"
-    mkdir -p "$lab/certs"
     if curl -fsSL "https://raw.githubusercontent.com/dehydrated-io/dehydrated/master/dehydrated" -o "$dehydrated_bin" 2>/dev/null; then
         chmod 0700 "$dehydrated_bin"
         echo "Downloaded latest dehydrated to $dehydrated_bin."
@@ -35,13 +41,6 @@ fi
 if [[ ! -e "$lab/certs/dehydrated-dns01-hook.sh" && -f "$repo_root/scripts/dehydrated-dns01-hook.sh" ]]; then
     install -m 0755 "$repo_root/scripts/dehydrated-dns01-hook.sh" "$lab/certs/dehydrated-dns01-hook.sh"
 fi
-api_port=3030
-nginx_port=8080
-nginx_tls_port=8443
-umask 077
-mkdir -p "$lab"/{state,run,logs/nginx,nginx/conf.d,nginx/domains-available,nginx/domains-enabled,nginx/snippets,init.d,wireguard,certs}
-mkdir -p "$lab/tmp" "$lab/nginx/logs"
-
 if [[ ! -e "$lab/state/firewall-policy.json" && ! -L "$lab/state/firewall-policy.json" ]]; then
     printf '%s\n' '{"enabled":false,"observe_only":false,"rules":[],"allowlist":[]}' > "$lab/state/firewall-policy.json"
 fi
@@ -102,8 +101,8 @@ cat > "$lab/maestro.yaml" <<EOF
     "nginx": "$nginx_bin",
     "dehydrated": "$dehydrated_bin",
     "openssl": "$(command -v openssl)",
-    "ip": "/usr/sbin/ip",
-    "ping": "/bin/ping"
+    "ip": "$(command -v ip || printf /usr/sbin/ip)",
+    "ping": "$(command -v ping || printf /bin/ping)"
   },
   "asus_ui": {
     "enabled": false,
@@ -158,9 +157,9 @@ for name in S80nginx S99maestro; do
     fi
 done
 
-printf 'Linux lab ready: %s\n' "$lab"
+printf 'Linux development environment ready: %s\n' "$lab"
 printf 'Auth token is stored in %s/maestro.yaml\n' "$lab"
-printf 'Start from the repository root:\n  cargo run --no-default-features --features linux -- --config data/linux/maestro.yaml --linux-mode serve\n'
+printf 'Start from the repository root:\n  make run-linux\n'
 echo 'New configs use http://127.0.0.1:3030 and nginx port 8080. Existing files are preserved.'
 echo 'Optional feature tools: ip, ping, wg, wg-quick, dehydrated, ipset, iptables, ip6tables.'
 echo 'Configure their paths before testing those features; firewall enforcement requires an isolated VM or network namespace.'

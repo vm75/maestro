@@ -36,12 +36,26 @@ python3 scripts/build-web-ui.py --check
 node scripts/test-web-ui.mjs
 ```
 
-Useful repository shortcuts are `make check`, `make test`, `make run`,
-`make fmt`, `make clippy`, `make test-nginx`, `make test-lab`, and `make release`.
+Useful repository shortcuts are `make check`, `make test`, `make help`,
+`make fmt`, `make clippy`, `make test-nginx`, `make test-router`, and `make release`.
 `make test-nginx` needs Python 3.11+, Jinja2, PyYAML, nginx, and OpenSSL and uses temporary
-files and loopback servers. `make run` starts x64 test mode
+files and loopback servers. `make run-simulated` (`make run`) starts x64 test mode
 with `test-fixtures/etc/maestro/maestro.yaml`; it does not execute router commands or send
 Wake-on-LAN packets.
+
+For native Linux development with the Svelte UI, use `make init-linux` once
+and `make run-linux` as non-root. For the AArch64 QEMU router guest, use
+`make init-router` (builds the IPK and runs installation) then `make run-router`.
+Run one environment at a time because their ports overlap. `make test-router`
+checks guest scripts with mocked QEMU, without booting a guest. Legacy
+`init-lab` (requires a prebuilt IPK), `run-lab`, and `test-lab` remain available.
+
+`make init-linux` uses `scripts/linux-dev.sh` to install Arch/Debian-family
+dependencies through sudo, preferring existing mise for Rust/Node and uv for
+isolated Python dependencies. Its fallback uses rustup, distro Python and a
+checksum-verified local Node archive when needed. `.dev-tools/` is ignored.
+Verify the bootstrap without installation using
+`python3 -m unittest discover -s tests -p 'test_linux_dev.py' -v`.
 
 For **real Linux integration** use `platform: linux` (or
 `--linux-mode`) with `test_mode: false`. `make test-linux` runs a

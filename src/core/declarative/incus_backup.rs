@@ -154,8 +154,8 @@ impl IncusProvider {
         let declared = guest_disks(&actual.definition.devices)?;
         ensure!(declared.root==current.root && declared.volumes.is_subset(&current.volumes), "Incus expanded devices omit native disks");
         ensure!(current.root == want.devices["root"]["pool"], "Incus current root pool differs from authoritative binding");
-        let rows: Vec<Value> = self.get(Some(scope), &format!("{}/snapshots?recursion=1", instance_path(id))).await?;
-        let (snapshots, historical) = snapshot_records(&rows, c, id)?;
+        let snapshot_rows: Vec<Value> = self.get(Some(scope), &format!("{}/snapshots?recursion=1", instance_path(id))).await?;
+        let (snapshots, historical) = snapshot_records(&snapshot_rows, c, id)?;
         let references: References = current.volumes.union(&historical).cloned().collect();
         let instance = NativeObject { backend: "incus".into(), name: instance_name(id),
             project: scope.into(), pool: current.root, content_type: "block".into() };

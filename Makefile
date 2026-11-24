@@ -1,4 +1,17 @@
-.PHONY: check test test-linux test-podman test-quadlet test-nginx test-ipk test-ui test-lab run fmt clippy release ipk init-lab run-lab
+.DEFAULT_GOAL := check
+
+.PHONY: help check test test-linux test-podman test-quadlet test-nginx test-ipk test-ui test-router test-lab run run-linux run-router run-simulated init-linux init-router fmt clippy release ipk init-lab run-lab
+
+help:
+	@echo 'Development environments (run one at a time; all use API port 3030):'
+	@echo '  make run-simulated  Run fixture-backed router simulation (no setup required)'
+	@echo '  make init-linux    Install Arch/Debian dependencies and prepare native Linux'
+	@echo '  make run-linux     Build the Linux UI and run real Linux operations as non-root'
+	@echo '  make init-router   Build the IPK and install the AArch64 QEMU router guest'
+	@echo '  make run-router    Boot the installed QEMU router guest'
+	@echo '  make test-router   Check router guest scripts with mocked QEMU'
+	@echo 'See docs/development.md for prerequisites and browser access.'
+
 check:
 	cargo check --all-targets
 
@@ -24,11 +37,27 @@ test-podman:
 test-quadlet:
 	cargo test --locked --no-default-features --features linux --lib native_generator_accepts_rootless_artifacts -- --ignored
 
-test-lab:
+test-router:
 	bash tests/test_lab_aarch64.sh
 
-run:
-	cargo run -- --config ./test-fixtures/etc/maestro/maestro.yaml --test-mode serve
+test-lab: test-router
+
+run: run-simulated
+
+run-simulated:
+	cargo run --bin maestro --no-default-features --features asuswrt -- --config ./test-fixtures/etc/maestro/maestro.yaml --test-mode serve
+
+init-linux:
+	bash scripts/linux-dev.sh init
+
+run-linux:
+	bash scripts/linux-dev.sh run
+
+init-router: ipk
+	./lab/aarch64/init.sh
+
+run-router:
+	./lab/aarch64/run.sh
 
 fmt:
 	cargo fmt --all
@@ -45,5 +74,4 @@ ipk: release
 init-lab:
 	./lab/aarch64/init.sh
 
-run-lab:
-	./lab/aarch64/run.sh
+run-lab: run-router

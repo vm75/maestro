@@ -9,7 +9,7 @@ DISK="${LAB_DISK:-$LAB_DIR/router-lab.qcow2}"
 BASE_URL=https://dl-cdn.alpinelinux.org/alpine
 
 if [[ -e "$DISK" || -L "$DISK" ]]; then
-    echo "Lab disk already exists: $DISK. Use make run-lab to boot it."
+    echo "Lab disk already exists: $DISK. Use make run-router to boot it."
     exit 0
 fi
 
@@ -21,7 +21,7 @@ for candidate in "$REPO_DIR"/dist/maestro_*_aarch64-3.10.ipk; do
     fi
 done
 if [[ -z "$PACKAGE" || ! -f "$PACKAGE.sha256" ]]; then
-    echo 'Error: Build the Maestro IPK and checksum with make ipk before make init-lab.' >&2
+    echo 'Error: Run make init-router to build the Maestro IPK and checksum before guest installation.' >&2
     exit 1
 fi
 (cd "$(dirname "$PACKAGE")" && sha256sum -c "$(basename "$PACKAGE").sha256")

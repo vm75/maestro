@@ -21,7 +21,7 @@ To prepare a persistent local setup, run:
 
 ```sh
 ./scripts/setup-linux.sh
-cargo run --no-default-features --features linux -- --config data/linux/maestro.yaml --linux-mode serve
+cargo run --bin maestro --no-default-features --features linux -- --config data/linux/maestro.yaml --linux-mode serve
 ```
 
 The setup script checks for required tools and creates `data/linux/maestro.yaml`,
@@ -31,6 +31,27 @@ It preserves existing files on subsequent runs. New configs bind the API to
 file, and disable firewall enforcement and AdGuard integration. Nginx uses local
 temporary directories so it can run without root. Start nginx through the UI;
 the setup script does not start services or install packages.
+
+For development with the Svelte UI on Arch or Debian 12+ and compatible
+derivatives, use `make init-linux` once, then `make run-linux`, as your non-root
+account. Initialization uses `sudo` for distro build tools, nginx, OpenSSL,
+network tools and other system dependencies, then runs the setup script above
+and installs npm dependencies. Pacman uses the existing package database; keep
+Arch updated through your normal system upgrade procedure. Installing nginx
+may start the distribution's nginx service; the development instance uses its
+own tree and ports.
+
+Setup prefers existing mise for Rust (`rust@stable`) and Node (`node@22`), and
+uv for a Python 3.11 environment with `requirements.txt` under `.dev-tools/python`.
+Without mise it reuses compatible Rust or installs stable through rustup, and
+uses compatible Node/npm or an official, checksum-verified Node 22 binary under
+`.dev-tools/node` (x86_64/AArch64). Without uv it installs distro Python, Jinja2
+and PyYAML and requires Python 3.11+. The wrapper selects these tools for both
+init and run without changing your global tool defaults or requiring activation.
+No privileged Maestro helper is installed. Each run builds the UI and starts
+the Linux-feature server as your account. See the
+[development environments](development.md#run-locally) for the equivalent
+simulated-router and QEMU-router commands.
 
 ## Svelte shell build
 

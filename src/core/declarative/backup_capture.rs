@@ -1135,7 +1135,8 @@ pub fn publish(store:&Store,storage_root:&Path,revision:&str,token:&str,seconds:
     check_time(end)?;
     let dir=store::LockedDirectory::try_acquire(store.directory()?)?;let mut j=reviewed(store,&dir,revision,token)?;
     ensure!(j.revision==revision&&!j.artifact.manifest_checksum.is_empty()&&matches!(j.artifact.stage.as_str(),"synced"|"publishing"|"uncertain"|"published"),"no verified staged capture is available");
-    let dest=Path::new(&j.destination);let parent=open_absolute(dest.parent().context("missing capture parent")?,true)?;
+    let destination=j.destination.clone();
+    let dest=Path::new(&destination);let parent=open_absolute(dest.parent().context("missing capture parent")?,true)?;
     let p=parent.metadata()?;
     ensure!((p.dev(),p.ino())==(j.artifact.parent_device,j.artifact.parent_inode)&&p.uid()==unsafe{libc::geteuid()}&&p.mode()&0o022==0,"capture parent changed");
     let staged=Path::new(&j.artifact.staging_path).file_name().unwrap().to_str().unwrap();

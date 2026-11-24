@@ -101,14 +101,18 @@ builds, installer options, and service control.
 With **Rust 1.85+**, from a checkout:
 
 ```sh
-make run
+make run-simulated
 ```
 
 Open <http://127.0.0.1:3030> and use the fixture test token `maestro-test-token`.
 This uses fixture data, simulates external commands, skips ASUS menu changes,
 and does not send Wake-on-LAN packets.
 
-For testing against real services, follow the [Linux integration guide](docs/linux.md).
+For real Linux services, use `make init-linux` once, then `make run-linux`.
+For the QEMU router environment, use `make init-router` once, then
+`make run-router`. See [development environments](docs/development.md#run-locally)
+for prerequisites and browser access, or run `make help`. `make run` remains
+an alias for `make run-simulated`.
 
 ## Configure and use
 

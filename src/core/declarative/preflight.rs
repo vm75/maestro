@@ -593,9 +593,15 @@ async fn backend_prerequisites(
                     error.to_string(),"Check local daemon, QEMU SPICE support and workload account permissions."));
             } else {
                 use futures_util::{StreamExt,stream};
-                let mut checks = stream::iter(config.services.iter().filter(|(_,s)|s.backend=="incus"))
-                    .map(|(id,_)| { let provider=&provider; async move {
-                        (id,provider.check_resource(config,id).await)
+                // Own each ID so the concurrent futures do not retain service
+                // iterator borrows across their native prerequisite checks.
+                let ids: Vec<String> = config.services.iter()
+                    .filter(|(_,service)|service.backend=="incus")
+                    .map(|(id,_)|id.clone()).collect();
+                let mut checks = stream::iter(ids)
+                    .map(|id: String| { let provider=&provider; async move {
+                        let result=provider.check_resource(config,&id).await;
+                        (id,result)
                     }}).buffer_unordered(4);
                 while let Some((id,result))=checks.next().await {
                     if let Err(error)=result {
