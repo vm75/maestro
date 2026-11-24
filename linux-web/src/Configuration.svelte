@@ -90,7 +90,7 @@
   let provisionBusy = $state(false)
   let provisionError = $state('')
   let provisionMessage = $state('')
-  interface ProvisionPlan { storage: string; revision: string; path: string; kind: string; format: string; sizeGiB: number; availableBytes: number; mode: string; consumers: string[]; reviewToken: string }
+  interface ProvisionPlan { storage: string; revision: string; path: string; kind: string; format: string; sizeGiB: number; availableBytes: number; mode: string; consumers: string[]; reviewToken: string; source?: { path: string; format: string; sha256: string }; sourceVirtualBytes?: number }
   let provisionReview = $state<{ key: string; plan: ProvisionPlan } | null>(null)
   const provisionKey = $derived(JSON.stringify([provisionId.trim(), provisionSize, revision]))
   const provisionPlan = $derived(provisionReview?.key === provisionKey ? provisionReview.plan : null)
@@ -112,7 +112,7 @@
 
   async function createProvision() {
     if (!provisionPlan || !writable || provisionBusy) return
-    if (!window.confirm('Create new empty data at the reviewed path? This is not restoration of missing data.')) return
+    if (!window.confirm(provisionPlan.source ? 'Clone the reviewed checksum-pinned initial image into a new disk? This is not restoration of missing data.' : 'Create new empty data at the reviewed path? This is not restoration of missing data.')) return
     const plan = provisionPlan
     provisionBusy = true; provisionError = ''; provisionMessage = ''; provisionReview = null
     try {
@@ -394,7 +394,7 @@
 
 <section class="panel" aria-labelledby="provision-title">
   <h2 id="provision-title">Provision new storage</h2>
-  <p>Use an existing storage reference and an absent owned path. This creates new data only, never restores missing data, creates parents or overwrites existing files. Source image cloning is not available yet.</p>
+  <p>Use an existing storage reference and an absent owned path. This creates new data only, never restores missing data, creates parents or overwrites existing files. A disk with a declared SHA-256-pinned source can be cloned into a new destination.</p>
   <form onsubmit={reviewProvision}>
     <div class="editor-grid">
       <label>Storage ID <input bind:value={provisionId} required maxlength="63" pattern="[a-z][a-z0-9_-]*" disabled={provisionBusy || !writable} /></label>
@@ -407,6 +407,7 @@
   {#if provisionPlan}
     <p>Destination: <code>{provisionPlan.path}</code></p>
     <p>{provisionPlan.kind} {provisionPlan.format} · {provisionPlan.sizeGiB} GiB · mode {provisionPlan.mode}</p>
+    {#if provisionPlan.source}<p>Initial image: <code>{provisionPlan.source.path}</code> ({provisionPlan.source.format}) · {provisionPlan.sourceVirtualBytes ?? 0} bytes virtual size</p><p>SHA-256: <code>{provisionPlan.source.sha256}</code></p>{/if}
     <p>Consumers: {provisionPlan.consumers.join(', ') || 'None'}. Sparse disk capacity is not reserved.</p>
     <button type="button" onclick={createProvision} disabled={provisionBusy || !writable}>Create reviewed new data</button>
   {/if}
