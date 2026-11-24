@@ -1,5 +1,5 @@
 //! Linux-only, one-shot privilege boundary. Never available in ASUSWRT builds.
-//! The workload server does not read the root policy or accept a helper path from clients.
+//! The workload server reads nonsecret grants; the helper independently checks root policy.
 use std::{
     collections::BTreeSet,
     fs,
@@ -27,46 +27,10 @@ use tokio::{
 pub const HELPER_PATH: &str = "/usr/local/libexec/maestro-admin";
 const POLICY_PATH: &str = "/etc/maestro/admin-policy.json";
 const SUDO_PATH: &str = "/usr/bin/sudo";
-const PROTOCOL: u32 = 1;
+const POLICY_VERSION: u32 = 1;
 const MAX_REQUEST: usize = reference::MAX_REQUEST;
 const MAX_REPLY: usize = 16384;
 const MAX_WIRE_REPLY: usize = 4 * 1024 * 1024;
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Request {
-    version: u32,
-    operation: String,
-    #[serde(default)]
-    unit: Option<String>,
-    #[serde(default)]
-    action: Option<String>,
-    #[serde(default)]
-    confirm: Option<bool>,
-    #[serde(default)]
-    packages: Vec<String>,
-    #[serde(default)]
-    target: Option<String>,
-    #[serde(default)]
-    password: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Reply {
-    version: u32,
-    ok: bool,
-    code: String,
-    message: String,
-    #[serde(default)]
-    system_units: Vec<String>,
-    #[serde(default)]
-    package_writes: bool,
-    #[serde(default)]
-    samba_password: bool,
-    #[serde(default)]
-    output: String,
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -91,10 +55,11 @@ pub struct Probe {
     pub system_units: Vec<String>,
     pub package_writes: bool,
     pub samba_password: bool,
+    pub share_writes: bool,
 }
 
 impl Probe {
-    fn ready(units: Vec<String>, package_writes: bool, samba_password: bool) -> Self {
+    fn ready(units: Vec<String>, package_writes: bool, samba_password: bool, share_writes: bool) -> Self {
         Self {
             status: "ready",
             code: "ready".into(),
@@ -102,6 +67,7 @@ impl Probe {
             system_units: units,
             package_writes,
             samba_password,
+            share_writes,
         }
     }
 
@@ -113,6 +79,7 @@ impl Probe {
             system_units: vec![],
             package_writes: false,
             samba_password: false,
+            share_writes: false,
         }
     }
 
@@ -126,6 +93,10 @@ impl Probe {
 
     pub fn permits_samba_password(&self) -> bool {
         self.status == "ready" && self.samba_password
+    }
+
+    pub fn permits_shares(&self) -> bool {
+        self.status == "ready" && self.share_writes
     }
 }
 
@@ -189,11 +160,11 @@ fn helper_installation() -> Probe {
         }
     }
     match trusted_component(Path::new(POLICY_PATH), false) {
-        Ok(metadata) if metadata.mode() & 0o077 == 0 && metadata.len() <= MAX_REPLY as u64 => {}
+        Ok(metadata) if metadata.mode() & 0o037 == 0 && metadata.len() <= MAX_REPLY as u64 => {}
         _ => {
             return Probe::unavailable(
                 "helper_policy_unsafe",
-                "The helper policy must be a root-owned mode 0600 regular file with bounded size.",
+                "The helper policy must be root-owned, bounded and not writable by non-root; workload-group read access is permitted.",
             );
         }
     }
@@ -203,192 +174,37 @@ fn helper_installation() -> Probe {
             "Noninteractive sudo is not installed at the supported path.",
         );
     }
-    Probe::ready(vec![], false, false)
+    Probe::ready(vec![], false, false, false)
 }
 
-async fn call(request: &Request, deadline: Duration) -> Result<Reply> {
-    validate_request(request)?;
-    // Only the inert Maestro capability probe retains its private extension.
-    // All management requests use the exact reference operation/arguments envelope.
-    let data = if request.operation == "probe" {
-        serde_json::to_vec(request)?
-    } else {
-        let (operation, arguments) = match request.operation.as_str() {
-            "system_service" => {
-                let action = request.action.as_deref().context("missing action")?;
-                let mut arguments = serde_json::json!({"scope":"system","unit":request.unit});
-                if let Some(confirm) = request.confirm { arguments["confirm"] = serde_json::json!(confirm); }
-                (format!("services_{action}"), arguments)
-            }
-            "package_refresh" => ("updates_refresh".into(), serde_json::json!({})),
-            "package_upgrade" => ("updates_install".into(), serde_json::json!({"confirm":true})),
-            "package_install" => ("packages_install".into(), serde_json::json!({"packages":request.packages.join(" "),"confirm":true})),
-            "dependency_install" => ("dependencies_install".into(), serde_json::json!({"target":request.target,"confirm":true})),
-            "samba_password" => ("shares_samba_password".into(), serde_json::json!({"password":request.password,"confirm":true})),
-            _ => anyhow::bail!("unknown privileged operation"),
-        };
-        serde_json::to_vec(&reference::Request { operation, arguments })?
-    };
+/// All calls use the reference envelope, with no private wire operation.
+async fn call(operation: &str, arguments: serde_json::Value, deadline: Duration) -> Result<reference::Response> {
+    let data = serde_json::to_vec(&reference::Request { operation: operation.into(), arguments })?;
     ensure!(data.len() <= MAX_REQUEST, "helper request is too large");
+    reference::decode(&data)?;
     let mut child = Command::new(SUDO_PATH)
-        .args(["-n", "--", HELPER_PATH])
-        .env_clear()
-        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .context("noninteractive sudo is unavailable")?;
-    let stdout = child
-        .stdout
-        .take()
-        .context("privileged helper has no stdout")?;
-    let limit = if request.operation == "probe" { MAX_REPLY } else { MAX_WIRE_REPLY };
+        .args(["-n", "-u", "root", "--", HELPER_PATH])
+        .env_clear().env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+        .kill_on_drop(true).spawn().context("noninteractive sudo is unavailable")?;
+    let stdout = child.stdout.take().context("privileged helper has no stdout")?;
     let mut output = Vec::with_capacity(1024);
     timeout(deadline, async {
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(&data).await?;
-        }
-        // Reading only MAX_REPLY+1 avoids an unbounded allocation even if the
-        // installed executable is corrupt or has an incompatible protocol.
-        stdout
-            .take((limit + 1) as u64)
-            .read_to_end(&mut output)
-            .await?;
-        ensure!(
-            output.len() <= limit,
-            "privileged helper reply is too large"
-        );
-        let status = child.wait().await?;
-        ensure!(
-            status.success(),
-            "privileged helper is unauthorized or unavailable"
-        );
+        if let Some(mut stdin) = child.stdin.take() { stdin.write_all(&data).await?; }
+        stdout.take((MAX_WIRE_REPLY + 1) as u64).read_to_end(&mut output).await?;
+        ensure!(output.len() <= MAX_WIRE_REPLY, "privileged helper reply is too large");
+        ensure!(child.wait().await?.success(), "privileged helper is unauthorized, busy or unavailable");
         Ok::<(), anyhow::Error>(())
-    })
-    .await
-    .context("privileged helper timed out")??;
-    if request.operation != "probe" {
-        let response: reference::Response = serde_json::from_slice(&output)
-            .context("unrecognized privileged helper response")?;
-        ensure!(response.result.is_some() || !response.error.is_empty(), "privileged helper protocol mismatch");
-        return Ok(Reply {
-            version: PROTOCOL, ok: response.error.is_empty(),
-            code: if response.error.is_empty() { "ok".into() } else { response.code },
-            message: if response.error.is_empty() { "Privileged operation completed.".into() } else { response.error },
-            system_units: vec![], package_writes: false, samba_password: false,
-            output: response.output,
-        });
-    }
-    let reply: Reply =
-        serde_json::from_slice(&output).context("unrecognized privileged helper response")?;
-    ensure!(
-        reply.version == PROTOCOL,
-        "privileged helper protocol mismatch"
-    );
-    ensure!(
-        reply.code.len() <= 64
-            && reply.message.len() <= 512
-            && reply.system_units.len() <= 128
-            && reply.output.len() <= 8192,
-        "invalid privileged helper reply"
-    );
-    Ok(reply)
+    }).await.context("privileged helper timed out")??;
+    let response: reference::Response = serde_json::from_slice(&output)
+        .context("unrecognized privileged helper response")?;
+    ensure!(response.result.is_some() != !response.error.is_empty(), "privileged helper protocol mismatch");
+    Ok(response)
 }
 
-fn validate_request(request: &Request) -> Result<()> {
-    ensure!(request.version == PROTOCOL, "unsupported helper protocol");
-    match request.operation.as_str() {
-        "probe" => ensure!(
-            request.unit.is_none()
-                && request.action.is_none()
-                && request.confirm.is_none()
-                && request.packages.is_empty()
-                && request.target.is_none()
-                && request.password.is_none(),
-            "probe accepts no arguments"
-        ),
-        "system_service" => {
-            let unit = request.unit.as_deref().context("missing unit")?;
-            let action = request.action.as_deref().context("missing action")?;
-            ensure!(
-                request.packages.is_empty()
-                    && request.target.is_none()
-                    && request.password.is_none(),
-                "system service accepts no package or password arguments"
-            );
-            ensure!(safe_system_unit(unit), "invalid or reserved system service");
-            ensure!(
-                matches!(
-                    action,
-                    "start" | "stop" | "restart" | "reload" | "enable" | "disable"
-                ),
-                "unsupported service action"
-            );
-            ensure!(
-                matches!(action, "start" | "enable") || request.confirm == Some(true),
-                "destructive system service action requires confirmation"
-            );
-        }
-        "package_refresh" | "package_upgrade" | "package_install" | "dependency_install" => {
-            ensure!(
-                request.unit.is_none() && request.action.is_none() && request.password.is_none(),
-                "package action has service or password arguments"
-            );
-            match request.operation.as_str() {
-                "package_refresh" => ensure!(
-                    request.packages.is_empty()
-                        && request.target.is_none()
-                        && request.confirm.is_none(),
-                    "metadata refresh accepts no arguments"
-                ),
-                "package_upgrade" => ensure!(
-                    request.packages.is_empty()
-                        && request.target.is_none()
-                        && request.confirm == Some(true),
-                    "package upgrade requires confirmation"
-                ),
-                "package_install" => {
-                    ensure!(
-                        request.target.is_none() && request.confirm == Some(true),
-                        "package installation requires confirmation"
-                    );
-                    admin_packages::package_names(&request.packages.join(" "))?;
-                }
-                "dependency_install" => ensure!(
-                    request.packages.is_empty()
-                        && request.confirm == Some(true)
-                        && matches!(
-                            request.target.as_deref(),
-                            Some(
-                                "podman" | "docker" | "samba" | "nfs" | "virtualization" | "incus"
-                            )
-                        ),
-                    "dependency group must be allowlisted and confirmed"
-                ),
-                _ => unreachable!(),
-            }
-        }
-        "samba_password" => {
-            ensure!(
-                request.unit.is_none()
-                    && request.action.is_none()
-                    && request.packages.is_empty()
-                    && request.target.is_none()
-                    && request.confirm == Some(true),
-                "Samba password requires fixed caller identity and confirmation"
-            );
-            admin_shares::validate_password(
-                request
-                    .password
-                    .as_deref()
-                    .context("missing Samba password")?,
-            )?;
-        }
-        _ => anyhow::bail!("unknown privileged operation"),
-    }
-    Ok(())
+fn checked(response: reference::Response) -> Result<reference::Response> {
+    ensure!(response.error.is_empty(), "{} ({})",response.error,response.code);
+    Ok(response)
 }
 
 fn safe_system_unit(unit: &str) -> bool {
@@ -399,121 +215,77 @@ fn safe_system_unit(unit: &str) -> bool {
 }
 
 pub async fn probe() -> Probe {
-    if unsafe { libc::geteuid() } == 0 {
-        return Probe::unavailable(
-            "main_running_as_root",
-            "Linux Maestro must run as the non-root workload owner.",
-        );
+    let uid = unsafe { libc::geteuid() };
+    if uid == 0 {
+        return Probe::unavailable("main_running_as_root","Linux Maestro must run as the non-root workload owner.");
     }
     let installed = helper_installation();
-    if installed.status != "ready" {
-        return installed;
-    }
-    let request = Request {
-        version: PROTOCOL,
-        operation: "probe".into(),
-        unit: None,
-        action: None,
-        confirm: None,
-        packages: vec![],
-        target: None,
-        password: None,
+    if installed.status != "ready" { return installed; }
+    let policy = match load_policy(uid) {
+        Ok(policy) => policy,
+        Err(_) => return Probe::unavailable("helper_policy_unreadable","The workload account cannot read its root-owned helper grants; review the policy owner, group and mode."),
     };
-    match call(&request, Duration::from_secs(6)).await {
-        Ok(reply) if reply.ok => Probe::ready(
-            reply.system_units,
-            reply.package_writes,
-            reply.samba_password,
-        ),
-        Ok(reply) => Probe::unavailable(&reply.code, &reply.message),
-        Err(error) if error.to_string().contains("protocol mismatch") => Probe::unavailable(
-            "helper_protocol_mismatch",
-            "The installed helper must be upgraded to the matching Maestro protocol.",
-        ),
-        Err(_) => Probe::unavailable(
-            "helper_unauthorized",
-            "The helper could not be authorized with sudo -n; review the exact sudoers rule, helper version and policy.",
-        ),
+    // Inert authorization discovery, outside the helper wire protocol.
+    let mut command = Command::new(SUDO_PATH);
+    command.args(["-n","-l","-u","root","--",HELPER_PATH])
+        .env_clear().env("PATH","/usr/sbin:/usr/bin:/sbin:/bin")
+        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
+    if !timeout(Duration::from_secs(6),command.status()).await.is_ok_and(|result| result.is_ok_and(|status| status.success())) {
+        return Probe::unavailable("helper_unauthorized","Review noninteractive sudo authorization for the exact helper command.");
     }
+    Probe::ready(policy.system_units,policy.package_writes,policy.samba_password,policy.share_writes)
 }
 
 pub async fn system_service(unit: &str, action: &str) -> Result<String> {
-    let request = Request {
-        version: PROTOCOL,
-        operation: "system_service".into(),
-        unit: Some(unit.into()),
-        action: Some(action.into()),
-        confirm: (!matches!(action, "start" | "enable")).then_some(true),
-        packages: vec![],
-        target: None,
-        password: None,
-    };
-    validate_request(&request)?;
+    ensure!(safe_system_unit(unit), "invalid or reserved system service");
+    ensure!(matches!(action,"start"|"stop"|"restart"|"reload"|"enable"|"disable"),"unsupported service action");
     let capability = probe().await;
-    ensure!(
-        capability.permits_unit(unit),
-        "{} ({})",
-        capability.reason,
-        capability.code
-    );
-    // Revalidation is deliberately repeated inside the root helper.
-    let reply = call(&request, Duration::from_secs(25 * 60)).await?;
-    ensure!(reply.ok, "{} ({})", reply.message, reply.code);
-    Ok(reply.output)
+    ensure!(capability.permits_unit(unit),"{} ({})",capability.reason,capability.code);
+    let mut arguments = serde_json::json!({"scope":"system","unit":unit});
+    if !matches!(action,"start"|"enable") { arguments["confirm"] = serde_json::json!(true); }
+    Ok(checked(call(&format!("services_{action}"),arguments,Duration::from_secs(25*60+40)).await?)?.output)
 }
 
-/// The main server never invokes a package manager directly. Only a validated
-/// helper can perform protected writes, and its root-owned policy is reloaded
-/// before every request. Package-manager selection is based on trusted OS data.
-pub async fn package_operation(
-    operation: &str,
-    names: Vec<String>,
-    target: Option<String>,
-) -> Result<String> {
-    let request = Request {
-        version: PROTOCOL,
-        operation: operation.to_owned(),
-        unit: None,
-        action: None,
-        confirm: (operation != "package_refresh").then_some(true),
-        packages: names,
-        target,
-        password: None,
+pub async fn package_operation(operation: &str, names: Vec<String>, target: Option<String>) -> Result<String> {
+    let (operation, arguments) = match operation {
+        "package_refresh" if names.is_empty() && target.is_none() => ("updates_refresh",serde_json::json!({})),
+        "package_upgrade" if names.is_empty() && target.is_none() => ("updates_install",serde_json::json!({"confirm":true})),
+        "package_install" if target.is_none() => {
+            let names = names.join(" ");
+            admin_packages::package_names(&names)?;
+            ("packages_install",serde_json::json!({"packages":names,"confirm":true}))
+        },
+        "dependency_install" if names.is_empty() => {
+            let target = target.context("missing dependency group")?;
+            ensure!(matches!(target.as_str(),"podman"|"docker"|"samba"|"nfs"|"virtualization"|"incus"),"dependency group must be allowlisted");
+            ("dependencies_install",serde_json::json!({"target":target,"confirm":true}))
+        },
+        _ => anyhow::bail!("invalid package operation arguments"),
     };
-    validate_request(&request)?;
     let capability = probe().await;
-    ensure!(
-        capability.permits_packages(),
-        "{} ({})",
-        capability.reason,
-        capability.code
-    );
-    let reply = call(&request, Duration::from_secs(25 * 60)).await?;
-    ensure!(reply.ok, "{} ({})", reply.message, reply.code);
-    Ok(reply.output)
+    ensure!(capability.permits_packages(),"{} ({})",capability.reason,capability.code);
+    Ok(checked(call(operation,arguments,Duration::from_secs(25*60+40)).await?)?.output)
 }
 
-/// Secret-bearing operation is never logged, placed in argv or retained in a
-/// management job history. Only the sudo-resolved workload identity is targeted.
+/// Secret-bearing operation never logs the request or retains a job result.
 pub async fn samba_password(password: String) -> Result<()> {
-    let request = Request {
-        version: PROTOCOL,
-        operation: "samba_password".into(),
-        unit: None,
-        action: None,
-        confirm: Some(true),
-        packages: vec![],
-        target: None,
-        password: Some(password),
-    };
-    validate_request(&request)?;
-    ensure!(
-        probe().await.permits_samba_password(),
-        "Samba password changes require an authorized optional helper and root-owned policy"
-    );
-    let reply = call(&request, Duration::from_secs(45)).await?;
-    ensure!(reply.ok, "{} ({})", reply.message, reply.code);
+    admin_shares::validate_password(&password)?;
+    ensure!(probe().await.permits_samba_password(),"Samba password changes require an authorized optional helper and root-owned policy");
+    checked(call("shares_samba_password",serde_json::json!({"password":password,"confirm":true}),Duration::from_secs(45)).await?)?;
     Ok(())
+}
+
+pub(crate) async fn share_operation(operation: &str, arguments: serde_json::Value) -> Result<(serde_json::Value,String)> {
+    ensure!(matches!(operation,"shares_list"|"shares_definitions_inspect"|"shares_definitions_validate"|"shares_definitions_apply"|"shares_setup"),
+        "unsupported share operation");
+    let capability = probe().await;
+    ensure!(capability.status == "ready","{} ({})",capability.reason,capability.code);
+    if matches!(operation,"shares_definitions_apply"|"shares_setup") {
+        ensure!(capability.permits_shares(),"share writes are disabled by root-owned policy");
+    }
+    if operation == "shares_setup" { ensure!(capability.permits_packages(),"package writes are disabled by root-owned policy"); }
+    let response = checked(call(operation,arguments,Duration::from_secs(25*60+40)).await?)?;
+    Ok((response.result.context("missing helper result")?,response.output))
 }
 
 fn load_policy(caller_uid: u32) -> Result<Policy> {
@@ -522,15 +294,20 @@ fn load_policy(caller_uid: u32) -> Result<Policy> {
     }
     let metadata = trusted_component(Path::new(POLICY_PATH), false)?;
     ensure!(
-        metadata.mode() & 0o077 == 0 && metadata.len() <= MAX_REPLY as u64,
-        "privileged policy must be private and bounded"
+        metadata.mode() & 0o037 == 0 && metadata.len() <= MAX_REPLY as u64,
+        "privileged policy must be bounded and not writable by non-root"
     );
-    let content = fs::read(POLICY_PATH)?;
+    let file = fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK).open(POLICY_PATH)?;
+    let opened = file.metadata()?;
+    ensure!(opened.is_file() && opened.uid() == 0 && opened.mode() & 0o037 == 0 && opened.len() <= MAX_REPLY as u64,
+        "unsafe privileged policy");
+    let mut content = Vec::new();
+    file.take((MAX_REPLY+1) as u64).read_to_end(&mut content)?;
     ensure!(content.len() <= MAX_REPLY, "privileged policy is too large");
     let policy: Policy = serde_json::from_slice(&content)?;
     ensure!(
-        policy.version == PROTOCOL,
-        "privileged policy protocol mismatch"
+        policy.version == POLICY_VERSION,
+        "privileged policy version mismatch"
     );
     ensure!(
         caller_uid != 0 && policy.workload_uid == caller_uid,
@@ -572,7 +349,7 @@ fn lock_root_operation() -> Result<fs::File> {
     );
     ensure!(
         unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
-        "another privileged operation is active"
+        "another privileged operation is running"
     );
     Ok(lock)
 }
@@ -587,30 +364,13 @@ pub async fn helper_main() -> Result<()> {
     let policy = load_policy(caller_uid)?;
     unsafe { libc::umask(0o077); }
     std::env::set_current_dir("/")?;
-    // As in the reference helper, serialize native operations and bound a
-    // stalled request. The probe is inert and does not take the native lock.
+    // Reference helper serializes requests before decoding the bounded input.
+    let _lock = lock_root_operation()?;
     let mut input = Vec::new();
     unsafe { libc::alarm(25 * 60); }
     std::io::stdin().take((MAX_REQUEST + 1) as u64).read_to_end(&mut input)?;
     unsafe { libc::alarm(0); }
-    ensure!(input.len() <= MAX_REQUEST, "request exceeds 1 MiB");
-
-    if let Ok(request) = serde_json::from_slice::<Request>(&input) {
-        if request.operation == "probe" && validate_request(&request).is_ok() {
-            let response = Reply {
-                version: PROTOCOL, ok: true, code: "ready".into(),
-                message: "Privileged helper authorized.".into(),
-                system_units: policy.system_units, package_writes: policy.package_writes,
-                samba_password: policy.samba_password, output: String::new(),
-            };
-            let mut stdout = std::io::stdout().lock();
-            serde_json::to_writer(&mut stdout, &response)?;
-            stdout.write_all(b"\n")?;
-            return Ok(());
-        }
-    }
     let request = reference::decode(&input)?;
-    let _lock = lock_root_operation()?;
     let (cancel, receiver) = tokio::sync::watch::channel(false);
     // A share apply may have published its candidate before activation fails.
     // Keep the lock and await its bounded rollback on interruption or timeout.
@@ -647,56 +407,35 @@ pub async fn helper_main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn reject_unknown_and_unbounded_privileged_actions() {
-        for request in [
-            r#"{"version":1,"operation":"shell","unit":"/bin/sh"}"#,
-            r#"{"version":1,"operation":"system_service","unit":"../maestro.service","action":"stop"}"#,
-            r#"{"version":1,"operation":"system_service","unit":"maestro.service","action":"stop"}"#,
-            r#"{"version":1,"operation":"system_service","unit":"sshd.service","action":"execute"}"#,
-            r#"{"version":1,"operation":"system_service","unit":"sshd.service","action":"stop"}"#,
-            r#"{"version":1,"operation":"probe","unit":"sshd.service"}"#,
-            r#"{"version":1,"operation":"package_install","packages":["../etc/passwd"],"confirm":true}"#,
-            r#"{"version":1,"operation":"package_install","packages":["--overwrite"],"confirm":true}"#,
-            r#"{"version":1,"operation":"package_upgrade"}"#,
-            r#"{"version":1,"operation":"dependency_install","target":"shell","confirm":true}"#,
-            r#"{"version":1,"operation":"samba_password","password":"bad\nnewline","confirm":true}"#,
-            r#"{"version":1,"operation":"samba_password","password":"valid","unit":"root.service","confirm":true}"#,
-            r#"{"version":1,"operation":"samba_password","password":"valid","target":"root","confirm":true}"#,
-            r#"{"version":2,"operation":"probe"}"#,
+    fn only_reference_operations_are_accepted() {
+        for input in [
+            r#"{"version":1,"operation":"probe"}"#,
+            r#"{"operation":"probe","arguments":{}}"#,
+            r#"{"operation":"system_service","arguments":{}}"#,
+            r#"{"operation":"shell","arguments":{}}"#,
+            r#"{"operation":"services_start","arguments":{"scope":"user","unit":"sshd.service"}}"#,
         ] {
-            let request: Request = serde_json::from_str(request).unwrap();
-            assert!(validate_request(&request).is_err(), "{request:?}");
+            assert!(reference::decode(input.as_bytes()).is_err(),"{input}");
         }
-        assert!(
-            serde_json::from_str::<Request>(r#"{"version":1,"operation":"probe","extra":true}"#)
-                .is_err()
-        );
-        assert!(
-            serde_json::from_str::<Request>(r#"{"version":1,"operation":"probe"} {}"#).is_err()
-        );
+        let request = reference::decode(br#"{"operation":"services_restart","arguments":{"unit":"sshd.service","scope":"system","confirm":true}}"#).unwrap();
+        assert_eq!(request.operation,"services_restart");
     }
 
     #[test]
-    fn accepts_only_exact_owned_service_actions() {
-        let request = Request {
-            version: 1,
-            operation: "system_service".into(),
-            unit: Some("sshd.service".into()),
-            action: Some("restart".into()),
-            confirm: Some(true),
-            packages: vec![],
-            target: None,
-            password: None,
-        };
-        assert!(validate_request(&request).is_ok());
+    fn capability_policy_stays_fail_closed() {
         assert!(!safe_system_unit("maestro.service"));
-        assert!(!safe_system_unit(
-            "maestro-example-app-0123456789abcdef.service"
-        ));
-        assert!(!Probe::unavailable("helper_missing", "missing").permits_unit("sshd.service"));
-        assert!(!Probe::unavailable("helper_missing", "missing").permits_packages());
-        assert!(!Probe::unavailable("helper_missing", "missing").permits_samba_password());
+        assert!(!safe_system_unit("maestro-example-app-0123456789abcdef.service"));
+        let missing = Probe::unavailable("helper_missing","missing");
+        assert!(!missing.permits_unit("sshd.service"));
+        assert!(!missing.permits_packages());
+        assert!(!missing.permits_samba_password());
+        assert!(!missing.permits_shares());
+        let authorized = Probe::ready(vec!["sshd.service".into()],true,false,true);
+        assert!(authorized.permits_unit("sshd.service"));
+        assert!(!authorized.permits_unit("nginx.service"));
+        assert!(authorized.permits_packages());
+        assert!(!authorized.permits_samba_password());
+        assert!(authorized.permits_shares());
     }
 }
