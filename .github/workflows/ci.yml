@@ -213,7 +213,7 @@ jobs:
 
   tag:
     name: Tag new stable version
-    needs: [source, full, stable, linux-ui, linux-native]
+    needs: [source, full, stable]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
