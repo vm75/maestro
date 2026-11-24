@@ -2883,6 +2883,8 @@ async fn linux_mcp_protocol_flow() {
         "managed_service_stop",
         "managed_service_restart",
         "managed_service_logs",
+        "managed_service_enable",
+        "managed_service_disable",
         "managed_config_readiness",
         "managed_config_check",
         "managed_services",
