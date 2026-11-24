@@ -7,8 +7,10 @@
   import { invokeTool, startJob, type Job, type Discovery, type Status } from '../lib/api'
   import type { ShareDefinition } from '../lib/managed'
   let { allowWrites, discovery, status }: { allowWrites: boolean; discovery: Discovery; status: Status } = $props()
-  interface ServerStatus { available: boolean; discoveryAvailable?: boolean }
+  interface ServerStatus { available: boolean; discoveryAvailable?: boolean; setupRequired?: boolean }
   interface ShareItem { id: string; definition: ShareDefinition; configuration: string; issues: { message: string; remedy: string; code?: string }[] }
+  const canPublish = $derived(allowWrites && discovery.permissions?.shareWrites?.status === 'ready')
+  const canSetup = $derived(canPublish && discovery.permissions?.packageWrites.status === 'ready')
   let shares = $state<ShareItem[]>([])
   let servers = $state<Record<string, ServerStatus>>({})
   let editor = $state<{ id: string } | null>(null)
@@ -32,7 +34,7 @@
         if (p === 'samba' && servers[p].available && servers[p].discoveryAvailable === false) {
           return true
         }
-        return !servers[p].available
+        return !servers[p].available || !!servers[p].setupRequired
       }
       return shares.some(s => s.definition.protocol === p && s.issues.some(i => i.code === 'share_setup'))
     })
@@ -54,6 +56,8 @@
         shares = result.shares
         sambaUsername = result.sambaUsername ?? ''
         if (result.servers) servers = result.servers
+        const native = await invokeTool<{backends: {protocol: string; available: boolean; setupRequired: boolean}[]}>('shares_list', {}, signal)
+        if (!stopped && !signal.aborted) servers = Object.fromEntries(native.backends.map(b => [b.protocol, b]))
       }
     }
     catch (e) { if (!signal.aborted) error = e instanceof Error ? e.message : 'Could not read file shares' }
@@ -61,13 +65,14 @@
   }
   async function publish() {
     const share = pending
-    if (!share) return
+    if (!share || !canPublish) return
     pending = null
     try { const job = await startJob('managed_share_publish', { share: share.id, published: !share.definition.enabled, confirm: true }); activeJob = job.id; feedback = 'Share publication change started.' }
     catch (e) { error = e instanceof Error ? e.message : 'Could not change publication' }
   }
   async function setup() {
     setupPending = false
+    if (!canSetup) return
     try { const job = await startJob('shares_setup', { protocol, confirm: true }); activeJob = job.id; feedback = 'Host share-server setup started.' }
     catch (e) { error = e instanceof Error ? e.message : 'Could not start host setup' }
   }
@@ -120,13 +125,14 @@
           {/each}
         </select>
       </label>
-      <button disabled={!allowWrites || activeJob !== null} onclick={() => { setupPending = true }}>
+      <button disabled={!canSetup || activeJob !== null} onclick={() => { setupPending = true }}>
         {protocol === 'samba' && servers.samba?.available && servers.samba?.discoveryAvailable === false ? 'Install wsdd…' : 'Set up server…'}
       </button>
     </div>
   </section>
 {/if}
 
+{#if !canPublish}<p class="policy-note">{discovery.permissions?.shareWrites?.reason ?? "Native share publication requires authorized helper grants."}</p>{/if}
 <p class="resource-hint intro-hint">Authenticated Samba shares use the Linux account running Maestro{ sambaUsername ? ` (${sambaUsername})` : '' }. Set its Samba password here. Host packages, daemon setup and directory permissions are managed separately.</p>
 
 {#if passwordOpen}
@@ -185,7 +191,7 @@
 
         <div class="share-card-actions">
           <button disabled={!allowWrites || activeJob !== null} onclick={() => { editor = { id: share.id } }}>Edit share</button>
-          <button disabled={!allowWrites || activeJob !== null} onclick={() => { pending = share }}>
+          <button disabled={!canPublish || activeJob !== null} onclick={() => { pending = share }}>
             {share.definition.enabled ? 'Unpublish share' : 'Publish share'}
           </button>
         </div>
@@ -307,4 +313,4 @@
   }
 </style>
 
-<NativeShares {status} {discovery} />
+<NativeShares {status} {discovery} nativeOnly />

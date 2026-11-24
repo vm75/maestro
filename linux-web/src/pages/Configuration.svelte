@@ -65,7 +65,7 @@
     if (!artifactReview?.canReconcile) return
     busy = true; error = ''
     try {
-      const job = await startJob('managed_artifact_reconcile',{resource:artifactReview.resource,revision:artifactReview.revision,reviewToken:artifactReview.reviewToken,confirm:true})
+      const job = await startJob('managed_artifact_reconcile',{resource:artifactReview.resource,revision:artifactReview.revision,reviewToken:artifactReview.reviewToken})
       activeJob = job.id; artifactReview = null
       feedback = 'Metadata-only repair started. Inspect the result before explicitly retrying apply.'
     } catch(e) { error = e instanceof Error ? e.message : 'Could not reconcile artifact metadata' }
@@ -183,9 +183,9 @@
               <li><strong>{change.operation}</strong>: {change.resource} <span class="muted">({change.backend})</span></li>
             {/each}
           </ul>
-          {#if plan.files.issues.length}
+          {#if plan.files?.issues.length}
             <ul class="plan-issues">
-              {#each plan.files.issues as issue}
+              {#each plan.files?.issues ?? [] as issue}
                 <li><strong>{issue.resource}: {issue.message}</strong><p>{issue.remedy}</p></li>
               {/each}
             </ul>

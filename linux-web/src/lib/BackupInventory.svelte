@@ -38,7 +38,7 @@
     if(!recovery?.journal||!recovery.reviewToken||!recoveryConfirm)return
     recoveryActionError='';recoveryKind=kind
     const tool={resume:'managed_backup_recover',release:'managed_backup_release',publish:'managed_backup_publish'}[kind]
-    try{const job=await startJob(tool,{revision:kind==='resume'?recovery.journal.revision:recovery.currentRevision,reviewToken:recovery.reviewToken,confirm:true});if(!stopped)recoveryJob=job.id}
+    try{const job=await startJob(tool,{revision:kind==='resume'?recovery.journal.revision:recovery.currentRevision,reviewToken:recovery.reviewToken});if(!stopped)recoveryJob=job.id}
     catch(e){if(!stopped)recoveryActionError=e instanceof Error?e.message:'Could not start backup recovery'}
   }
   let controller:AbortController|undefined
@@ -53,7 +53,7 @@
     if(!destination.trim()||!confirm||!inventory)return
     preparing=true;prepareError=''
     try{
-      const job=await startJob('managed_backup_prepare',{revision:inventory.revision,destination:destination.trim(),quiesce,confirm:true})
+      const job=await startJob('managed_backup_prepare',{revision:inventory.revision,destination:destination.trim(),quiesce})
       if(!stopped)activeJob=job.id
     }catch(e){
       if(!stopped){prepareError=e instanceof Error?e.message:'Backup capture failed';preparing=false}
@@ -118,7 +118,7 @@
     <details><summary>Explicit exclusions ({inventory.exclusions.length})</summary><ul>{#each inventory.exclusions as exclusion}<li><strong>{exclusion.kind.replaceAll('_',' ')}</strong><p>{exclusion.reason}</p></li>{/each}</ul></details>
     <div class="prepare-section">
       <h3>Capture backup inputs</h3>
-      <p>Capture supported inputs into a private checksummed bundle. This initial capture is not a prepared or restorable backup: full metadata preservation, advanced VM state and restore validation remain unfinished. Initial Incus and basic libvirt native collection is supported for the documented profiles. Published shares and unresolved prerequisites block capture.</p>
+      <p>Capture supported inputs into a private checksummed bundle. This initial capture is not a prepared or restorable backup: restore validation and unsupported native state remain outside this capture. Initial Incus and basic libvirt native collection is supported for the documented profiles. Published shares and unresolved prerequisites block capture.</p>
       {#if prepareError}<p class="form-error" role="alert">{prepareError}</p>{/if}
       {#if summary}
         <div class="summary-box" role="status">

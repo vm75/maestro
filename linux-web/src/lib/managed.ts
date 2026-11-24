@@ -15,7 +15,7 @@ export interface BindingDefinition { kind: string; name: string }
 export interface ManagedConfig { server?: Record<string, string | number | boolean>; version: number; services: Record<string, ServiceDefinition> | null; storage: Record<string, StorageDefinition> | null; shares: Record<string, ShareDefinition> | null; bindings: Record<string, BindingDefinition> | null; secrets: Record<string, string> | null }
 export interface ModelSnapshot { revision: string; config: ManagedConfig }
 export type ResourceKind = 'service' | 'storage' | 'share' | 'binding' | 'secret'
-export interface ImpactPlan { restartRequired?: boolean; baseRevision: string; desiredRevision: string; changes: { resource: string; backend: string; operation: string }[]; files: { issues: { resource: string; message: string; remedy: string }[] } }
+export interface ImpactPlan { fingerprint: string; restartRequired?: boolean; baseRevision: string; desiredRevision: string; changes: { resource: string; backend: string; operation: string }[]; files?: { issues: { resource: string; message: string; remedy: string }[] } }
 
 export interface ConfigurationIssue { severity: string; field: string; resource: string; code: string; message: string; remedy: string }
 export interface ConfigurationHealth { checkedAt: string; runtimeCheckedAt?: string; issues: ConfigurationIssue[] }

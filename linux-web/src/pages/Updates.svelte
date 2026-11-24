@@ -82,6 +82,7 @@
   </form>
 </div>
 
+{#if status?.manager.writeReason}<p class="policy-note">{status.manager.writeReason}</p>{/if}
 {#if !allowWrites}<div class="policy-note"><span class="connection-dot"></span>Read only. Management writes can be enabled in the server configuration.</div>{/if}
 {#if error}<div class="notice error compose-notice" role="alert"><p>{error}</p><button onclick={load}>Retry</button></div>{/if}
 {#if feedback}<div class="job-feedback" class:failed role="status">{feedback}</div>{/if}

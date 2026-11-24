@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { invokeTool, type Discovery, type Status } from './lib/api'
 
-  let { status: _status, discovery }: { status: Status; discovery: Discovery } = $props()
+  let { status: _status, discovery, nativeOnly = false }: { status: Status; discovery: Discovery; nativeOnly?: boolean } = $props()
 
   interface Share {
     id: string
@@ -34,7 +34,7 @@
     error = ''
     try {
       const [sharesRes, statusRes] = await Promise.all([
-        invokeTool<{ shares: Share[] }>('managed_shares', {}),
+        nativeOnly ? Promise.resolve({ shares: [] as Share[] }) : invokeTool<{ shares: Share[] }>('managed_shares', {}),
         invokeTool<SharesStatusResponse>('shares_list', {}),
       ])
       shares = sharesRes.shares
@@ -133,7 +133,8 @@
   </section>
 
   <!-- Network Shares List -->
-  <section class="panel" aria-labelledby="shares-heading">
+  {#if !nativeOnly}
+<section class="panel" aria-labelledby="shares-heading">
     <div class="panel-header">
       <h2 id="shares-heading">Configured Shares</h2>
       <a href="#applications" class="edit-link">Edit in Workloads YAML</a>
@@ -174,6 +175,7 @@
       </div>
     {/if}
   </section>
+{/if}
 </div>
 
 <style>

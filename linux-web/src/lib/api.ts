@@ -1,3 +1,5 @@
+import { adaptToolResponse } from './compat'
+
 export interface Status {
   hostname: string
   startedAt: string
@@ -23,7 +25,7 @@ export interface HelperPermission { status: 'ready' | 'unavailable' | 'unknown';
 export interface Discovery {
   tools: Tool[]
   modules: Module[]
-  permissions?: { helper: HelperPermission; systemServices: { status: string; reason: string }; packageWrites: { status: string; code: string; reason: string }; sambaPassword?: { status: string; code: string; reason: string } }
+  permissions?: { helper: HelperPermission; systemServices: { status: string; reason: string }; packageWrites: { status: string; code: string; reason: string }; shareWrites?: { status: string; code: string; reason: string }; sambaPassword?: { status: string; code: string; reason: string } }
 }
 
 export class ApiError extends Error {
@@ -46,7 +48,7 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
 }
 
 export function invokeTool<T>(name: string, arguments_: Record<string, unknown> = {}, signal?: AbortSignal): Promise<T> {
-  return request<T>(`/api/tools/${encodeURIComponent(name)}`, { method: 'POST', body: JSON.stringify(arguments_), signal })
+  return request<unknown>(`/api/tools/${encodeURIComponent(name)}`, { method: 'POST', body: JSON.stringify(arguments_), signal }).then(value => adaptToolResponse(name, value) as T)
 }
 
 export async function startJob(name: string, arguments_: Record<string, unknown>): Promise<Job> {

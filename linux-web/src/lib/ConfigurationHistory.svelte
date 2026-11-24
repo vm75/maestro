@@ -54,7 +54,7 @@
     {#if !selected.valid}<p>This revision contains invalid YAML. Inspect and repair it in the recovery editor before saving.</p>{/if}
     {#if plan}<h3>Review configuration revert</h3><p>Applying now may interrupt running workloads. A failed apply retains the selected desired definition and reports pending recovery.</p>
       <ul>{#each plan.changes as change}<li>{change.operation}: {change.resource} ({change.backend})</li>{/each}</ul>
-      {#if plan.files.issues.length}<ul>{#each plan.files.issues as issue}<li><strong>{issue.resource}: {issue.message}</strong><p>{issue.remedy}</p></li>{/each}</ul>{/if}
+      {#if plan.files?.issues.length}<ul>{#each plan.files?.issues ?? [] as issue}<li><strong>{issue.resource}: {issue.message}</strong><p>{issue.remedy}</p></li>{/each}</ul>{/if}
       <label>Revert apply mode<select aria-label="Revert apply mode" bind:value={mode}><option value="next_start">Save for next start</option><option value="now">Apply now</option></select></label>
       <div class="actions"><button disabled={busy} onclick={() => { plan = null }}>Cancel revert</button><button disabled={busy || disabled} onclick={revert}>Confirm configuration revert</button></div>
     {/if}
