@@ -368,6 +368,27 @@ mod tests {
         assert!(!script.contains("flush ruleset"));
         assert!(serde_json::from_value::<FirewallInput>(json!({"enabled":true,"active":["1.2.3.4; flush ruleset"],"exceptions":[]})).is_err());
     }
+    #[tokio::test]
+    async fn network_grants_default_to_denied() {
+        let policy: Policy = serde_json::from_value(json!({
+            "version":1,"workload_uid":1000,"system_units":[]
+        })).unwrap();
+        for operation in ["ban_shield_apply", "wireguard_peers_read", "wireguard_peers_write"] {
+            let response = execute(Request { operation: operation.into(), arguments: json!({}) }, &policy).await;
+            assert_eq!(response.status, 403);
+            assert!(response.result.is_none());
+        }
+    }
+
+    #[test]
+    fn peer_input_cannot_supply_shell_hooks_or_private_keys() {
+        let key = STANDARD.encode([1u8; 32]);
+        let input = json!({"revision":"test","peers":[{"public_key":key,"allowed_ips":"10.0.0.2/32","post_up":"shell command"}]});
+        assert!(serde_json::from_value::<PeerInput>(input).is_err());
+        let input = json!({"revision":"test","peers":[],"private_key":"secret","path":"/tmp/test"});
+        assert!(serde_json::from_value::<PeerInput>(input).is_err());
+    }
+
     #[test]
     fn peer_update_preserves_interface_and_existing_psk_without_exposing_secrets() {
         let key = STANDARD.encode([1u8;32]);

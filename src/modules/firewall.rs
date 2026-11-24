@@ -187,7 +187,10 @@ impl FirewallManager {
         {
             anyhow::ensure!(crate::platforms::admin::probe().await.ban_shield,
                 "Ban Shield enforcement requires nftables and the root-owned ban_shield grant");
-            anyhow::ensure!(!candidate.rules.is_empty(), "Enforcement requires at least one detection rule");
+            anyhow::ensure!(
+                candidate.rules.iter().any(|rule| rule.enabled && !rule.log_paths.is_empty()),
+                "Enforcement requires at least one enabled detection rule with a log path"
+            );
         }
         let candidate_config = self.build_ban_attack_config(&candidate)?;
         if !candidate_config.files.is_empty() {
@@ -197,8 +200,10 @@ impl FirewallManager {
         self.update_policy(&candidate).await?;
         *self.stores.firewall_policy.write().await = candidate;
         if let Err(error) = self.stores.save_firewall_policy().await {
-            *self.stores.firewall_policy.write().await = previous.clone();
+            // Roll back while the store still describes the live candidate,
+            // so a Linux backend mode transition knows which table to remove.
             let _ = self.update_policy(&previous).await;
+            *self.stores.firewall_policy.write().await = previous;
             return Err(error);
         }
         Ok(())
@@ -207,29 +212,52 @@ impl FirewallManager {
     pub async fn update_policy(&self, policy: &FirewallPolicy) -> Result<()> {
         let ban_config = self.build_ban_attack_config(policy)?;
         let mut inner = self.inner.write().await;
-        // Mode changes replace the backend, not just the compiled rule set.
-        // Disable the old table before switching to observation; flush before
-        // starting the replacement so persisted bans carry across modes.
+        #[cfg(feature = "linux")]
         if self.config.platform == crate::config::Platform::Linux {
             let previous = self.stores.firewall_policy.read().await.clone();
-            if previous.observe_only != policy.observe_only && policy.enabled && !ban_config.files.is_empty() {
+            let previous_enforced = previous.enabled && !previous.observe_only;
+            let next_enforced = policy.enabled && !policy.observe_only && !ban_config.files.is_empty();
+
+            // Apply ordinary rule/allowlist changes without restarting the worker.
+            if previous.observe_only == policy.observe_only
+                && policy.enabled && !ban_config.files.is_empty()
+            {
                 if let Some(engine) = inner.as_ref() {
-                    engine.handle().flush()?;
-                    engine.handle().disable()?;
-                }
-                *inner = None;
-                match self.start_engine(ban_config) {
-                    Ok(engine) => { *inner = Some(engine); return Ok(()); }
-                    Err(error) => {
-                        if previous.enabled {
-                            if let Ok(config) = self.build_ban_attack_config(&previous) {
-                                if !config.files.is_empty() { *inner = self.start_engine(config).ok(); }
-                            }
-                        }
-                        return Err(error.into());
-                    }
+                    engine.handle().update_config(ban_config)?;
+                    return Ok(());
                 }
             }
+
+            // Stop the old worker before touching the host table, otherwise a
+            // queued poll could recreate the table after the disable request.
+            if let Some(engine) = inner.take() {
+                engine.shutdown()?;
+            }
+            let result = async {
+                if previous_enforced && !next_enforced {
+                    crate::platforms::admin::network_operation(
+                        "ban_shield_apply",
+                        serde_json::json!({"enabled":false,"active":[],"exceptions":[]}),
+                    )
+                    .await?;
+                }
+                if policy.enabled && !ban_config.files.is_empty() {
+                    *inner = Some(self.start_engine(ban_config)?);
+                }
+                Ok::<(), anyhow::Error>(())
+            }.await;
+            if let Err(error) = result {
+                // Recover the previous backend and reconcile its persisted bans.
+                if previous.enabled {
+                    if let Ok(config) = self.build_ban_attack_config(&previous) {
+                        if !config.files.is_empty() {
+                            *inner = self.start_engine(config).ok();
+                        }
+                    }
+                }
+                return Err(error);
+            }
+            return Ok(());
         }
         if let Some(ref mut engine) = *inner {
             if !policy.enabled || ban_config.files.is_empty() {
@@ -247,16 +275,6 @@ impl FirewallManager {
         } else if policy.enabled && !ban_config.files.is_empty() {
             let engine = self.start_engine(ban_config)?;
             *inner = Some(engine);
-        } else {
-            #[cfg(feature = "linux")]
-            if self.config.platform == crate::config::Platform::Linux {
-                let previous = self.stores.firewall_policy.read().await;
-                if previous.enabled && !previous.observe_only {
-                    crate::platforms::admin::network_operation(
-                        "ban_shield_apply", serde_json::json!({"enabled":false,"active":[],"exceptions":[]}),
-                    ).await?;
-                }
-            }
         }
         Ok(())
     }

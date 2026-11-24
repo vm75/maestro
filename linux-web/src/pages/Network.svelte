@@ -34,7 +34,7 @@
   function editPeer(value: Peer) { editingPeer = value.public_key; peer = {...value}; endpoint = value.endpoint || ''; keepalive = value.persistent_keepalive ?? undefined }
   function resetPeer() { editingPeer = ''; peer = emptyPeer(); endpoint = ''; keepalive = undefined }
   async function savePeers(peers: Peer[]) {
-    if (!peerConfig || wg?.is_running) return
+    if (!peerConfig || wg?.is_running || peerConfig.is_running) return
     if (await mutate('wireguard/peers', 'PUT', {revision: peerConfig.revision, peers})) resetPeer()
   }
   async function savePeer() {
