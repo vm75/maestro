@@ -114,6 +114,7 @@ impl Store {
         let desired = parse(bytes)?;
         let store = self.clone();
         let directory = tokio::task::spawn_blocking(move || store.lock_directory()).await??;
+        super::backup_capture::ensure_idle_locked(self,&directory)?;
         journal::ensure_idle(&directory)?;
         let (previous, plan) = Self::plan(
             store::current(&directory, &self.filename)?,
@@ -197,6 +198,7 @@ impl Store {
     ) -> Result<Option<Snapshot>> {
         let store = self.clone();
         let directory = tokio::task::spawn_blocking(move || store.lock_directory()).await??;
+        super::backup_capture::ensure_idle_locked(self,&directory)?;
         let mut journal = journal::read(&directory)?
             .ok_or_else(|| anyhow::anyhow!("no pending workload apply"))?;
         ensure!(
