@@ -43,6 +43,8 @@ enum Tool {
     ManagedConfigValidate,
     ManagedConfigHealth,
     ManagedConfigReadiness,
+    ManagedConfigCheck,
+    ManagedServices,
     ManagedConfigModel,
     ManagedConfigHistory,
     ManagedConfigHistoryRead,
@@ -72,7 +74,7 @@ enum Tool {
 }
 
 impl Tool {
-    const ALL: [Self; 44] = [
+    const ALL: [Self; 46] = [
         Self::Status,
         Self::Capabilities,
         Self::JobsList,
@@ -91,6 +93,8 @@ impl Tool {
         Self::ManagedConfigValidate,
         Self::ManagedConfigHealth,
         Self::ManagedConfigReadiness,
+        Self::ManagedConfigCheck,
+        Self::ManagedServices,
         Self::ManagedConfigModel,
         Self::ManagedConfigHistory,
         Self::ManagedConfigHistoryRead,
@@ -205,7 +209,17 @@ impl Tool {
             Self::ManagedConfigReadiness => (
                 "managed_config_readiness",
                 "Configuration readiness",
-                "Read fresh file and mount checks without inspecting running workloads or changing host state. Native prerequisites are not yet verified.",
+                "Read cached backend prerequisites and fresh file/mount checks without inspecting running workloads or changing host state. Missing or invalid configurations remain inspectable.",
+            ),
+            Self::ManagedConfigCheck => (
+                "managed_config_check",
+                "Recheck configuration readiness",
+                "Refresh native prerequisites and file/mount checks. Never installs packages or creates missing data.",
+            ),
+            Self::ManagedServices => (
+                "managed_services",
+                "Managed applications",
+                "Read configuration health and selected runtime status without secret values or backend mutations.",
             ),
             Self::ManagedConfigModel => (
                 "managed_config_model",
@@ -485,7 +499,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                 | Tool::ApplicationsList
                 | Tool::ApplicationsAction
                 | Tool::ApplicationsLogs => "workloads",
-                Tool::ManagedConfigReadiness => "managed_status",
+                Tool::ManagedConfigReadiness | Tool::ManagedConfigCheck | Tool::ManagedServices => "managed_status",
                 Tool::SharesList | Tool::ManagedShares | Tool::SharesSambaPassword
                 | Tool::SharesStatus | Tool::ManagedDirectoryBrowse => "shares",
                 _ => "system",
@@ -508,7 +522,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
             );
             let input_schema = match tool {
                 Tool::SharesList => json!({"additionalProperties":false,"properties":{"protocol":{"type":"string","description":"Optional protocol filter","enum":["samba","nfs"]}},"required":[],"type":"object"}),
-                Tool::ManagedConfigReadiness => json!({"type":"object","properties":{},"required":[],"additionalProperties":false}),
+                Tool::ManagedConfigReadiness | Tool::ManagedConfigCheck | Tool::ManagedServices => json!({"type":"object","properties":{},"required":[],"additionalProperties":false}),
                 Tool::ManagedApplyStatus => json!({"type":"object","properties":{},"required":[],"additionalProperties":false}),
                 Tool::ManagedApplyRetry => json!({"type":"object","properties":{
                     "confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."}
@@ -1164,6 +1178,8 @@ pub async fn execute_tool(
             | "managed_config_read"
             | "managed_config_health"
             | "managed_config_readiness"
+            | "managed_config_check"
+            | "managed_services"
             | "managed_config_model"
             | "managed_config_history"
             | "workloads_history"
@@ -1713,34 +1729,72 @@ pub async fn execute_tool(
                 ),
             }
         }
-        "managed_config_readiness" => {
-            // Match the reference's inspectable missing/invalid states. Static
-            // checks alone cannot establish native readiness.
-            let result = match store.read() {
-                Ok(None) => json!({"configured":false,"valid":false}),
-                Ok(Some(raw)) => match raw.config() {
-                    Ok(config) => {
-                        let health = crate::core::declarative::preflight::check_files(
-                            store,
-                            &config,
-                            &state.config.paths.storage_dir,
-                            state.config.paths.proc_stat.parent(),
-                        );
-                        json!({"configured":true,"valid":true,"health":health,"runtimeChecked":false})
-                    }
-                    Err(_) => json!({
-                        "configured":true,
-                        "valid":false,
-                        "error":"Configuration is invalid or inaccessible; open Configuration to repair it."
-                    }),
-                },
-                Err(_) => json!({
-                    "configured":true,
-                    "valid":false,
-                    "error":"Configuration is invalid or inaccessible; open Configuration to repair it."
-                }),
+        "managed_config_readiness" | "managed_config_check" | "managed_services" => {
+            let refresh = name == "managed_config_check";
+            let services = name == "managed_services";
+            let snapshot = match store.read() {
+                Ok(Some(raw)) => raw,
+                Ok(None) if !refresh => {
+                    let result = if services {
+                        json!({"configured":false,"services":[]})
+                    } else {
+                        json!({"configured":false,"valid":false})
+                    };
+                    return (StatusCode::OK, result);
+                }
+                _ if refresh => return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err("unavailable", "Configuration is unavailable or invalid."),
+                ),
+                _ => {
+                    let mut result = json!({"configured":true,"valid":false,
+                        "error":"Configuration is invalid or inaccessible; open Configuration to repair it."});
+                    if services { result["services"] = json!([]); }
+                    return (StatusCode::OK, result);
+                }
             };
-            (StatusCode::OK, result)
+            let config = match snapshot.config() {
+                Ok(config) => config,
+                Err(_) if refresh => return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err("unavailable", "Configuration is unavailable or invalid."),
+                ),
+                Err(_) => {
+                    let mut result = json!({"configured":true,"valid":false,
+                        "error":"Configuration is invalid or inaccessible; open Configuration to repair it."});
+                    if services { result["services"] = json!([]); }
+                    return (StatusCode::OK, result);
+                }
+            };
+            let health = provider.readiness.check(
+                state, store, &snapshot, &config, provider.quadlet.is_some(), refresh,
+            ).await;
+            if refresh {
+                return (StatusCode::OK, json!(health));
+            }
+            if services {
+                let apps = provider.list_live_applications(&config).await;
+                let items: Vec<_> = apps.iter().map(|app| {
+                    let key = format!("service/{}", app.id);
+                    let issues: Vec<_> = health.issues.iter().filter(|issue| issue.resource == key).collect();
+                    let registered = app.runtime_matches.is_some();
+                    let configuration = if app.restart_required {
+                        "restart_required"
+                    } else if registered {
+                        "registered"
+                    } else {
+                        "unknown"
+                    };
+                    json!({"id":app.id,"name":app.name,"kind":app.kind,
+                        "backend":crate::core::declarative::preflight::service_backend(&config.services[&app.id]),
+                        "enabled":app.enabled,"state":app.state,"registered":registered,
+                        "configuration":configuration,"issues":issues,"members":app.members})
+                }).collect();
+                return (StatusCode::OK, json!({"configured":true,"valid":true,
+                    "revision":snapshot.revision,"health":health,"services":items}));
+            }
+            (StatusCode::OK, json!({"configured":true,"valid":true,
+                "health":health,"runtimeChecked":false}))
         }
         "managed_config_health" => match store.read() {
             Ok(Some(raw)) => match crate::core::declarative::parse(&raw.bytes) {
