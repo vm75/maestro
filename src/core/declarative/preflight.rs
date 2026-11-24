@@ -618,7 +618,7 @@ async fn backend_prerequisites(
     issues
 }
 
-fn propagate(config: &Config, health: &mut Health, native: Vec<Issue>) {
+pub(super) fn propagate(config: &Config, health: &mut Health, native: Vec<Issue>) {
     health.issues.extend(native);
     let sources = health.issues.clone();
     for (id, service) in &config.services {
