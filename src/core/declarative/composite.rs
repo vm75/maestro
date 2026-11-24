@@ -100,7 +100,7 @@ impl CompositeProvider {
             config.paths.applications_dir.clone(),
             config.paths.storage_dir.clone(),
             runner.clone(),
-        );
+        ).native_paths(config.commands.systemctl.clone());
 
         let podman_compose = ComposeProvider::new(
             "podman",
@@ -108,7 +108,7 @@ impl CompositeProvider {
             config.paths.applications_dir.clone(),
             config.paths.storage_dir.clone(),
             runner.clone(),
-        );
+        ).native_paths(config.commands.systemctl.clone());
 
         let incus = IncusProvider::new(config.commands.incus.clone(), runner.clone());
         let mut libvirt = LibvirtProvider::new(config.commands.virsh.clone(), runner.clone());
@@ -167,37 +167,43 @@ impl CompositeProvider {
         apps
     }
 
+    fn compose_provider(&self, engine: &str) -> &ComposeProvider {
+        if engine == "docker" { &self.docker_compose } else { &self.podman_compose }
+    }
+
     pub async fn list_live_applications(&self, config: &Config) -> Vec<ApplicationSummary> {
         use futures_util::{StreamExt, stream};
         let mut apps = self.list_applications(config);
-        let Some(provider) = &self.quadlet else {
-            return apps;
-        };
         if self.simulated {
             return apps;
         }
         let targets: Vec<_> = apps
             .iter()
             .enumerate()
-            .filter(|(_, app)| app.backend == "quadlet")
-            .map(|(index, app)| (index, app.id.clone()))
+            .filter(|(_, app)| app.backend == "compose" || (app.backend == "quadlet" && self.quadlet.is_some()))
+            .map(|(index, app)| (index, app.id.clone(), app.backend.clone(), app.engine.clone()))
             .collect();
         let mut inspections = stream::iter(targets)
-            .map(|(index, id)| async move { (index, provider.status_details(config, &id).await) })
-            .buffer_unordered(4);
-        let logs_available = self.journalctl.is_file();
+            .map(|(index,id,backend,engine)| async move {
+                let result = if backend == "compose" {
+                    self.compose_provider(&engine).status_details(config,&id).await
+                        .map(|status| (status.state,status.runtime_matches,status.restart_required,status.members,true))
+                } else {
+                    self.quadlet.as_ref().expect("filtered Quadlet provider").status_details(config,&id).await
+                        .map(|status| (status.state,status.runtime_matches,status.restart_required,status.members,self.journalctl.is_file()))
+                };
+                (index,result)
+            }).buffer_unordered(4);
         let mut verified = BTreeSet::new();
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while let Some((index, result)) = inspections.next().await {
-                if let Ok(status) = result {
+                if let Ok((state,runtime_matches,restart_required,members,logs_available)) = result {
                     let app = &mut apps[index];
-                    if status.state != "unknown" {
-                        verified.insert(index);
-                    }
-                    app.state = status.state.into();
-                    app.runtime_matches = Some(status.runtime_matches);
-                    app.restart_required = status.restart_required;
-                    app.members = status.members;
+                    if state != "unknown" { verified.insert(index); }
+                    app.state = state.into();
+                    app.runtime_matches = Some(runtime_matches);
+                    app.restart_required = restart_required;
+                    app.members = members;
                     app.logs = logs_available;
                 }
             }
@@ -237,6 +243,9 @@ impl CompositeProvider {
             .services
             .get(id)
             .ok_or_else(|| anyhow!("service not found: {id}"))?;
+        if !self.simulated && service.backend == "compose" {
+            return self.compose_provider(&service.engine).native_action(config,id,action).await;
+        }
         if !self.simulated && service.backend == "quadlet" {
             let provider = self
                 .quadlet
@@ -277,6 +286,9 @@ impl CompositeProvider {
             .services
             .get(id)
             .ok_or_else(|| anyhow!("service not found: {id}"))?;
+        if !self.simulated && service.backend == "compose" {
+            return self.compose_provider(&service.engine).native_logs(config,id,tail).await;
+        }
         if !self.simulated && service.backend == "quadlet" {
             let provider = self
                 .quadlet
@@ -308,6 +320,9 @@ impl CompositeProvider {
             .services
             .get(id)
             .ok_or_else(|| anyhow!("service not found: {id}"))?;
+        if !self.simulated && service.backend == "compose" {
+            return Ok(self.compose_provider(&service.engine).native_logs(config,id,tail).await?.display_text());
+        }
         if !self.simulated && service.backend == "quadlet" {
             let provider = self
                 .quadlet
@@ -354,6 +369,8 @@ impl CompositeProvider {
                     && matches!(change.backend.as_str(), "samba" | "nfs")
                     && self.shares.native_enabled())
                 || (change.resource.starts_with("service/")
+                    && matches!(change.backend.as_str(),"docker/compose"|"podman/compose"))
+                || (change.resource.starts_with("service/")
                     && change.backend == "podman/quadlet"
                     && self.quadlet.is_some()),
             "Native provider ownership and recovery are not verified for this resource."
@@ -380,6 +397,10 @@ impl ApplyProvider for CompositeProvider {
                 .preflight_mode(change, previous, desired, mode)
                 .await;
         }
+        if matches!(change.backend.as_str(),"docker/compose"|"podman/compose") {
+            return self.compose_provider(if change.backend == "docker/compose" {"docker"} else {"podman"})
+                .preflight_mode(change,previous,desired,mode).await;
+        }
         if change.backend == "podman/quadlet" {
             if let Some(provider) = &self.quadlet {
                 return provider
@@ -405,6 +426,10 @@ impl ApplyProvider for CompositeProvider {
                 .storage
                 .apply_mode(change, previous, desired, mode)
                 .await;
+        }
+        if matches!(change.backend.as_str(),"docker/compose"|"podman/compose") {
+            return self.compose_provider(if change.backend == "docker/compose" {"docker"} else {"podman"})
+                .apply_mode(change,previous,desired,mode).await;
         }
         if change.backend == "podman/quadlet" {
             if let Some(provider) = &self.quadlet {
@@ -510,6 +535,10 @@ impl RecoveryProvider for CompositeProvider {
                 .storage
                 .observe_mode(change, previous, desired, mode)
                 .await;
+        }
+        if matches!(change.backend.as_str(),"docker/compose"|"podman/compose") {
+            return self.compose_provider(if change.backend == "docker/compose" {"docker"} else {"podman"})
+                .observe_mode(change,previous,desired,mode).await;
         }
         if change.backend == "podman/quadlet" {
             if let Some(provider) = &self.quadlet {
@@ -665,10 +694,9 @@ shares:
             after: Some("a".repeat(64)),
         };
         let previous = Config::default();
-        assert_eq!(
-            provider.blocked_resources(std::slice::from_ref(&change)),
-            ["service/demo"]
-        );
+        // Compose is now routed to native checks; an unrelated/missing
+        // engine still fails closed at preflight and lifecycle verification.
+        assert!(provider.blocked_resources(std::slice::from_ref(&change)).is_empty());
         assert!(
             provider
                 .preflight(&change, &previous, &desired)
@@ -680,17 +708,10 @@ shares:
             provider
                 .observe(&change, &previous, &desired)
                 .await
-                .unwrap(),
+                .unwrap_or(ObservedResource::Unknown),
             ObservedResource::Unknown
         );
-        assert!(
-            provider
-                .action(&desired, "demo", "stop")
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("ownership")
-        );
+        assert!(provider.action(&desired,"demo","stop").await.is_err());
         assert_eq!(provider.list_applications(&desired)[0].state, "unknown");
     }
 
