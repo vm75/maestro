@@ -100,7 +100,17 @@ Do not introduce automatic NGINX build triggers or router deployment.
 
 ## Phase 2 source-guided migration
 
-Use Server Man at `c1a9f32f5898146ae7ac339043b910b8e2a2c438` as the behavioral reference. Prefer direct translation of Go domain logic and tests, and reuse existing Svelte components. Retain equivalent Rust code; replace divergent implementations where simpler. Finish and validate vertical slices before expanding scope. Keep Linux non-root, the optional restricted helper, unified YAML, and router build isolation. Do not claim native parity from source changes alone.
+The user has directed a corrective port-first pass on `feature/linux-phase2`. Server Man at `c1a9f32f5898146ae7ac339043b910b8e2a2c438` is the working implementation baseline, not just a specification. The goal is the fastest safe route to feature parity inside Maestro's existing modular architecture.
+
+- Translate complete Go packages and their tests with the same types, algorithms, control flow, validation, native commands, result/error contracts and recovery. Preserve compatible file/function structure; adapt at integration boundaries. Do not create replacement designs, protocols or model layers just for Rust idioms.
+- Keep existing Phase 2 code only where it reduces work toward parity. The user authorizes undoing or replacing divergent Phase 2 implementations, including entire modules or Linux UI pages. Use ordinary corrective commits, not history rewrites; leave accepted Phase 1/1.5 router code, user changes and unrelated work intact.
+- Preserve the original Server Man helper operation names, JSON request/response contract, fatal stderr/exit semantics and tests. Do not introduce helper protocol versions, alternate operation names or a probe-only wire extension as part of the target design. Keep existing privilege safeguards effective until an equivalent safe integration is implemented.
+- Reuse Server Man's Svelte page/component tree, scripts, styles and fixtures wherever possible. Make the Rust API match the pinned reference rather than rewriting pages to fit partial Rust API shapes. Keep the Maestro navigation/module-discovery seam, router UI and upgraded Linux frontend dependencies.
+- Use one reference-compatible implementation for the Linux daemon and one-shot helper where they share operations; do not duplicate backend logic. Reuse equivalent Maestro command/job/auth/platform facilities through thin adapters.
+- Complete coherent implementation batches, port tests alongside source, and incorporate the operator's local compile/test feedback. No operator pause after each minor commit. Record actual blockers and evidence in the existing parity ledger; do not create more planning layers.
+- Retain non-root Linux, optional helper installation, action-specific permission gating, single authoritative Linux YAML with explicit legacy migration, and router build isolation. Defer optional enhancements and extra hardening not needed for safe parity. Do not claim native parity from source changes alone.
+
+The corrective strategy in `docs/plans/proposed/modular-platform-ui-migration.md` governs Phase 2; older implementation-history entries are not instructions to preserve divergent work.
 
 ## Documentation routing
 
