@@ -211,6 +211,14 @@ impl Candidate {
         Ok(candidate)
     }
 
+    /// Atomic rename followed by directory fsync. Callers must handle the
+    /// possibility that the rename succeeded but directory sync failed.
+    pub(crate) fn publish(&self, path: &Path) -> Result<()> {
+        ensure!(self.0.parent() == path.parent(), "candidate destination directory changed");
+        fs::rename(&self.0, path)?;
+        sync_dir(path)
+    }
+
     pub(crate) fn text(&self) -> &str {
         self.0.to_str().expect("fixed native configuration directory and ASCII candidate name")
     }
@@ -218,6 +226,29 @@ impl Candidate {
 
 impl Drop for Candidate {
     fn drop(&mut self) { let _ = fs::remove_file(&self.0); }
+}
+
+fn sync_dir(path: &Path) -> Result<()> {
+    fs::File::open(path.parent().ok_or_else(|| anyhow::anyhow!("missing configuration directory"))?)?.sync_all()?;
+    Ok(())
+}
+
+pub(crate) fn same_file(path: &Path, want: &Snapshot) -> bool {
+    read_file(path, true).is_ok_and(|current| current.revision() == want.revision())
+}
+
+pub(crate) fn restore(path: &Path, old: &Snapshot, published: &[u8]) -> Result<()> {
+    let current = read_file(path, true)?;
+    ensure!(current.exists && current.data == published,
+        "rollback refused because the managed file changed externally");
+    if !old.exists {
+        fs::remove_file(path)?;
+        return sync_dir(path);
+    }
+    let candidate = Candidate::new(path.parent().ok_or_else(|| anyhow::anyhow!("missing configuration directory"))?, &old.data, old.mode)?;
+    // Do not overwrite an administrator's intervening edit while staging rollback.
+    ensure!(same_file(path, &current), "rollback refused because the managed file changed externally");
+    candidate.publish(path)
 }
 
 #[cfg(test)]
