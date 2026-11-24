@@ -1,6 +1,6 @@
 //! Reference backup capture/recovery primitives. A captured bundle is not a
 //! restorable backup. Incomplete or unsupported coverage fails closed.
-use std::{collections::{BTreeMap,BTreeSet},fs::{self,File,Metadata},io::{Read,Write},os::unix::fs::{MetadataExt,PermissionsExt},os::fd::AsRawFd,path::{Path,PathBuf},time::{Duration,Instant}};
+use std::{collections::{BTreeMap,BTreeSet},fs::{self,File,Metadata},io::{Read,Write,Seek,SeekFrom},os::unix::fs::{MetadataExt},os::fd::AsRawFd,path::{Path,PathBuf},time::{Duration,Instant}};
 use anyhow::{Result,anyhow,ensure,Context};
 use chrono::{DateTime,Utc};
 use serde::{Deserialize,Serialize};
@@ -257,8 +257,9 @@ impl Collector<'_>{
             loop{
                 check_time(self.end)?;let n=src.read(&mut buffer)?;if n==0{break}
                 h.update(&buffer[..n]);count=count.checked_add(n as u64).context("capture size overflow")?;
-                ensure!(count<=before.len(),"capture source grew during copy");destination.write_all(&buffer[..n])?;
+                ensure!(count<=before.len(),"capture source grew during copy");if buffer[..n].iter().all(|v|*v==0){destination.seek(SeekFrom::Current(n as i64))?;}else{destination.write_all(&buffer[..n])?;}
             }
+            destination.set_len(count)?;
             destination.sync_all()?;
             ensure!(count==before.len(),"capture source changed during copy");
             row.size_bytes=count;row.sha256=format!("{:x}",h.finalize());self.files.push(row);
@@ -304,4 +305,341 @@ impl Publication{
         let opened=open_absolute(Path::new(&self.destination),true)?;let m=opened.metadata()?;
         ensure!((m.dev(),m.ino())==(self.artifact.device,self.artifact.inode),"published capture identity changed");Ok(())
     }
+}
+
+pub(super) fn read_export(root:&File,path:&str)->Result<File>{read_payload(root,path,false)}
+
+/// Enrich the existing metadata-only inventory using owned native identities.
+/// Errors remain explicit blockers; private XML/config is never returned.
+pub async fn inventory(store:&Store,storage_root:&Path,provider:&CompositeProvider)->Result<BackupInventory>{
+    let path=store.path();let root=path.parent().context("missing authority directory")?;
+    let mut inv=backup_inventory::inventory(store,root,storage_root)?;
+    let snapshot=store.read()?.context("configuration unavailable")?;
+    ensure!(snapshot.revision==inv.revision,"configuration changed during inventory");
+    let config=snapshot.config()?;
+    for input in inv.inputs.iter_mut().filter(|i|i.strategy=="native_export"){
+        let Some(id)=input.resources.first().and_then(|key|key.strip_prefix("service/"))else{continue};
+        let result=match config.services.get(id).map(|s|s.backend.as_str()){
+            Some("libvirt")=>provider.libvirt.backup_dependency(&config,id).await,
+            Some("incus")=>provider.incus.backup_dependency(&config,id).await,
+            _=>Err(anyhow!("native export is unsupported")),
+        };
+        if let Ok(object)=result{
+            input.native=Some(object);input.inspection="native_dependencies_discovered";
+            inv.issues.retain(|issue|issue.resource!=format!("service/{id}")||issue.code!="backup_native_dependencies");
+        }
+    }
+    ensure!(store.read()?.is_some_and(|s|s.revision==inv.revision),"configuration changed during inventory");
+    Ok(inv)
+}
+async fn service_state(provider:&CompositeProvider,c:&Config,id:&str)->Result<&'static str>{
+    let service=c.services.get(id).context("unknown backup workload")?;
+    let state=match service.backend.as_str(){
+        "libvirt"=>provider.libvirt.status_details(c,id).await?.state,
+        "incus"=>provider.incus.status_details(c,id).await?.state,
+        "compose"=>if service.engine=="docker"{provider.docker_compose.status_details(c,id).await?.state}
+            else{provider.podman_compose.status_details(c,id).await?.state},
+        "quadlet"=>provider.quadlet.as_ref().context("Quadlet provider unavailable")?.status_details(c,id).await?.state,
+        _=>return Err(anyhow!("unsupported backup workload provider")),
+    };
+    ensure!(matches!(state,"running"|"stopped"),"workload state is not stable and fully running or stopped");
+    Ok(state)
+}
+fn check_revision(store:&Store,dir:&File,revision:&str)->Result<()>{
+    ensure!(store::current(dir,&store.filename)?.is_some_and(|s|s.revision==revision),"configuration revision changed during backup");Ok(())
+}
+async fn resume(store:&Store,dir:&File,provider:&CompositeProvider,c:&Config,j:&mut Recovery)->Result<(Vec<String>,Vec<String>)>{
+    j.stage="recovering".into();persist(store,dir,j)?;
+    let end=Instant::now()+Duration::from_secs(120);
+    let mut resumed=Vec::new();let mut failed=Vec::new();
+    for id in c.service_order()?{
+        let Some(prior)=j.services.get(id).cloned()else{continue};
+        if matches!(prior.as_str(),"untouched"|"resumed"){continue}
+        check_revision(store,dir,&j.revision)?;
+        let mut settled=!matches!(prior.as_str(),"stop_attempted"|"stop_uncertain");
+        let result=tokio::time::timeout(end.saturating_duration_since(Instant::now()),async{
+            match service_state(provider,c,id).await?{
+                "running"=>{ensure!(settled,"shutdown may still be in progress");Ok(())},
+                "stopped"=>{
+                    settled=true;j.services.insert(id.into(),"stopped".into());persist(store,dir,j)?;
+                    for dep in &c.services[id].depends_on{
+                        ensure!(service_state(provider,c,dep).await?=="running","backup dependency is not running");
+                    }
+                    provider.action(c,id,"start").await?;
+                    ensure!(service_state(provider,c,id).await?=="running","workload did not resume");Ok(())
+                },
+                _=>Err(anyhow!("unknown workload state")),
+            }
+        }).await;
+        if matches!(result,Ok(Ok(()))){j.services.insert(id.into(),"resumed".into());resumed.push(id.into());}
+        else{j.services.insert(id.into(),if settled{"failed"}else{"stop_uncertain"}.into());failed.push(id.into());}
+        persist(store,dir,j)?;
+    }
+    if failed.is_empty(){j.stage="complete".into();persist(store,dir,j)?;}
+    Ok((resumed,failed))
+}
+pub async fn recover(store:&Store,provider:&CompositeProvider,revision:&str,token:&str)->Result<RecoveryStatus>{
+    let dir=store::LockedDirectory::try_acquire(store.directory()?)?;
+    let mut j=reviewed(store,&dir,revision,token)?;
+    ensure!(j.revision==revision,"backup recovery requires the original configuration revision");
+    if !pending(&j){return status(store)}
+    journal::ensure_idle(&dir)?;
+    let config=store::current(&dir,&store.filename)?.context("configuration unavailable")?.config()?;
+    ensure!(j.services.keys().all(|id|config.services.contains_key(id)),"backup recovery references an unknown workload");
+    let (_,failed)=resume(store,&dir,provider,&config,&mut j).await?;
+    ensure!(failed.is_empty(),"previously running workloads need explicit recovery");
+    status(store)
+}
+async fn native_boundary(provider:&CompositeProvider,c:&Config,inv:&BackupInventory)->Result<()>{
+    for id in c.services.keys(){ensure!(service_state(provider,c,id).await?=="stopped","all workloads must be verified stopped for capture");}
+    for input in inv.inputs.iter().filter(|i|i.strategy=="native_export"){
+        let object=input.native.as_ref().context("unresolved native export")?;
+        let id=input.resources.first().and_then(|s|s.strip_prefix("service/")).context("invalid native resource")?;
+        match object.backend.as_str(){
+            "libvirt"=>{provider.libvirt.validate_backup(c,id,object,true).await?;},
+            "incus"=>provider.incus.validate_backup(c,id,object,true).await?,
+            _=>return Err(anyhow!("unsupported native exporter")),
+        }
+    }Ok(())
+}
+fn expected_paths(m:&Manifest)->Result<BTreeMap<String,(String,u64,String)>>{
+    ensure!(m.version==1&&m.stage=="captured"&&store::valid_revision(&m.revision)&&clean_absolute(&m.source_root)
+        &&!m.files.is_empty()&&m.files.len()<=MAX_ENTRIES&&m.native_exports.len()<=2048,"invalid capture manifest");
+    let mut expected=BTreeMap::new();
+    for f in &m.files{
+        ensure!(portable(&f.bundle_path)&&f.bundle_path!="manifest.json"&&!f.bundle_path.starts_with("native/")&&f.bundle_path!="native","invalid capture path");
+        ensure!(matches!(f.kind.as_str(),"file"|"directory")&&f.mode.len()==4&&u32::from_str_radix(&f.mode,8).is_ok_and(|v|v<=0o7777)
+            &&DateTime::parse_from_rfc3339(&f.atime).is_ok()&&DateTime::parse_from_rfc3339(&f.mtime).is_ok(),"invalid captured metadata");
+        ensure!(if f.kind=="file"{store::valid_revision(&f.sha256)&&f.source_link_count==1&&f.captured_link_count==1}
+            else{f.sha256.is_empty()&&f.size_bytes==0&&f.captured_link_count==0},"invalid manifest payload");
+        ensure!(expected.insert(f.bundle_path.clone(),(f.kind.clone(),f.size_bytes,f.sha256.clone())).is_none(),"duplicate manifest payload");
+    }
+    ensure!(expected.get("server-man.yaml").is_some_and(|(k,_,hash)|k=="file"&&hash==&m.revision),"capture has no pinned configuration");
+    for export in &m.native_exports{
+        ensure!(portable(&export.bundle_path)&&export.bundle_path.starts_with("native/")&&export.size_bytes>0
+            &&store::valid_revision(&export.sha256)&&export.backend==export.native.backend
+            &&matches!((export.backend.as_str(),export.kind.as_str()),("incus","incus_instance_export")|("libvirt","libvirt_guest_state"))
+            &&export.resources.len()==1,"invalid native export");
+        ensure!(expected.insert(export.bundle_path.clone(),("file".into(),export.size_bytes,export.sha256.clone())).is_none(),"duplicate native export");
+    }
+    let keys:Vec<_>=expected.keys().cloned().collect();
+    for key in keys{
+        let mut at=Path::new(&key).parent();
+        while let Some(p)=at.filter(|p|!p.as_os_str().is_empty()){
+            let pstr=p.to_str().context("invalid manifest ancestor")?;
+            ensure!(expected.entry(pstr.into()).or_insert_with(||("directory".into(),0,String::new())).0=="directory","non-directory payload ancestor");
+            at=p.parent();
+        }
+    }
+    ensure!(expected.len()<=MAX_ENTRIES+8192,"manifest path count exceeds limit");
+    Ok(expected)
+}
+fn read_small(root:&File,path:&str,limit:usize)->Result<Vec<u8>>{
+    let file=read_payload(root,path,false)?;
+    ensure!(private(&file.metadata()?,false),"private capture metadata permissions differ");
+    let mut raw=Vec::new();file.take(limit as u64+1).read_to_end(&mut raw)?;
+    ensure!(raw.len()<=limit,"capture metadata exceeds limit");Ok(raw)
+}
+fn verify_tree(root:&File,expected:&BTreeMap<String,(String,u64,String)>,end:Instant)->Result<()>{
+    fn walk(dir:&File,prefix:&str,expected:&BTreeMap<String,(String,u64,String)>,seen:&mut BTreeSet<String>,mount_id:&str,end:Instant,depth:usize)->Result<()>{
+        check_time(end)?;ensure!(depth<=132,"capture verification depth exceeded");
+        let before=dir.metadata()?;
+        for entry in fs::read_dir(fd_path(dir))?{
+            check_time(end)?;let entry=entry?;let name=entry.file_name().into_string().map_err(|_|anyhow!("invalid capture member"))?;
+            let path=if prefix.is_empty(){name.clone()}else{format!("{prefix}/{name}")};
+            let (kind,size,digest)=expected.get(&path).context("unexpected capture payload")?;
+            ensure!(seen.insert(path.clone()),"duplicate capture payload");
+            let child=open_at(dir,&name,kind=="directory")?;
+            ensure!(mount(&child)?==mount_id&&private(&child.metadata()?,kind=="directory"),"unsafe capture member");
+            if kind=="directory"{walk(&child,&path,expected,seen,mount_id,end,depth+1)?;child.sync_all()?;}
+            else{ensure!(hash_file(&child,end)?==(*size,digest.clone()),"capture payload checksum/size mismatch");child.sync_all()?;}
+        }
+        ensure!(same(&before,&dir.metadata()?),"capture tree changed during verification");Ok(())
+    }
+    let mut seen=BTreeSet::new();walk(root,"",expected,&mut seen,&mount(root)?,end,0)?;
+    ensure!(seen.len()==expected.len(),"capture is missing a recorded payload");root.sync_all()?;Ok(())
+}
+fn verify_bundle(root:&File,checksum:&str,revision:&str,source_root:&Path,storage_root:&Path,end:Instant)->Result<Manifest>{
+    ensure!(store::valid_revision(checksum),"reviewed manifest checksum required");
+    let raw=read_small(root,"manifest.json",MAX_MANIFEST)?;
+    ensure!(super::revision(&raw)==checksum,"backup manifest changed since review");
+    let manifest:Manifest=serde_json::from_slice(&raw)?;
+    ensure!(manifest.revision==revision&&Path::new(&manifest.source_root)==source_root,"capture revision or source root differs");
+    let mut expected=expected_paths(&manifest)?;
+    expected.insert("manifest.json".into(),("file".into(),raw.len() as u64,checksum.into()));
+    verify_tree(root,&expected,end)?;
+    let yaml=read_small(root,"server-man.yaml",super::MAX_CONFIG_BYTES)?;
+    let config=super::parse(&yaml)?;
+    ensure!(super::revision(&yaml)==revision,"captured configuration revision differs");
+    // Validate coverage against the captured authoritative definition, not
+    // against paths supplied by a manifest author.
+    let relative=|path:PathBuf|->Result<String>{Ok(path.strip_prefix(source_root)?.to_str().context("invalid source path")?.into())};
+    for storage in config.storage.values(){
+        ensure!(!storage.external,"external data is not captured");
+        let path=relative(storage_root.join(&storage.path))?;
+        ensure!(expected.get(&path).is_some_and(|(kind,_,_)|kind==if storage.kind=="file"{"file"}else{"directory"}),"declared storage is missing from capture");
+        if let Some(asset)=&storage.source{
+            ensure!(expected.get(&asset.path).is_some_and(|(kind,_,sha)|kind=="file"&&sha==&asset.sha256),"initial image asset checksum differs");
+        }
+    }
+    for secret in config.secrets.values(){ensure!(expected.get(secret).is_some_and(|(kind,_,_)|kind=="file"),"private file is missing from capture");}
+    ensure!(!config.shares.values().any(|s|s.enabled),"published share data needs client quiescence");
+    let mut native_ids=BTreeSet::new();
+    for exp in &manifest.native_exports{
+        let id=exp.resources[0].strip_prefix("service/").filter(|id|super::id_valid(id)).context("invalid native capture resource")?;
+        ensure!(native_ids.insert(id),"duplicate native capture resource");
+        let service=config.services.get(id).context("unknown captured native guest")?;
+        ensure!(service.backend==exp.backend&&service.kind=="vm","native capture backend differs");
+        match exp.backend.as_str(){
+            "libvirt"=>{
+                let want=super::libvirt_render::parse_domain(super::libvirt_render::render(&config,id,storage_root)?.as_bytes())?;
+                ensure!(exp.native.name==super::libvirt_render::domain_name(id)&&exp.native.project.is_empty()&&exp.native.pool.is_empty()&&exp.native.content_type.is_empty(),"Libvirt native capture identity differs");
+                let raw=read_small(root,&exp.bundle_path,super::MAX_CONFIG_BYTES)?;
+                super::libvirt_render::validate_backup_xml(&raw,&want)?;
+            },
+            "incus"=>super::incus::verify_backup_archive(&config,id,&exp.native,read_export(root,&exp.bundle_path)?,end)?,
+            _=>return Err(anyhow!("unsupported native capture")),
+        }
+    }
+    ensure!(config.services.iter().filter(|(_,s)|s.kind=="vm").all(|(id,_)|native_ids.contains(id.as_str())),"native guest capture is missing");
+    Ok(manifest)
+}
+
+pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider,opts:PrepareOptions)->Result<serde_json::Value>{
+    let end=Instant::now()+deadline(opts.deadline_seconds)?;
+    ensure!(store::valid_revision(&opts.revision),"a reviewed configuration revision is required");
+    let dir=store::LockedDirectory::try_acquire(store.directory()?)?;
+    journal::ensure_idle(&dir)?;ensure_idle_locked(store,&dir)?;
+    let snapshot=store::current(&dir,&store.filename)?.context("configuration unavailable")?;
+    ensure!(snapshot.revision==opts.revision,"configuration revision changed");
+    let config=snapshot.config()?;
+    ensure!(!config.shares.values().any(|s|s.enabled),"published shares require verified client quiescence");
+    let inv=tokio::time::timeout(end.saturating_duration_since(Instant::now()),inventory(store,storage_root,provider)).await??;
+    ensure!(inv.revision==snapshot.revision&&inv.issues.iter().all(|i|i.severity=="warning"),"backup inventory has unresolved input or native dependency issues");
+    for input in &inv.inputs{
+        ensure!(matches!(input.strategy,"bundle_copy"|"native_export"),"unsupported external/native backup input");
+        if input.strategy=="bundle_copy"&&input.id!="configuration"{
+            let path=input.bundle_path.as_deref().context("unresolved backup path")?;
+            ensure!(portable(path)&&!matches!(path,"manifest.json"|"native"|"server-man.yaml")&&!path.starts_with("native/"),"reserved capture path");
+        }else if input.strategy=="native_export"{
+            let object=input.native.as_ref().context("unresolved native capture identity")?;
+            let id=input.resources[0].strip_prefix("service/").context("invalid native capture resource")?;
+            tokio::time::timeout(end.saturating_duration_since(Instant::now()),async{
+                match object.backend.as_str(){
+                    "libvirt"=>{provider.libvirt.validate_backup(&config,id,object,false).await?;},
+                    "incus"=>provider.incus.validate_backup(&config,id,object,false).await?,
+                    _=>return Err(anyhow!("native export unsupported")),
+                }Ok(())
+            }).await??;
+        }
+    }
+    let source_path=store.path();let source_root=source_path.parent().context("configuration root unavailable")?;
+    let mut running=Vec::new();
+    for id in config.service_order()?{
+        if tokio::time::timeout(end.saturating_duration_since(Instant::now()),service_state(provider,&config,id)).await??=="running"{running.push(id.to_owned());}
+    }
+    ensure!(opts.quiesce||running.is_empty(),"running workloads must be quiesced");
+    let publication=Publication::new(&opts.destination,source_root)?;
+    let mut j=Recovery{version:1,revision:snapshot.revision.clone(),destination:opts.destination.clone(),stage:"capturing".into(),updated_at:Utc::now(),
+        services:running.iter().map(|id|(id.clone(),"untouched".into())).collect(),artifact:publication.artifact.clone()};
+    persist(store,&dir,&mut j)?;
+    let result=async{
+        let capture=async{
+            for id in running.iter().rev(){
+                check_time(end)?;check_revision(store,&dir,&j.revision)?;
+                j.services.insert(id.clone(),"stop_attempted".into());persist(store,&dir,&mut j)?;
+                provider.action(&config,id,"stop").await?;
+                ensure!(service_state(provider,&config,id).await?=="stopped","workload did not reach verified stopped state");
+                j.services.insert(id.clone(),"stopped".into());persist(store,&dir,&mut j)?;
+            }
+            native_boundary(provider,&config,&inv).await?;
+            let mut collector=Collector{root:&publication.root,files:vec![],paths:BTreeSet::new(),end};
+            let source=open_absolute(&source_path,false)?;
+            collector.capture(&source,"server-man.yaml",0,&mount(&source)?)?;
+            ensure!(collector.files[0].sha256==snapshot.revision,"configuration changed during copy");
+            for input in inv.inputs.iter().filter(|i|i.strategy=="bundle_copy"&&i.id!="configuration"&&i.included_by.is_none()){
+                let path=input.path.as_deref().context("missing source path")?;
+                let bundle=input.bundle_path.as_deref().context("missing capture path")?;
+                let file=open_absolute(Path::new(path),input.kind=="directory")?;
+                ensure!(file.metadata()?.is_dir()==(input.kind=="directory"),"capture input type changed");
+                collector.capture(&file,bundle,0,&mount(&file)?)?;
+            }
+            let mut exports=Vec::new();
+            for input in inv.inputs.iter().filter(|i|i.strategy=="native_export"){
+                let object=input.native.as_ref().context("missing native capture identity")?;
+                let id=input.resources[0].strip_prefix("service/").context("invalid native resource")?;
+                let exported=match object.backend.as_str(){
+                    "libvirt"=>provider.libvirt.backup_export(&config,id,object,&publication.root,end).await?,
+                    "incus"=>provider.incus.backup_export(&config,id,object,&publication.root,end,available_bytes(&publication.root)?.saturating_sub(METADATA_RESERVE)).await?,
+                    _=>return Err(anyhow!("native exporter unavailable")),
+                };
+                exports.push(exported);
+            }
+            native_boundary(provider,&config,&inv).await?;
+            check_revision(store,&dir,&j.revision)?;
+            Ok::<_,anyhow::Error>((collector.files,exports))
+        };
+        // Timeout never drops the outer cleanup/recovery step. Persisted
+        // stop intent handles commands which may have changed native state.
+        let capture=tokio::time::timeout(end.saturating_duration_since(Instant::now()),capture).await;
+        let recovery=resume(store,&dir,provider,&config,&mut j).await;
+        let (files,exports)=capture.context("backup capture deadline exceeded")??;
+        let (resumed,failed)=recovery?;
+        let manifest=Manifest{source_root:source_root.to_string_lossy().into_owned(),principal:principal()?,
+            verification_required:vec!["UID/GID mapping, privileged attributes, complete metadata, native and restore validation remain required.".into()],
+            version:1,stage:"captured".into(),revision:snapshot.revision.clone(),created_at:Utc::now(),server_man_version:env!("CARGO_PKG_VERSION").into(),
+            files,native_exports:exports,running_workloads_at_backup:running,resumed_workloads:resumed.clone(),failed_resume:failed.clone()};
+        let raw=serde_json::to_vec(&manifest)?;
+        ensure!(raw.len()<=MAX_MANIFEST,"private manifest exceeds capture limit");
+        let checksum=super::revision(&raw);let mut file=create_payload(&publication.root,"manifest.json")?;file.write_all(&raw)?;file.sync_all()?;
+        verify_bundle(&publication.root,&checksum,&snapshot.revision,source_root,storage_root,end)?;
+        publication.check()?;publication.parent.sync_all()?;
+        j.artifact.manifest_checksum=checksum.clone();j.artifact.stage="synced".into();persist(store,&dir,&mut j)?;
+        j.artifact.stage="publishing".into();persist(store,&dir,&mut j)?;
+        check_revision(store,&dir,&j.revision)?;
+        publication.rename()?;
+        j.artifact.stage="published".into();persist(store,&dir,&mut j)?;
+        let total_bytes=manifest.files.iter().map(|f|f.size_bytes).chain(manifest.native_exports.iter().map(|n|n.size_bytes)).try_fold(raw.len() as u64,|a,b|a.checked_add(b).context("capture size overflow"))?;
+        Ok::<_,anyhow::Error>(serde_json::json!({"stage":"captured","destination":opts.destination,"revision":snapshot.revision,"preparedAt":manifest.created_at,
+            "totalEntries":manifest.files.len()+manifest.native_exports.len()+1,"totalBytes":total_bytes,"manifestChecksum":checksum,"quiesced":opts.quiesce,
+            "resumedServices":resumed,"failedResume":failed}))
+    }.await;
+    // Never recursively delete a staging tree on uncertain identity. Retain
+    // the recorded location for explicit review/release or verified publish.
+    if result.is_err()&&j.artifact.stage!="published"{
+        j.artifact.stage="uncertain".into();persist(store,&dir,&mut j)?;
+    }
+    result
+}
+fn available_bytes(file:&File)->Result<u64>{
+    let mut info=std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    ensure!(unsafe{libc::fstatvfs(file.as_raw_fd(),info.as_mut_ptr())}==0,"capture filesystem capacity unavailable");
+    let info=unsafe{info.assume_init()};
+    ensure!(info.f_flag&libc::ST_RDONLY==0,"capture filesystem is read-only");
+    Ok((info.f_bavail as u64).saturating_mul(info.f_frsize as u64))
+}
+pub fn publish(store:&Store,storage_root:&Path,revision:&str,token:&str,seconds:u64)->Result<RecoveryStatus>{
+    let end=Instant::now()+deadline(seconds)?;
+    let dir=store::LockedDirectory::try_acquire(store.directory()?)?;let mut j=reviewed(store,&dir,revision,token)?;
+    ensure!(j.revision==revision&&!j.artifact.manifest_checksum.is_empty()&&matches!(j.artifact.stage.as_str(),"synced"|"publishing"|"uncertain"|"published"),"no verified staged capture is available");
+    let dest=Path::new(&j.destination);let parent=open_absolute(dest.parent().context("missing capture parent")?,true)?;
+    let p=parent.metadata()?;
+    ensure!((p.dev(),p.ino())==(j.artifact.parent_device,j.artifact.parent_inode)&&p.uid()==unsafe{libc::geteuid()}&&p.mode()&0o022==0,"capture parent changed");
+    let staged=Path::new(&j.artifact.staging_path).file_name().unwrap().to_str().unwrap();
+    let final_name=dest.file_name().unwrap().to_str().unwrap();
+    let (root,rename)=match open_at(&parent,final_name,true){
+        Ok(file)=>(file,false),
+        Err(e) if e.downcast_ref::<rustix::io::Errno>()==Some(&rustix::io::Errno::NOENT)=>(open_at(&parent,staged,true)?,true),
+        Err(e)=>return Err(e),
+    };
+    let m=root.metadata()?;ensure!(private(&m,true)&&(m.dev(),m.ino())==(j.artifact.device,j.artifact.inode),"recorded capture identity changed");
+    let source_path=store.path();let source_root=source_path.parent().unwrap();
+    verify_bundle(&root,&j.artifact.manifest_checksum,revision,source_root,storage_root,end)?;
+    j.artifact.stage="publishing".into();persist(store,&dir,&mut j)?;
+    if rename{
+        let publication=Publication{parent,root,artifact:j.artifact.clone(),destination:j.destination.clone()};
+        publication.rename()?;
+    }else{parent.sync_all()?;}
+    j.artifact.stage="published".into();persist(store,&dir,&mut j)?;
+    status(store)
 }
