@@ -29,6 +29,8 @@ pub struct Issue {
 #[serde(rename_all = "camelCase")]
 pub struct Health {
     pub checked_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_checked_at: Option<DateTime<Utc>>,
     pub issues: Vec<Issue>,
 }
 
@@ -457,7 +459,243 @@ pub fn check_files(
     }
     issues.extend(port_issues(config));
     issues.sort_by(|a, b| (&a.resource, &a.field).cmp(&(&b.resource, &b.field)));
-    Health { checked_at, issues }
+    Health {
+        checked_at,
+        runtime_checked_at: None,
+        issues,
+    }
+}
+
+/// Native prerequisites are cached independently of fresh file and journal checks.
+#[derive(Default)]
+pub struct ReadinessCache {
+    entry: tokio::sync::Mutex<Option<CachedPrerequisites>>,
+}
+
+struct CachedPrerequisites {
+    revision: String,
+    instant: std::time::Instant,
+    checked_at: DateTime<Utc>,
+    issues: Vec<Issue>,
+}
+
+pub fn service_backend(service: &super::Service) -> String {
+    match service.backend.as_str() {
+        "compose" | "quadlet" => format!("{}/{}", service.engine, service.backend),
+        _ => service.backend.clone(),
+    }
+}
+
+fn backend_issue(backend: &str, severity: &'static str, code: &'static str, message: &'static str) -> Issue {
+    issue(
+        severity,
+        &format!("backend/{backend}"),
+        "runtime",
+        code,
+        message,
+        "Check the selected backend, service-account access and configuration, then recheck.",
+    )
+}
+
+/// Bounded, fixed-argument probes. Never return native output to the caller.
+async fn probe(
+    state: &crate::state::AppState,
+    program: &Path,
+    args: &[&str],
+) -> Option<Vec<u8>> {
+    if !program.is_absolute() || !program.is_file() {
+        return None;
+    }
+    let output = state.runner.capture_status(
+        program, args, std::time::Duration::from_secs(4), 64 * 1024,
+    ).await.ok()?;
+    (output.status.success() && !output.truncated).then_some(output.stdout)
+}
+
+async fn backend_prerequisites(
+    state: &crate::state::AppState,
+    quadlet_available: bool,
+    backend: &str,
+) -> Vec<Issue> {
+    let commands = &state.config.commands;
+    let mut issues = Vec::new();
+    if matches!(backend, "podman/quadlet" | "podman/compose") {
+        let rootless = probe(
+            state, &commands.podman,
+            &["--remote=false", "info", "--format", "{{.Host.Security.Rootless}}"],
+        ).await;
+        if !rootless.as_deref().is_some_and(|bytes| {
+            std::str::from_utf8(bytes).is_ok_and(|text| text.trim() == "true")
+        }) {
+            issues.push(backend_issue(backend, "error", "rootless_unavailable",
+                "The local rootless Podman runtime could not be verified."));
+        }
+    }
+    if matches!(backend, "podman/quadlet" | "podman/compose" | "docker/compose") {
+        if probe(state, &commands.systemctl, &[
+            "--user", "--no-pager", "--no-ask-password", "show", "--property=Version",
+        ]).await.is_none() {
+            issues.push(backend_issue(backend, "error", "user_manager_unavailable",
+                "The workload account's systemd user manager is inaccessible."));
+        }
+    }
+    match backend {
+        "podman/quadlet" => {
+            if !quadlet_available {
+                issues.push(backend_issue(backend, "error", "missing_adapter",
+                    "The rootless Quadlet provider is unavailable."));
+            }
+            // A reachable manager alone does not prove generator, boot or
+            // resource-specific readiness.
+            issues.push(backend_issue(backend, "unknown", "generator_check_pending",
+                "Quadlet generator, boot and resource prerequisites are not fully verified."));
+        }
+        "podman/compose" | "docker/compose" => {
+            let (program, args): (&Path, &[&str]) = if backend == "podman/compose" {
+                (&commands.podman, &["--remote=false", "compose", "version"])
+            } else {
+                (&commands.docker, &["compose", "version"])
+            };
+            if probe(state, program, args).await.is_none() {
+                issues.push(backend_issue(backend, "error", "compose_unavailable",
+                    "A compatible Compose provider is unavailable."));
+            }
+            issues.push(backend_issue(backend, "unknown", "provider_checks_pending",
+                "Native Compose ownership, boot policy and resource prerequisites are not yet verified."));
+        }
+        "libvirt" => {
+            // Never select an implicit remote connection for readiness.
+            let uri = state.config.linux_authority.as_ref()
+                .map(|authority| authority.settings.libvirt_uri.as_str())
+                .unwrap_or("qemu:///system");
+            if !matches!(uri, "qemu:///system" | "qemu:///session") ||
+                probe(state, &commands.virsh, &["--connect", uri, "uri"]).await.is_none() {
+                issues.push(backend_issue(backend, "error", "libvirt_unavailable",
+                    "The configured local libvirt connection is unavailable."));
+            }
+            issues.push(backend_issue(backend, "unknown", "provider_checks_pending",
+                "KVM capabilities, guest identity and native provider readiness are not yet verified."));
+        }
+        "incus" => {
+            if probe(state, &commands.incus, &["query", "local:/1.0"]).await.is_none() {
+                issues.push(backend_issue(backend, "error", "incus_unavailable",
+                    "The local Incus daemon is unavailable."));
+            }
+            issues.push(backend_issue(backend, "unknown", "provider_checks_pending",
+                "QEMU, project, pool, network and native guest prerequisites are not yet verified."));
+        }
+        "samba" | "nfs" => issues.push(backend_issue(backend, "unknown",
+            "provider_checks_pending", "Native share publication prerequisites are not yet verified.")),
+        _ => issues.push(backend_issue(backend, "unknown", "check_unavailable",
+            "Backend prerequisite checks are not implemented.")),
+    }
+    issues
+}
+
+fn propagate(config: &Config, health: &mut Health, native: Vec<Issue>) {
+    health.issues.extend(native);
+    let sources = health.issues.clone();
+    for (id, service) in &config.services {
+        let backend = format!("backend/{}", service_backend(service));
+        for source in &sources {
+            if source.resource == backend || source.resource == "configuration" {
+                let mut copy = source.clone();
+                copy.resource = format!("service/{id}");
+                health.issues.push(copy);
+            }
+        }
+    }
+    for (id, share) in &config.shares {
+        let backend = format!("backend/{}", share.protocol);
+        for source in &sources {
+            if source.resource == backend || source.resource == "configuration" {
+                let mut copy = source.clone();
+                copy.resource = format!("share/{id}");
+                health.issues.push(copy);
+            }
+        }
+    }
+    let mut blocked: BTreeSet<String> = health.issues.iter()
+        .filter(|issue| issue.severity != "warning" && issue.field != "autostart")
+        .map(|issue| issue.resource.clone()).collect();
+    if let Ok(order) = config.service_order() {
+        for id in order {
+            if config.services[id].depends_on.iter().any(|dep| blocked.contains(&format!("service/{dep}"))) {
+                let key = format!("service/{id}");
+                health.issues.push(issue("error", &key, "depends_on", "blocked_dependency",
+                    "A required service has startup blockers.",
+                    "Repair the dependency's configuration issues and recheck."));
+                blocked.insert(key);
+            }
+        }
+    }
+}
+
+impl ReadinessCache {
+    pub async fn check(
+        &self,
+        state: &crate::state::AppState,
+        store: &Store,
+        snapshot: &super::Snapshot,
+        config: &Config,
+        quadlet_available: bool,
+        refresh: bool,
+    ) -> Health {
+        let mut health = check_files(store, config, &state.config.paths.storage_dir,
+            state.config.paths.proc_stat.parent());
+        match crate::core::linux_config::restart_required(&state.config, &snapshot.bytes) {
+            Ok(false) => {}
+            Ok(true) => health.issues.push(issue("error", "configuration", "server",
+                "restart_required", "Server settings differ from the running process.",
+                "Restart Maestro before managing resources.")),
+            Err(_) => health.issues.push(issue("unknown", "configuration", "server",
+                "restart_state_unknown", "Running server settings could not be compared.",
+                "Inspect configuration and restart Maestro if needed.")),
+        }
+        match store.pending_apply() {
+            Ok(None) => {}
+            Ok(Some(_)) => health.issues.push(issue("error", "configuration", "apply",
+                "apply_incomplete", "An earlier configuration apply has not completed.",
+                "Inspect apply status and explicitly retry or revert before starting workloads.")),
+            Err(_) => health.issues.push(issue("unknown", "configuration", "apply",
+                "apply_unavailable", "Previous apply status cannot be verified.",
+                "Inspect the private apply journal before managing workloads.")),
+        }
+        if state.runner.is_test_mode() {
+            propagate(config, &mut health, Vec::new());
+            return health;
+        }
+        let mut cache = self.entry.lock().await;
+        if !refresh {
+            if let Some(entry) = cache.as_ref().filter(|entry| {
+                entry.revision == snapshot.revision && entry.instant.elapsed().as_secs() < 10
+            }) {
+                health.runtime_checked_at = Some(entry.checked_at);
+                propagate(config, &mut health, entry.issues.clone());
+                return health;
+            }
+        }
+        let mut targets: BTreeSet<String> = config.services.values().map(service_backend).collect();
+        targets.extend(config.shares.values().map(|share| share.protocol.clone()));
+        use futures_util::{StreamExt, stream};
+        let mut checks = stream::iter(targets)
+            .map(|backend| async move {
+                backend_prerequisites(state, quadlet_available, &backend).await
+            }).buffer_unordered(4);
+        let mut native = Vec::new();
+        while let Some(mut issues) = checks.next().await {
+            native.append(&mut issues);
+        }
+        native.sort_by(|a, b| (&a.resource, &a.field, &a.code).cmp(&(&b.resource, &b.field, &b.code)));
+        let checked_at = Utc::now();
+        health.runtime_checked_at = Some(checked_at);
+        *cache = Some(CachedPrerequisites {
+            revision: snapshot.revision.clone(), instant: std::time::Instant::now(),
+            checked_at, issues: native.clone(),
+        });
+        propagate(config, &mut health, native);
+        health
+    }
 }
 
 #[cfg(test)]
