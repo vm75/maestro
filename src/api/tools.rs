@@ -70,11 +70,12 @@ enum Tool {
     SharesList,
     ManagedShares,
     SharesSambaPassword,
+    SharesSetup,
     SharesStatus,
 }
 
 impl Tool {
-    const ALL: [Self; 46] = [
+    const ALL: [Self; 47] = [
         Self::Status,
         Self::Capabilities,
         Self::JobsList,
@@ -120,6 +121,7 @@ impl Tool {
         Self::SharesList,
         Self::ManagedShares,
         Self::SharesSambaPassword,
+        Self::SharesSetup,
         Self::SharesStatus,
     ];
 
@@ -346,6 +348,11 @@ impl Tool {
                 "Set Samba password",
                 "Set the trusted workload account's Samba password through the restricted optional helper.",
             ),
+            Self::SharesSetup => (
+                "shares_setup",
+                "Set up share server",
+                "Install native Samba/NFS server packages, prepare managed configuration and enable/start its system service.",
+            ),
             Self::SharesStatus => (
                 "shares_status",
                 "Shares service status",
@@ -501,7 +508,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                 | Tool::ApplicationsLogs => "workloads",
                 Tool::ManagedConfigReadiness | Tool::ManagedConfigCheck | Tool::ManagedServices => "managed_status",
                 Tool::SharesList | Tool::ManagedShares | Tool::SharesSambaPassword
-                | Tool::SharesStatus | Tool::ManagedDirectoryBrowse => "shares",
+                | Tool::SharesSetup | Tool::SharesStatus | Tool::ManagedDirectoryBrowse => "shares",
                 _ => "system",
             };
             let read_only = !matches!(
@@ -518,6 +525,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     | Tool::ManagedConfigRevert
                     | Tool::ManagedResourceSave
                     | Tool::SharesSambaPassword
+                    | Tool::SharesSetup
                     | Tool::BackupInventory
             );
             let input_schema = match tool {
@@ -590,6 +598,12 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                         "additionalProperties":false
                     })
                 },
+                Tool::SharesSetup => json!({
+                    "type":"object","properties":{
+                        "protocol":{"type":"string","enum":["samba","nfs"],"description":"Server protocol"},
+                        "confirm":{"type":"boolean","description":"Explicit acknowledgement of this destructive operation. Must be true."}
+                    },"required":["protocol","confirm"],"additionalProperties":false
+                }),
                 Tool::SharesSambaPassword => json!({
                     "type": "object",
                     "properties": {
@@ -739,7 +753,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
                     tool,
                     Tool::WorkloadsApply | Tool::WorkloadsResume | Tool::WorkloadsRevert
                         | Tool::ApplicationsAction | Tool::PackagesInstall | Tool::DependenciesInstall
-                        | Tool::ManagedResourceSave | Tool::ManagedConfigSave | Tool::ManagedConfigRevert | Tool::ManagedApplyRetry | Tool::SharesSambaPassword
+                        | Tool::ManagedResourceSave | Tool::ManagedConfigSave | Tool::ManagedConfigRevert | Tool::ManagedApplyRetry | Tool::SharesSambaPassword | Tool::SharesSetup
                 ),
                 "inputSchema": input_schema
             })
@@ -814,6 +828,7 @@ async fn permissions(state: &AppState) -> Value {
     let package_policy = state.config.system.allow_package_writes;
     let samba_password_policy = state.config.system.allow_share_writes;
     let samba_password_ready = samba_password_policy && helper.permits_samba_password();
+    let share_ready = samba_password_policy && helper.permits_shares();
     let package_ready =
         package_policy && package_updates::available(state) && helper.permits_packages();
     let package_reason = if !package_policy {
@@ -839,6 +854,11 @@ async fn permissions(state: &AppState) -> Value {
             "status": if package_ready { "ready" } else { "unavailable" },
             "code": if package_ready { "ready" } else if !package_policy { "writes_disabled" } else { "helper_unavailable" },
             "reason": package_reason
+        },
+        "shareWrites": {
+            "status": if share_ready { "ready" } else { "unavailable" },
+            "code": if share_ready { "ready" } else if !samba_password_policy { "writes_disabled" } else { "helper_unavailable" },
+            "reason": if share_ready { "Protected share operations are authorized; native readiness is checked per protocol." } else { "Share publication requires enabled configuration and root-owned helper grants." }
         },
         "sambaPassword": {
             "status": if samba_password_ready { "ready" } else { "unavailable" },
@@ -1526,6 +1546,37 @@ pub async fn execute_tool(
         }
 
         "updates_status" => (StatusCode::OK, json!(package_updates::status(state).await)),
+
+        "shares_setup" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct SetupArgs { protocol: String, confirm: bool }
+            let Ok(input) = serde_json::from_value::<SetupArgs>(Value::Object(arguments)) else {
+                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected a protocol and confirm=true."));
+            };
+            if !input.confirm || !matches!(input.protocol.as_str(),"samba"|"nfs") {
+                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected samba or nfs and confirm=true."));
+            }
+            if !writes_allowed(state) || !state.config.system.allow_share_writes || !state.config.system.allow_package_writes {
+                return (StatusCode::FORBIDDEN,json_err("writes_disabled","Share server setup requires enabled share and package writes."));
+            }
+            if state.config.test_mode || !provider.shares.native_enabled() {
+                return (StatusCode::SERVICE_UNAVAILABLE,json_err("helper_unavailable","Native share setup requires the fixed reference configuration paths."));
+            }
+            let helper = admin::probe().await;
+            if !helper.permits_shares() || !helper.permits_packages() {
+                return (StatusCode::SERVICE_UNAVAILABLE,json_err("helper_unavailable","Share setup requires authorized share and package grants."));
+            }
+            start_job_value(jobs,"shares_setup",move |running| async move {
+                match admin::share_operation("shares_setup",json!({"protocol":input.protocol,"confirm":true})).await {
+                    Ok((result,output)) => {
+                        running.append_output(&output);
+                        running.finish(Outcome::Succeeded(result));
+                    }
+                    Err(error) => running.finish(Outcome::Failed(error.to_string())),
+                }
+            }).await
+        }
 
         "shares_samba_password" => {
             #[derive(serde::Deserialize)]
@@ -2824,6 +2875,29 @@ pub async fn execute_tool(
                     StatusCode::BAD_REQUEST,
                     json_err("invalid_arguments", "Unsupported share protocol."),
                 );
+            }
+            // The authorized helper can inspect native ownership and runtime
+            // tables that the workload account cannot read. Without it, keep
+            // the unprivileged inventory available and fail closed on writes.
+            if !state.config.test_mode && provider.shares.native_enabled() {
+                let capability = admin::probe().await;
+                if capability.status == "ready" {
+                    let args = match input.protocol.as_deref() {
+                        Some(protocol) => json!({"protocol":protocol}),
+                        None => json!({}),
+                    };
+                    if let Ok((mut result,_)) = admin::share_operation("shares_list",args).await {
+                        if !capability.permits_shares() {
+                            if let Some(backends) = result["backends"].as_array_mut() {
+                                for backend in backends {
+                                    backend["canManage"] = json!(false);
+                                    backend["reason"] = json!("Native share publication is disabled by root-owned policy.");
+                                }
+                            }
+                        }
+                        return (StatusCode::OK,result);
+                    }
+                }
             }
             let result = crate::core::declarative::native_shares::inventory(
                 state,
