@@ -106,7 +106,7 @@ fn package_parts(filename: &str) -> Result<(&str, &str)> {
     validate_asset_name(filename)?;
     let suffix = format!("_{ARCH}.ipk");
     let stem = filename
-        .strip_suffix(&suffix)
+        .strip_suffix(suffix.as_str())
         .context("incompatible Entware IPK architecture")?;
     let (name, version) = stem.split_once('_').context("invalid IPK filename")?;
     ensure!(
@@ -138,13 +138,14 @@ fn bundle(release: &Release) -> Result<Vec<&Asset>> {
         );
         ensure!(
             asset.size > 0 && asset.size <= MAX_IPK_BYTES,
-            "invalid IPK size: {}", asset.name
+            "invalid IPK size: {}",
+            asset.name
         );
         packages.push(asset);
     }
     ensure!(!packages.is_empty(), "release contains no compatible IPKs");
     if release.tag_name.starts_with("toolbox-nginx-entware-")
-        || NGINX_PACKAGES.iter().any(|name| names.contains_key(name))
+        || NGINX_PACKAGES.iter().any(|name| names.contains_key(*name))
     {
         let version = names.get("nginx-ssl").context("missing nginx-ssl")?;
         for name in NGINX_PACKAGES {
@@ -167,7 +168,8 @@ fn verify_manifest(
         "IPK assets and checksum manifest disagree"
     );
     for asset in packages {
-        let checksum = checksums.get(&asset.name)
+        let checksum = checksums
+            .get(&asset.name)
             .with_context(|| format!("missing checksum for {}", asset.name))?;
         if let Some(digest) = &asset.digest {
             ensure!(
@@ -200,7 +202,8 @@ fn parse_checksums(content: &str) -> Result<HashMap<String, String>> {
         let filename = file.trim_start_matches('*');
         validate_asset_name(filename)?;
         ensure!(
-            map.insert(filename.to_string(), digest.to_ascii_lowercase()).is_none(),
+            map.insert(filename.to_string(), digest.to_ascii_lowercase())
+                .is_none(),
             "duplicate checksum for {filename}"
         );
     }
@@ -798,7 +801,7 @@ async fn check_downgrades(packages: &[&Asset], allow_downgrade: bool) -> Result<
                 continue;
             }
             let mut command = AsyncCommand::new(OPKG);
-            command.args(["compare-versions", current.as_str(), ">", version]);
+            command.args(["compare-versions", current.as_str(), ">>", version]);
             let output = bounded_command(command, OPKG_TIMEOUT, "opkg compare-versions").await?;
             match output.status.code() {
                 Some(0) => bail!(
@@ -894,7 +897,7 @@ async fn install(
         }
     }
 
-    let expected_size = packages.iter().map(|asset| asset.size).sum();
+    let expected_size: u64 = packages.iter().map(|asset| asset.size).sum();
     ensure_free_space(Path::new("/tmp"), expected_size)?;
     let base_url = format!("{RELEASE_BASE}/{tag}");
     let checksum_bytes = request_bytes(
@@ -929,15 +932,20 @@ async fn install(
         let _ = fs::remove_dir_all(&staging_dir);
         return Err(error);
     }
-    let final_dir = PathBuf::from("/tmp").join(format!("toolbox-{tag}-{}", Uuid::new_v4()));
+    let final_dir = PathBuf::from("/tmp").join(format!("{tag}-{}", Uuid::new_v4()));
     if let Err(error) = fs::rename(&staging_dir, &final_dir) {
         let _ = fs::remove_dir_all(&staging_dir);
         return Err(error).context("unable to publish verified IPKs");
     }
-    let package_paths: Vec<PathBuf> = packages.iter()
+    let package_paths: Vec<PathBuf> = packages
+        .iter()
         .map(|asset| final_dir.join(&asset.name))
         .collect();
-    println!("Verified {} IPKs for {tag}: {}", packages.len(), final_dir.display());
+    println!(
+        "Verified {} IPKs for {tag}: {}",
+        packages.len(),
+        final_dir.display()
+    );
 
     // Explicit release selection includes same-version rebuilds.
     let mut opkg_options = vec!["--force-reinstall"];
@@ -947,7 +955,11 @@ async fn install(
     let manual_cmd = format!(
         "{OPKG} {} install {}",
         opkg_options.join(" "),
-        package_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" ")
+        package_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
     );
     if !no_backup {
         backup::run(config, config_path, None)
@@ -968,7 +980,8 @@ async fn install(
     if nginx {
         install_nginx(config, opkg_cmd, &packages).await?;
     } else {
-        let output = bounded_command(opkg_cmd, OPKG_TIMEOUT, "opkg install").await
+        let output = bounded_command(opkg_cmd, OPKG_TIMEOUT, "opkg install")
+            .await
             .context("installation state may be partial; inspect opkg and package hooks before retrying")?;
         ensure!(
             output.status.success(),
@@ -978,7 +991,10 @@ async fn install(
         );
         verify_installed(&packages).await?;
     }
-    println!("Successfully installed all {} IPKs from {tag}.", packages.len());
+    println!(
+        "Successfully installed all {} IPKs from {tag}.",
+        packages.len()
+    );
     Ok(())
 }
 
@@ -1123,6 +1139,13 @@ mod tests {
             ],
         );
         assert_eq!(bundle(&nginx).unwrap().len(), 4);
+        let mut extended = nginx.clone();
+        extended.assets.push(Asset {
+            name: "nginx-extra_1.30.8-99_aarch64-3.10.ipk".into(),
+            size: 123,
+            digest: None,
+        });
+        assert_eq!(bundle(&extended).unwrap().len(), 5);
         let mut incomplete = nginx.clone();
         incomplete.assets.remove(0);
         assert!(bundle(&incomplete).is_err());
@@ -1131,6 +1154,17 @@ mod tests {
             &["btop_1.4.8-1_aarch64-3.10.ipk"],
         );
         assert_eq!(bundle(&other).unwrap().len(), 1);
+        let vaultwarden = release(
+            "toolbox-vaultwarden-entware-aarch64-r45389574741-a1",
+            &["vaultwarden_1.0.0-1_aarch64-3.10.ipk"],
+        );
+        assert_eq!(bundle(&vaultwarden).unwrap().len(), 1);
+        let mut draft = vaultwarden.clone();
+        draft.draft = true;
+        assert!(bundle(&draft).is_err());
+        draft.draft = false;
+        draft.prerelease = true;
+        assert!(bundle(&draft).is_err());
         other.assets[0].name = "btop_1.4.8-1_armv7-3.2.ipk".into();
         assert!(bundle(&other).is_err());
         other.tag_name = "toolbox-btop-android-arm64".into();
