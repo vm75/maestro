@@ -174,11 +174,11 @@
     </tbody></table></div>
     {#if allowWrites}
       {#if rewriteDraft}
-        <form onsubmit={e => { e.preventDefault(); void saveRewrites() }}>
+        <form onsubmit={e => { e.preventDefault(); void saveRewrites() }}><fieldset disabled={busy}>
           {#each rewriteDraft as rewrite, index}
             <div class="editor-grid"><label>Domain <input bind:value={rewrite.domain} required /></label><label>Answer <input bind:value={rewrite.answer} required /></label><button type="button" disabled={busy} onclick={() => { if (rewriteDraft) rewriteDraft = rewriteDraft.filter((_, i) => i !== index) }}>Delete</button></div>
           {/each}
-          <button type="button" disabled={busy} onclick={() => { if (rewriteDraft) rewriteDraft = [...rewriteDraft, {domain: '', answer: ''}] }}>Add rewrite</button><button disabled={busy}>Save rewrites</button><button type="button" disabled={busy} onclick={() => rewriteDraft = null}>Cancel</button>
+          <button type="button" disabled={busy} onclick={() => { if (rewriteDraft) rewriteDraft = [...rewriteDraft, {domain: '', answer: ''}] }}>Add rewrite</button><button disabled={busy}>Save rewrites</button><button type="button" disabled={busy} onclick={() => rewriteDraft = null}>Cancel</button></fieldset>
         </form>
       {:else}<button disabled={busy} onclick={() => rewriteDraft = rewrites.map(r => ({...r}))}>Manage DNS rewrites</button>{/if}
     {/if}

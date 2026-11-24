@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import Icon from '../lib/Icon.svelte'
   import { request } from '../lib/api'
   import type { SharedDiscovery } from '../lib/shared'
@@ -7,10 +7,10 @@
   import NginxPolicyEditor from '../lib/NginxPolicyEditor.svelte'
   import {normalizeGlobal,clone,type GlobalSettings,type Settings,type EffectiveAccess,type Usage} from '../lib/nginx-config'
 
-  let { discovery, allowWrites }: { discovery: SharedDiscovery; allowWrites: boolean } = $props()
+  let { discovery, allowWrites, initialSection = 'nginx' }: { discovery: SharedDiscovery; allowWrites: boolean; initialSection?: 'nginx'|'certificates' } = $props()
   const hasNginx = $derived(discovery.modules.some(m => m.id === 'nginx' && m.availability === 'ready'))
   const hasCertificates = $derived(discovery.modules.some(m => m.id === 'certificates' && m.availability === 'ready'))
-  let section = $state<'nginx' | 'certificates'>('nginx')
+  let section = $state<'nginx' | 'certificates'>(untrack(()=>initialSection))
   interface NginxStatus { running: boolean; config_path: string; root_dir: string }
   interface Site { kind: string; domain: string; name: string; display_name: string; port?: number; managed: boolean; enabled: boolean; state: string; effective_access?: EffectiveAccess }
   interface Log { path: string; size: number }
@@ -51,8 +51,10 @@
     return [...parents.flatMap(p=>[...(matches(p) ? [p] : []), ...children.filter(c=>c.domain===p.domain && (p.enabled || !!query) && matches(c))]), ...children.filter(c=>!parents.some(p=>p.domain===c.domain)&&matches(c))]
   })
   let siteEditorOpen = $state(false)
-  let referenceOpen = $state(false)
-  let globalSection: HTMLElement
+  let referenceDialog = $state<HTMLDialogElement>()
+  function openReference() { referenceDialog?.showModal() }
+  function closeReference() { referenceDialog?.close() }
+  let globalSection = $state<HTMLElement>()
   function configureGlobal() { if (settings && !globalDraft) globalDraft = clone(settings); globalSection?.scrollIntoView({block:'start'}) }
 
   async function refresh() {
@@ -141,7 +143,7 @@
       const body = { ...(customSite ? {content: siteContent} : {settings: siteSettings}), upstream: siteUpstream.trim(), server_names: siteKind === 'subfolder' ? [] : siteServerNames.trim().split(/\s+/).filter(Boolean) }
       const saved = editingSite ? await mutate(objectPath(editingSite), 'PUT', body) :
         await mutate('nginx/objects/' + siteKind, 'POST', {...body, domain: siteDomain.trim(), name: siteKind === 'domain' ? siteDomain.trim() : siteName.trim(), enabled: siteEnabled})
-      if (saved) resetSite()
+      if (saved) { resetSite(); siteEditorOpen=false }
     } catch (failure) { actionError = String(failure) }
   }
   async function saveGlobal(value: GlobalSettings) {
@@ -182,7 +184,7 @@
     if (saved) resetCertificate()
   }
   onMount(() => {
-    if (!hasNginx && hasCertificates) section = 'certificates'
+    if (!hasNginx && hasCertificates) section = 'certificates'; else if (!hasCertificates && hasNginx) section = 'nginx'
     void refresh()
     return () => { controller?.abort(); logController?.abort(); previewController?.abort() }
   })
@@ -225,7 +227,7 @@
       {#if !visibleSites.length && !loading}<p class="muted">No matching sites.</p>{/if}
       {#if allowWrites || editingSite}
         <details bind:open={siteEditorOpen}><summary>{editingSite ? (allowWrites?'Edit site':'Inspect site') : 'Add site'}</summary>
-          <button type="button" onclick={()=>referenceOpen=true}>Setup guide</button><button type="button" disabled={!settings} onclick={configureGlobal}>Global settings</button>
+          <button type="button" onclick={openReference}>Setup guide</button><button type="button" disabled={!settings} onclick={configureGlobal}>Global settings</button>
           <form onsubmit={event => { event.preventDefault(); void saveSite() }}><fieldset disabled={!allowWrites || busy}>
             <label>Kind <select bind:value={siteKind} disabled={!!editingSite} onchange={event=>{if(event.currentTarget.value==='subfolder'){const next={...siteSettings};delete next.listener_profile;siteSettings=next}preview=null;previewController?.abort();previewBusy=false}}><option value="domain">Domain</option><option value="subdomain">Subdomain</option><option value="subfolder">Subfolder</option></select></label>
             {#if siteKind==='domain' || editingSite}<label>Domain <input bind:value={siteDomain} required disabled={!!editingSite} /></label>{:else}<label>Parent domain <select bind:value={siteDomain} required><option value="">Choose a domain</option>{#each sites.filter(s=>s.kind==='domain') as parent}<option value={parent.domain}>{parent.domain}{parent.enabled?'':' (disabled)'}</option>{/each}</select></label>{/if}
@@ -243,6 +245,7 @@
               {#if preview}<div class="policy-note">
                 <strong>Effective access</strong>
                 <p>Listener: {preview.listener_profile} · Access: {preview.access_policy}{preview.inherited_from ? ' · Parent: '+preview.inherited_from : ''}</p>
+                <p>{preview.inherited_from ? 'The parent domain restricts allowed sources and controls the listener; proxy settings and routes inherit global defaults.' : ''}</p>
                 <p>HTTPS: {preview.https.map(e=>e.address+':'+e.port).join(', ') || 'None'} · HTTP: {preview.http.map(e=>e.address+':'+e.port).join(', ') || 'None'}</p>
                 <p>Allowed sources: {preview.allowed_sources === null ? 'Public' : preview.allowed_sources.join(', ') || 'Denied'}</p>{#if siteKind!=='domain' && sites.some(s=>s.kind==='domain' && s.domain===siteDomain && !s.enabled)}<p class="form-error">Containing domain is disabled.</p>{/if}
                 {#each preview.routes as route}<p><code>{route.path}</code> · {route.access_policy} · {route.allowed_sources === null ? 'Public' : route.allowed_sources.join(', ') || 'Denied'}</p>{/each}
@@ -255,7 +258,7 @@
         </details>
       {/if}
     </section>
-    <section class="panel"><div class="resource-heading"><h2>Setup quick reference</h2><button type="button" onclick={()=>referenceOpen=true}>Open guide</button></div><p>Settings for PWAs, WordPress, and media servers.</p></section>
+    <section class="panel"><div class="resource-heading"><h2>Setup quick reference</h2><button type="button" onclick={openReference}>Open guide</button></div><p>Settings for PWAs, WordPress, and media servers.</p></section>
     <section class="panel" bind:this={globalSection}><div class="resource-heading"><h2>Global settings</h2></div><p>Shared listeners, client allowlists and defaults inherited by managed sites.</p>
       {#if settings}
         <dl class="shared-stats"><div><dt>Listener profiles</dt><dd>{Object.keys(settings.listener_profiles).length}</dd></div><div><dt>Access policies</dt><dd>{Object.keys(settings.access_policies).length}</dd></div><div><dt>Limit policies</dt><dd>{Object.keys(settings.limit_policies).length}</dd></div><div><dt>Allowed IP entries</dt><dd>{settings.allowed_ips.length}</dd></div></dl>
@@ -304,7 +307,7 @@
   {/if}
 {/if}
 
-{#if referenceOpen}<section class="panel" aria-label="Nginx setup quick reference"><div class="resource-heading"><h2>Nginx setup quick reference</h2><button type="button" onclick={()=>referenceOpen=false}>Close guide</button></div><p class="muted">Starting points for managed sites. Use the field names below in the site editor; set explicit values when your global defaults differ.</p>
+<dialog bind:this={referenceDialog} class="confirm-dialog reference-dialog" aria-label="Nginx setup quick reference"><div class="resource-heading"><h2>Nginx setup quick reference</h2><button type="button" onclick={closeReference}>Close guide</button></div><p class="muted">Starting points for managed sites. Use the field names below in the site editor; set explicit values when your global defaults differ.</p>
         <h4>Connect the app</h4>
         <ol>
           <li>Choose a domain, subdomain, or subfolder and set <strong>Upstream URL</strong> to the app's internal HTTP/HTTPS address.</li>
@@ -351,8 +354,9 @@
           <pre>{"[\n  {\"path\":\"/api/updates\",\"proxy_transport\":\"sse\",\"cache_policy\":\"no_cache\",\"enable_byte_ranges\":false,\"spa_fallback\":\"\",\"proxy_session_timeout\":\"300s\"}\n]"}</pre>
           <p class="muted">This clears Connection and disables response buffering on that route. Other routes retain WebSocket support. Keep <strong>Clear Origin header = No</strong> unless the backend specifically requires otherwise.</p>
         </details>
-      </section>{/if}
+      </dialog>
 <style>
+  .reference-dialog{max-width:min(60rem,95vw);max-height:90vh;overflow:auto}
   .child-site{padding-left:1.5rem}
   fieldset{border:0;padding:0;margin:0;min-width:0}
   .shared-table { overflow-x: auto; margin-top: 1rem; }

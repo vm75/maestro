@@ -5,6 +5,7 @@
   import ConfigurationHealth from './lib/ConfigurationHealth.svelte'
   import Jobs from './lib/Jobs.svelte'
   import Overview from './pages/Overview.svelte'
+  import SharedOverview from './lib/SharedOverview.svelte'
   import AgentAccess from './pages/AgentAccess.svelte'
   import Applications from './pages/Applications.svelte'
   import Services from './pages/Services.svelte'
@@ -49,7 +50,7 @@
   let loading = $state(true)
   let error = $state('')
   let needsAuth = $state(false)
-  const page = $derived(visiblePages.find(p => p.id === selected) ?? pages[0])
+  const page = $derived(visiblePages.find(p => p.id === (selected === 'certificates' ? 'web' : selected)) ?? pages[0])
 
   async function connect() {
     loading = true
@@ -115,6 +116,7 @@
       {:else if loading}
         <section class="panel empty-state" aria-busy="true"><span class="loading-ring"></span><h2>Connecting to your server</h2><p>Reading server status…</p></section>
       {:else if page.id === 'overview'}
+        {#if shared && discovery}<SharedOverview {shared} {discovery} onNavigate={navigate}/>{/if}
         {#if discovery?.modules.some(m => m.id === 'monitor' && m.available)}<Overview />{:else}<section class="panel"><p>Resource monitoring is unavailable.</p></section>{/if}
         {#if discovery}<section class="panel"><h2>Capabilities</h2><ul>{#each discovery.modules as module (module.id)}<li>{module.title}: {module.available ? 'Available' : (module.reason ?? 'Unavailable')}</li>{/each}</ul></section>{/if}
       {:else if page.id === 'agent' && status}
@@ -129,7 +131,7 @@
       {:else if page.id === 'shares' && status}
         {#if discovery}<Shares allowWrites={workloadWrites} {discovery} {status} />{/if}
       {:else if page.id === 'web' && shared}
-        {#await import('./pages/SharedWeb.svelte')}<p role="status">Loading Web…</p>{:then {default: Page}}<Page discovery={shared} allowWrites={!!status?.allowWrites} />{:catch failure}<p role="alert">{String(failure)}</p>{/await}
+        {#await import('./pages/SharedWeb.svelte')}<p role="status">Loading Web…</p>{:then {default: Page}}{#key selected}<Page discovery={shared} allowWrites={!!status?.allowWrites} initialSection={selected === 'certificates' ? 'certificates' : 'nginx'} />{/key}{:catch failure}<p role="alert">{String(failure)}</p>{/await}
       {:else if page.id === 'network' && shared && status}
         {#await import('./pages/Network.svelte')}<p role="status">Loading Network…</p>{:then {default: Page}}<Page discovery={shared} allowWrites={status.allowWrites} />{:catch failure}<p role="alert">{String(failure)}</p>{/await}
       {:else if page.id === 'security' && status}

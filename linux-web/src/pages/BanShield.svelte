@@ -3,7 +3,7 @@
   import { request } from '../lib/api'
   let { allowWrites }: { allowWrites: boolean } = $props()
   interface Rule { id?: string; name: string; enabled: boolean; log_paths: string[]; attempts: number; weight: number; pattern: string; ip_group: string; group_values: Record<string,string[]> }
-  interface Ban { network: string; reason: string; expires_at: string; hit_count: number; offense_count: number }
+  interface Ban { network: string; reason: string; expires_at: string; hit_count: number; offense_count: number; source: string }
   interface Firewall {
     policy: {enabled: boolean; observe_only: boolean; allowlist: string[]; rules: Rule[]; tuning?: Record<string,number>}
     snapshot: {active_ban_count: number; banned_ips?: unknown[]; banned_subnets?: unknown[]; rule_stats: [string, {match_count: number; ban_count: number}][]}
@@ -92,7 +92,7 @@
   <section class="panel"><div class="resource-heading"><h2>Active bans</h2><span>{status.bans.length} entries</span></div>
     <label for="ban-filter">Filter bans</label><input id="ban-filter" type="search" bind:value={filter} placeholder="Network or reason…" />
     <div class="shared-table"><table><thead><tr><th>Network</th><th>Reason</th><th>Hits</th><th>Expires</th><th>Actions</th></tr></thead><tbody>
-      {#each bans as ban (ban.network)}<tr><td class="mono">{ban.network}</td><td>{ban.reason}<small>Offense {ban.offense_count}</small></td><td>{ban.hit_count}</td><td>{new Date(ban.expires_at).toLocaleString()}</td><td><button disabled={!allowWrites || busy} onclick={() => { if (confirm('Unban, clear history and add ' + ban.network + ' to the allowlist?')) void mutate('/bans/' + encodeURIComponent(ban.network), 'DELETE') }}>Unban + allow</button><button disabled={!allowWrites || busy} onclick={() => { if (confirm('Reset failure counts?')) void mutate('/reset-counts/' + encodeURIComponent(ban.network), 'POST') }}>Reset counts</button></td></tr>{/each}
+      {#each bans as ban (ban.network)}<tr><td class="mono">{ban.network}</td><td>{ban.reason}<small>{ban.source} · offense {ban.offense_count}</small></td><td>{ban.hit_count}</td><td>{new Date(ban.expires_at).toLocaleString()}</td><td><button disabled={!allowWrites || busy} onclick={() => { if (confirm('Unban, clear history and add ' + ban.network + ' to the allowlist?')) void mutate('/bans/' + encodeURIComponent(ban.network), 'DELETE') }}>Unban + allow</button><button disabled={!allowWrites || busy} onclick={() => { if (confirm('Reset failure counts?')) void mutate('/reset-counts/' + encodeURIComponent(ban.network), 'POST') }}>Reset counts</button></td></tr>{/each}
     </tbody></table></div>{#if !bans.length}<p class="muted">No matching bans.</p>{/if}
     {#if allowWrites}<form onsubmit={e => { e.preventDefault(); void mutate('/bans', 'POST', {network: banNetwork, seconds, reason}) }}><label>Network (CIDR) <input bind:value={banNetwork} required /></label><label>Duration (seconds) <input type="number" min="60" bind:value={seconds} required /></label><label>Reason <input bind:value={reason} required /></label><button disabled={busy || !status.policy.enabled}>Record manual ban</button></form>{/if}
   </section>

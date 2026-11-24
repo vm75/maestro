@@ -19,6 +19,7 @@
   }
   function resetRoute() { editingRoute = null; path = ''; match = 'prefix'; access = 'deny' }
   const routes = $derived(Array.isArray(value.routes) ? value.routes as Settings[] : [])
+  const displayedRoutes = $derived(value.routes === undefined && Array.isArray(inherited.routes) ? inherited.routes as Settings[] : routes)
   function setRoutes(next: Settings[] | undefined) { value = setField(value,'routes',next); routeText = next === undefined ? '' : JSON.stringify(next,null,2); routeError = ''; resetRoute() }
   function editRoutes() {
     try {
@@ -53,11 +54,13 @@
     <label>Listener profile<select disabled={disabled} value={String(value.listener_profile ?? '')} onchange={e => value=setField(value,'listener_profile',e.currentTarget.value || undefined)}>
       <option value="">Inherit ({String(inherited.listener_profile ?? 'legacy')})</option>
       {#each listenerNames(global) as name}<option value={name}>{name}</option>{/each}
+      {#if value.listener_profile && !listenerNames(global).includes(String(value.listener_profile))}<option value={String(value.listener_profile)}>Missing saved choice: {String(value.listener_profile)}</option>{/if}
     </select></label>
   {:else}<p>Listener inherited from the parent domain.</p>{/if}
   <label>Access policy<select disabled={disabled} value={accessValue(value)} onchange={e => value=setAccess(value,e.currentTarget.value)}>
     <option value="">Inherit ({accessValue(inherited) || 'legacy'})</option>
     {#each accessNames(global) as name}<option value={name}>{name}</option>{/each}
+    {#if accessValue(value) && !accessNames(global).includes(accessValue(value))}<option value={accessValue(value)}>Missing saved choice: {accessValue(value)}</option>{/if}
   </select></label>
   <label>Restricted Sessions access policy<select disabled={disabled} value={String(value.restricted_sessions_policy ?? '')} onchange={e => value=setField(value,'restricted_sessions_policy',e.currentTarget.value || undefined)}>
     <option value="">Inherit ({String(inherited.restricted_sessions_policy ?? 'legacy')})</option>
@@ -67,11 +70,11 @@
 <NginxFields {fields} bind:value {inherited} {disabled} />
 <details>
   <summary>Path access rules and blocked paths</summary>
-  <p class="muted">{value.routes === undefined ? 'Inheriting default routes' : routes.length + ' explicit route policies'}. Child rules cannot loosen parent access restrictions.</p>
-  {#each routes as route,i}
+  <p class="muted">{value.routes === undefined ? 'Inheriting default routes (editing creates an override)' : routes.length + ' explicit route policies'}. Child rules cannot loosen parent access restrictions.</p>
+  {#each displayedRoutes as route,i}
     <div class="route-row"><code>{String(route.path ?? '')}</code> · {String(route.match ?? 'prefix')} · {String(route.access_policy ?? 'inherit')}
       <button type="button" disabled={disabled} onclick={() => editRoute(route,i)}>Edit</button>
-      <button type="button" disabled={disabled} onclick={() => setRoutes(routes.filter((_,j) => j !== i))}>Remove</button>
+      <button type="button" disabled={disabled} onclick={() => setRoutes(displayedRoutes.filter((_,j) => j !== i))}>Remove</button>
     </div>
   {/each}
   <div class="policy-grid">
