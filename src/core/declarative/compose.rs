@@ -48,7 +48,7 @@ fn validate_options(service: &Service) -> Result<()> {
         ensure!(v.uid_maps.iter().chain(&v.gid_maps).all(|m|mapping.is_match(m)),"invalid container {name} UID/GID mapping");
         ensure!(service.engine!="docker" || (v.uid_maps.is_empty() && v.gid_maps.is_empty() && v.userns_mode!="nomap" && !v.userns_mode.starts_with("keep-id")),"Podman user namespace settings require Podman");
         ensure!(v.group_add.iter().all(|g|if g=="keep-groups"{service.engine=="podman"}else{identity.is_match(g)}),"invalid container {name} group_add");
-        ensure!(matches!(v.network_mode.as_str(),""|"host"|"none") || v.network_mode.strip_prefix("service:").is_some_and(|peer|peer!=name&&service.containers.contains_key(peer)&&v.ports.is_empty()),"invalid container {name} network_mode");
+        ensure!(matches!(v.network_mode.as_str(),""|"host"|"none") || v.network_mode.strip_prefix("service:").is_some_and(|peer|peer!=name.as_str()&&service.containers.contains_key(peer)&&v.ports.is_empty()),"invalid container {name} network_mode");
         for device in &v.devices {
             let parts:Vec<_>=device.split(':').collect();
             ensure!(parts.len()<=3 && path(parts[0]) && (parts.len()<2||path(parts[1]))
@@ -619,6 +619,43 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn reference_podman_options_and_restart_policy() {
+        let mut config=super::super::parse(br#"version: 1
+storage:
+  data: {path: volumes/data}
+services:
+  demo:
+    kind: container
+    engine: podman
+    backend: compose
+    containers:
+      app:
+        image: alpine
+        uid_maps: ["0:1000:1"]
+        gid_maps: ["0:1000:1"]
+        group_add: ["keep-groups"]
+        devices: ["/dev/dri:/dev/dri:rwm"]
+        cap_add: ["NET_ADMIN"]
+        security_opt: ["no-new-privileges:false"]
+        mounts: [{storage: data, target: /data, selinux: private, chown: true}]
+"#).unwrap();
+        let text=render_compose(&config,"demo",&"a".repeat(64),Path::new("/storage")).unwrap();
+        let value:serde_yaml::Value=serde_yaml::from_str(&text).unwrap();
+        let app=&value["services"]["app"];
+        assert_eq!(value["x-podman"]["in_pod"],false);
+        assert_eq!(app["restart"],"no");
+        assert_eq!(app["x-podman.uidmaps"][0],"0:1000:1");
+        assert_eq!(app["cap_add"][0],"NET_ADMIN");
+        assert_eq!(app["volumes"][0],"/storage/volumes/data:/data:rw,U,Z");
+        config.services.get_mut("demo").unwrap().engine="docker".into();
+        assert!(render_compose(&config,"demo",&"a".repeat(64),Path::new("/storage")).is_err());
+        let service=config.services.get_mut("demo").unwrap();
+        service.engine="podman".into();
+        service.containers.get_mut("app").unwrap().restart="unless-stopped".into();
+        assert!(render_compose(&config,"demo",&"a".repeat(64),Path::new("/storage")).is_err());
     }
 
     #[test]
