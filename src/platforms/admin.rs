@@ -78,6 +78,8 @@ struct Policy {
     package_writes: bool,
     #[serde(default)]
     samba_password: bool,
+    #[serde(default)]
+    share_writes: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
