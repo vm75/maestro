@@ -197,9 +197,13 @@ pub(crate) struct Candidate(std::path::PathBuf);
 
 impl Candidate {
     pub(crate) fn new(directory: &Path, data: &[u8], mode: u32) -> Result<Self> {
+        Self::new_for_owner(directory,data,mode,0)
+    }
+
+    fn new_for_owner(directory: &Path, data: &[u8], mode: u32, owner: u32) -> Result<Self> {
         use std::io::Write;
         let metadata = fs::symlink_metadata(directory)?;
-        ensure!(metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0,
+        ensure!(metadata.is_dir() && metadata.uid() == owner && metadata.mode() & 0o022 == 0,
             "native share configuration directory is not trusted");
         let path = directory.join(format!(".server-man-{}", uuid::Uuid::new_v4()));
         let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
@@ -238,6 +242,10 @@ pub(crate) fn same_file(path: &Path, want: &Snapshot) -> bool {
 }
 
 pub(crate) fn restore(path: &Path, old: &Snapshot, published: &[u8]) -> Result<()> {
+    restore_for_owner(path,old,published,0)
+}
+
+fn restore_for_owner(path: &Path, old: &Snapshot, published: &[u8], owner: u32) -> Result<()> {
     let current = read_file(path, true)?;
     ensure!(current.exists && current.data == published,
         "rollback refused because the managed file changed externally");
@@ -245,7 +253,7 @@ pub(crate) fn restore(path: &Path, old: &Snapshot, published: &[u8]) -> Result<(
         fs::remove_file(path)?;
         return sync_dir(path);
     }
-    let candidate = Candidate::new(path.parent().ok_or_else(|| anyhow::anyhow!("missing configuration directory"))?, &old.data, old.mode)?;
+    let candidate = Candidate::new_for_owner(path.parent().ok_or_else(|| anyhow::anyhow!("missing configuration directory"))?, &old.data, old.mode, owner)?;
     // Do not overwrite an administrator's intervening edit while staging rollback.
     ensure!(same_file(path, &current), "rollback refused because the managed file changed externally");
     candidate.publish(path)
@@ -254,6 +262,47 @@ pub(crate) fn restore(path: &Path, old: &Snapshot, published: &[u8]) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn atomic_publication_and_rollback_preserve_bytes_and_mode() {
+        let directory = tempfile::tempdir().unwrap();
+        let owner = fs::metadata(directory.path()).unwrap().uid();
+        let path = directory.path().join("managed.conf");
+        fs::write(&path,b"before").unwrap();
+        fs::set_permissions(&path,fs::Permissions::from_mode(0o640)).unwrap();
+        let old = read_file(&path,true).unwrap();
+        let candidate = Candidate::new_for_owner(directory.path(),b"after",old.mode,owner).unwrap();
+        assert!(same_file(&path,&old));
+        candidate.publish(&path).unwrap();
+        assert_eq!(fs::read(&path).unwrap(),b"after");
+        restore_for_owner(&path,&old,b"after",owner).unwrap();
+        assert_eq!(fs::read(&path).unwrap(),b"before");
+        assert_eq!(read_file(&path,true).unwrap().mode,0o640);
+
+        let candidate = Candidate::new_for_owner(directory.path(),b"after",old.mode,owner).unwrap();
+        candidate.publish(&path).unwrap();
+        fs::write(&path,b"external edit").unwrap();
+        assert!(restore_for_owner(&path,&old,b"after",owner).is_err());
+        assert_eq!(fs::read(&path).unwrap(),b"external edit");
+    }
+
+    #[test]
+    fn rollback_removes_new_fragment_but_refuses_symlink() {
+        let directory = tempfile::tempdir().unwrap();
+        let owner = fs::metadata(directory.path()).unwrap().uid();
+        let path = directory.path().join("new.exports");
+        let old = read_file(&path,true).unwrap();
+        assert!(!old.exists);
+        let candidate = Candidate::new_for_owner(directory.path(),b"new",0o644,owner).unwrap();
+        candidate.publish(&path).unwrap();
+        restore_for_owner(&path,&old,b"new",owner).unwrap();
+        assert!(!path.exists());
+        let other = directory.path().join("administrator.exports");
+        fs::write(&other,b"unmanaged").unwrap();
+        std::os::unix::fs::symlink(&other,&path).unwrap();
+        assert!(restore_for_owner(&path,&old,b"unmanaged",owner).is_err());
+        assert_eq!(fs::read(&other).unwrap(),b"unmanaged");
+    }
 
     #[test]
     fn reference_samba_fragment_and_ownership() {
