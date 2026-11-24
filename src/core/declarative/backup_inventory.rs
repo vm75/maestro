@@ -36,6 +36,8 @@ pub struct BackupInput {
     pub logical_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allocated_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native: Option<super::backup_capture::NativeObject>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -364,6 +366,7 @@ fn inventory_inputs(
             inspection: "not_checked",
             logical_bytes: None,
             allocated_bytes: None,
+            native: None,
         };
         if storage.external {
             input.inspection = "external_unresolved";
@@ -409,6 +412,7 @@ fn inventory_inputs(
                 inspection: "not_checked",
                 logical_bytes: None,
                 allocated_bytes: None,
+            native: None,
             };
             inventory.inspect_path(&mut input, &path, false);
             inventory.input(input)?;
@@ -435,6 +439,7 @@ fn inventory_inputs(
             inspection: "not_checked",
             logical_bytes: None,
             allocated_bytes: None,
+            native: None,
         };
         inventory.inspect_path(&mut input, &full, false);
         inventory.input(input)?;
@@ -471,6 +476,7 @@ fn inventory_inputs(
                 inspection: "native_dependencies_unchecked",
                 logical_bytes: None,
                 allocated_bytes: None,
+            native: None,
             })?;
             inventory.requirement(&resource, "native_export",
                 "Capture native libvirt/Incus guest state and dependent disks through its verified backend.")?;
@@ -560,6 +566,7 @@ pub fn inventory(
         inspection: "metadata_only",
         logical_bytes: Some(snapshot.bytes.len() as u64),
         allocated_bytes: None,
+            native: None,
     })?;
     inventory_inputs(&mut result, &config, private_root, storage_root)?;
     annotate_coverage(&mut result, store, private_root);
