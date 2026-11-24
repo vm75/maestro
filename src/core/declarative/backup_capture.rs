@@ -523,6 +523,7 @@ fn verify_bundle(root:&File,checksum:&str,revision:&str,source_root:&Path,storag
 pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider,opts:PrepareOptions)->Result<serde_json::Value>{
     let end=Instant::now()+deadline(opts.deadline_seconds)?;
     ensure!(store::valid_revision(&opts.revision),"a reviewed configuration revision is required");
+    ensure!(clean_absolute(&opts.destination),"destination must be an absolute cleaned path");
     let dir=store::LockedDirectory::try_acquire(store.directory()?)?;
     journal::ensure_idle(&dir)?;ensure_idle_locked(store,&dir)?;
     let snapshot=store::current(&dir,&store.filename)?.context("configuration unavailable")?;
