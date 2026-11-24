@@ -116,6 +116,15 @@ fn mounted_filesystem<'a>(path: &Path, mounts: &'a [Mount]) -> Option<&'a Mount>
         .max_by_key(|mount| mount.point.as_os_str().len())
 }
 
+pub(super) fn expected_mount(path: &Path, expected: &str, proc_root: Option<&Path>) -> bool {
+    if !Path::new(expected).is_absolute() {
+        return false;
+    }
+    let Some(mounts) = proc_root.and_then(read_mounts) else { return false; };
+    let Ok(real) = fs::canonicalize(path) else { return false; };
+    mounted_filesystem(&real, &mounts).is_some_and(|mount| mount.source == expected && !mount.read_only)
+}
+
 fn access(path: &Path, mode: libc::c_int) -> bool {
     let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
         return false;
