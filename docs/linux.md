@@ -365,7 +365,7 @@ blocked pending the reviewed artifact recovery workflow.
 
 Libvirt source implementation and fake-daemon regression tests are present;
 build/fixture execution and native guest acceptance remain pending.
-Stopped-guest disk export belongs to the remaining backup workflow.
+Basic stopped-guest XML and declared standalone-disk collection is now part of the Linux backup capture workflow below.
 
 ### Incus virtual machines
 
@@ -391,14 +391,56 @@ Removing an existing Incus instance is deliberately unavailable until an
 explicit data-preserving export workflow is implemented. If creation failed
 and no instance exists, only its verified generated definition may be removed.
 New guest identities still need explicit UUID/MAC until reviewed-candidate
-identity preparation is completed. Native provider compilation, fixture
-execution, disposable guest acceptance, export and intermediate artifact
-recovery remain pending.
+identity preparation is completed. Native provider compilation, fixture execution and disposable guest
+acceptance remain pending. Basic stopped-instance export is implemented in
+source; custom volumes/snapshot coverage and intermediate artifact recovery
+remain pending.
 
 The File Sharing page summarizes configured Samba and NFS network shares and
 their underlying service configurations. Network shares are declared directly
 within the declarative YAML model (`shares:`) and bound to managed storage
 directories.
+
+## Linux backup capture and recovery
+
+The reference backup inventory and confirmed capture/recovery tools now have
+source implementations. Capture is revision-pinned and private, and produces
+a checksummed **captured**, not prepared or restorable, bundle. It can gracefully
+stop fully running managed workloads in reverse dependency order and resume
+only workloads whose stop was attempted, in dependency order. The durable
+`<config>.backup.json` journal records stop intent, observed progress, staging
+identity, manifest checksum and publication stage. An incomplete journal blocks
+normal management. Startup does not automatically resume guests.
+
+The initial native collectors support standalone declared raw/QCOW2 Libvirt
+disks and private inactive domain XML (no managed-save, snapshots/checkpoints,
+NVRAM, TPM or external/backing-chain state), and portable stopped Incus root
+instance exports from the verified local non-clustered daemon with an explicit
+project/pool and verified archive index. Custom volumes, snapshot history and
+unsupported native devices remain capture blockers. Incus instances are not
+deleted by capture or by configuration removal.
+
+The initial filesystem collector supports regular files and directories with
+no symlinks, multiply linked files, visible xattrs/ACLs or nested mount
+boundaries; these cases require the remaining reference filesystem port.
+It records source metadata and preserves zero-filled regions as holes, but
+does not claim full metadata or restore equivalence. The capture destination
+must be absent, with a real workload-owned non-group/world-writable parent,
+outside the configuration and system roots. Publication uses no-replace
+rename and sync. Failed/uncertain stages are retained rather than automatically
+deleted. Verification checks exact tree contents, hashes, revision, native
+object identity and required configuration coverage.
+
+Use `managed_backup_recovery_status` to obtain the current review token.
+`managed_backup_recover` resumes only recorded workloads against the pinned
+revision, `managed_backup_publish` verifies and finishes the recorded
+publication, and `managed_backup_release` acknowledges the recovery blocker
+without starting workloads or publishing/deleting data. The current job
+boundary is non-cancellable during native capture; the capture deadline and
+explicit recovery remain available. Full reference custom-volume/snapshot
+discovery, filesystem metadata, existing empty-directory publication,
+generated-artifact sidecar review/reconciliation, exact manifest parity
+and native fault acceptance remain outstanding. No restore tool is added.
 
 ## Model Context Protocol (MCP) and Agent Integration
 
