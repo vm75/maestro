@@ -2,7 +2,7 @@
 #[tokio::main]
 async fn main() {
     if let Err(error) = maestro::platforms::admin::helper_main().await {
-        eprintln!("maestro-admin: {error:#}");
+        eprintln!("{error}");
         std::process::exit(1);
     }
 }
