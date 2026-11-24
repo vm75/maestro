@@ -96,6 +96,7 @@ pub struct ShareProvider {
     pub storage_base: PathBuf,
     simulated: bool,
     native_enabled: bool,
+    helper_paths: bool,
 }
 
 impl ShareProvider {
@@ -106,18 +107,34 @@ impl ShareProvider {
             storage_base,
             simulated: false,
             native_enabled: false,
+            helper_paths: false,
         }
     }
 
-    pub fn with_mode(mut self, simulated: bool, native_enabled: bool) -> Self {
-        self.simulated = simulated;
-        self.native_enabled = native_enabled
-            && self.samba_conf == Path::new("/etc/samba/server-man.conf")
-            && self.exports_file == Path::new("/etc/exports.d/server-man.exports");
-        self
+    pub fn from_config(config: &crate::config::AppConfig, simulated: bool) -> Self {
+        let mut provider = Self::new(config.paths.samba_conf.clone(),config.paths.exports_file.clone(),config.paths.storage_dir.clone());
+        provider.simulated = simulated;
+        provider.helper_paths = !simulated && config.platform == crate::config::Platform::Linux
+            && config.linux_authority.as_ref().is_some_and(|authority| authority.settings.samba_config == "/etc/samba/smb.conf")
+            && provider.samba_conf == Path::new("/etc/samba/server-man.conf")
+            && provider.exports_file == Path::new("/etc/exports.d/server-man.exports");
+        provider.native_enabled = provider.helper_paths && config.system.allow_share_writes;
+        provider
     }
 
+    pub fn helper_paths(&self) -> bool { self.helper_paths }
     pub fn native_enabled(&self) -> bool { self.native_enabled }
+
+    pub(crate) async fn check_prerequisites(&self, protocol: &str, config: &Config) -> Result<()> {
+        ensure!(self.native_enabled && admin::probe().await.permits_shares(),
+            "native share publication requires authorized configuration and optional helper grants");
+        let definitions = self.definitions(protocol,config,true)?;
+        let state = self.inspect(protocol,&definitions).await?;
+        ensure!(state.available,"native share dependencies, permissions or setup are unavailable");
+        let (result,_) = admin::share_operation("shares_definitions_validate",definition_args(protocol,&definitions)?).await?;
+        ensure!(result["valid"] == true,"native share validation failed");
+        Ok(())
+    }
 
     // Direct translation of Server Man internal/declarative/shares.go:
     // a protocol publishes its entire authoritative definition set.
