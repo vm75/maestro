@@ -111,6 +111,45 @@ jobs:
       - name: Build release binary
         run: cargo +1.85.0 build --release --locked
 
+  linux-ui:
+    name: Linux UI parity
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out selected revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.ref }}
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: linux-web/package-lock.json
+
+      - name: Check and build Linux frontend
+        run: |
+          npm --prefix linux-web ci
+          npm --prefix linux-web run check
+          npm --prefix linux-web run build
+
+      - name: Test Linux shared-module browser workflows
+        run: |
+          browser=$(command -v google-chrome || command -v chromium)
+          node scripts/test-linux-ui.mjs "$browser"
+
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Cache Cargo dependencies and build artifacts
+        uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3 # v2.7.7
+
+      - name: Check Linux UI binary
+        run: cargo +stable check --locked --no-default-features --features linux-ui --all-targets
+
   stable:
     name: Stable compatibility
     needs: source
@@ -134,7 +173,7 @@ jobs:
 
   tag:
     name: Tag new stable version
-    needs: [source, full, stable]
+    needs: [source, full, stable, linux-ui]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
