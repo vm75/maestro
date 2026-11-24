@@ -405,8 +405,10 @@ mod tests {
     fn overlapping_host_ports_are_warnings_and_protocol_specific() {
         let mut config = Config::default();
         for (id, protocol) in [("one", "tcp"), ("two", "tcp"), ("three", "udp")] {
-            let mut container = super::super::Container::default();
-            container.ports = vec![format!("8080:80/{protocol}"), "80".into()];
+            let container = super::super::Container {
+                ports: vec![format!("8080:80/{protocol}"), "80".into()],
+                ..Default::default()
+            };
             let service = super::super::Service {
                 kind: "container".into(),
                 containers: BTreeMap::from([("web".into(), container)]),

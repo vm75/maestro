@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn deduplicates_mounts_and_excludes_remote_filesystems() {
         let result = mounts(
-            "1 0 8:1 / /srv/bind rw - ext4 /dev/sda1 rw\n\
+            "1 0 8:1 / /srv/bind/long rw - ext4 /dev/sda1 rw\n\
              2 0 8:1 / /disk\\040one rw - ext4 /dev/sda1 rw\n\
              3 0 0:2 / /remote rw - nfs example:/data rw",
         );
