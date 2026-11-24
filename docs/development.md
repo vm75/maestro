@@ -72,8 +72,7 @@ Samba/NFS shares or systemd service installation are performed by this target.
 
 Linux user operations are enabled automatically. Protected host operations become
 available when the optional helper is installed and its root-owned policy grants
-the action. The retired `server.allow_writes` and `server.privileged_operations`
-flags are accepted in existing YAML but ignored; new configurations omit them.
+the action. Retired write gates are rejected as unknown configuration fields.
 Restart with `make run-linux`
 and check Agent access > Capabilities. Before saving an enabled file share,
 open File shares and run **Set up server** for Samba or NFS. Samba setup adds

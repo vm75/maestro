@@ -44,9 +44,7 @@ files and generated `.conf` includes remain under `nginx.root_dir` (default
 `/opt/etc/nginx`). The `settings/` paths below describe bundle/template names;
 source data files are resolved from `inputs_dir` without that prefix at runtime.
 YAML, text lists, and Jinja templates are not installed into nginx's runtime tree.
-Templates remain embedded in Maestro's binary. See the
-[upgrade procedure](../../docs/migration.md#nginx-input-relocation-in-09) before
-using 0.9 with an existing installation.
+Templates remain embedded in Maestro's binary. See the [offline router upgrade procedure](../../docs/installation.md#upgrade-from-maestro-0110) for existing installations.
 
 The bundled TLS snippet already uses `http2 on`, which requires nginx 1.25.1+
 with the HTTP/2 module (see [nginx documentation](https://nginx.org/en/docs/http/ngx_http_v2_module.html#http2)).

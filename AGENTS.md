@@ -2,7 +2,7 @@
 
 ## Project overview
 
-Maestro is a Rust service for administrators of Asuswrt-Merlin routers. It
+Maestro is a modular Rust service for Asuswrt-Merlin routers and native Linux hosts. It
 serves a standalone or mounted web UI and a protected Axum API for Entware
 services, nginx configuration, certificates, Wake-on-LAN, firewall bans, and
 optional AdGuard Home integration. Router-sensitive state is kept in YAML and
@@ -57,8 +57,7 @@ checksum-verified local Node archive when needed. `.dev-tools/` is ignored.
 Verify the bootstrap without installation using
 `python3 -m unittest discover -s tests -p 'test_linux_dev.py' -v`.
 
-For **real Linux integration** use `platform: linux` (or
-`--linux-mode`) with `test_mode: false`. `make test-linux` runs a
+For **real Linux integration** use the native `version: 1` YAML authority. `--linux-mode` asserts that the selected file is native Linux YAML. `make test-linux` runs a
 temporary unprivileged real-nginx smoke test; it does not exercise live
 firewall enforcement, DNS providers, or router firmware. Keep real firewall
 tests in isolated network namespaces/VMs and always use lab-only paths.
@@ -110,9 +109,9 @@ Do not introduce automatic NGINX build triggers or router deployment.
 - Preserve atomic JSON and nginx writes, path/symlink protections, token authentication, and bounded log reads.
 - Do not claim router compatibility without an actual matching architecture and firmware test.
 - Keep the self-contained UI offline-capable; do not add a frontend package manager or CDN dependency. Edit `web/src/`, then regenerate `web/index.html` with `python3 scripts/build-web-ui.py`.
-- Phase 1 was merged as v0.10.5. Phase 1.5 rebrands the application to Maestro on `refactor/rebrand-maestro`. Preserve legacy installed configuration, state, NGINX inputs and firewall identities. Keep the existing Go `vm75/server-man` as a Phase 2 reference; do not port its features in Phase 1.5.
+- Phase 1 and the Maestro rebrand were accepted. Preserve validated router behavior; Linux is a fresh deployment with no legacy configuration compatibility.
 
-## Phase 2 source-guided migration
+## Phase 2 source-guided port
 
 The user has directed a corrective port-first pass on `feature/linux-phase2`. Server Man at `c1a9f32f5898146ae7ac339043b910b8e2a2c438` is the working implementation baseline, not just a specification. The goal is the fastest safe route to feature parity inside Maestro's existing modular architecture.
 
@@ -123,9 +122,9 @@ The user has directed a corrective port-first pass on `feature/linux-phase2`. Se
 - Reuse Server Man's Svelte page/component tree, scripts, styles and fixtures wherever possible. Make the Rust API match the pinned reference rather than rewriting pages to fit partial Rust API shapes. Keep the Maestro navigation/module-discovery seam, router UI and upgraded Linux frontend dependencies.
 - Use one reference-compatible implementation for the Linux daemon and one-shot helper where they share operations; do not duplicate backend logic. Reuse equivalent Maestro command/job/auth/platform facilities through thin adapters.
 - Complete coherent implementation batches, port tests alongside source, and incorporate the operator's local compile/test feedback. No operator pause after each minor commit. Record actual blockers and evidence in the existing parity ledger; do not create more planning layers.
-- Retain non-root Linux, optional helper installation, action-specific permission gating, single authoritative Linux YAML with explicit legacy migration, and router build isolation. Defer optional enhancements and extra hardening not needed for safe parity, except the operator-directed old Maestro runtime feature additions explicitly included in Phase 2. Do not port the old Arch installer. Do not claim native parity from source changes alone.
+- Retain non-root Linux, optional helper installation, action-specific permission gating, single authoritative Linux YAML without migration or legacy compatibility, and router build isolation. Defer optional enhancements and extra hardening not needed for safe parity, except the operator-directed old Maestro runtime feature additions explicitly included in Phase 2. Do not port the old Arch installer. Do not claim native parity from source changes alone.
 
-The corrective strategy in `docs/plans/proposed/modular-platform-ui-migration.md` governs Phase 2; older implementation-history entries are not instructions to preserve divergent work.
+The remaining acceptance contract in `docs/plans/proposed/modular-platform-ui-migration.md` governs Phase 2. The parity ledger records historical evidence; do not treat implementation history as current instructions.
 
 ## Documentation routing
 

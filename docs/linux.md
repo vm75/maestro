@@ -2,20 +2,12 @@
 
 [← Back to README](../README.md)
 
-For testing the native Linux execution path on a development Linux machine,
-use `platform = "linux"` and `test_mode = false` in a **separate**
-configuration. Alternatively, pass `--linux-mode` to select the Linux
-platform from the CLI. Do **not** pass `--test-mode`: that flag simulates
-external commands. Simulated test mode and the Linux platform cannot be
-combined.
-
-The native Linux platform runs the normal command runner and HTTP API,
-reads real Linux `/proc` metrics, and uses the configured service paths. It
-skips ASUS menu installation, standalone startup does not emit an ASUS ASP
-page, and AdGuard LAN IP discovery does not call router NVRAM. Set a real
-`[adguard].lan_ip` if AdGuard Home is enabled. All native Linux paths and
-executables must be configured for the development host. Use
-`[server].daemonize = false` for local interactive runs.
+Native Linux runs as an unprivileged workload account. Select a private
+`version: 1` YAML authority with `--config`; `--linux-mode` optionally
+asserts that selection. Router YAML is not accepted for Linux. Do not use
+`--test-mode` for real integration. There is no Linux migration or fallback
+configuration layout. Use the optional privileged helper only for explicitly
+granted host operations.
 
 To prepare a persistent local setup, run:
 
@@ -227,10 +219,7 @@ Native/browser authentication acceptance remains open.
 ## Workload writes and recovery
 
 Workload apply, revert, recovery and lifecycle actions are enabled automatically
-for the authenticated Linux administrator. The retired `server.allow_writes` and
-`server.privileged_operations` fields are ignored in existing native YAML and
-omitted from new configurations; legacy `system.allow_*_writes` flags do not
-gate Linux operations. Native apply
+for the authenticated Linux administrator. Unknown server fields, including retired write gates, are rejected. Host operations require explicit helper grants. Native apply
 currently accepts reviewed managed-directory provisioning and supported
 Quadlet changes. Plan and revert previews list resources the configured
 provider cannot apply. Removing a storage definition removes its ownership
@@ -338,10 +327,8 @@ an explicit `[commands].dehydrated` path and restart Maestro.
 Linux setup requires Python Jinja2 (available via `requirements.txt` in the virtual environment), nginx, and openssl. For a new lab it renders
 only the current Jinja bundle, generates a temporary fallback TLS certificate,
 and records its loopback listeners and runtime paths in
-`maestro/nginx/nginx.yaml`. HTTP uses port 8080 and HTTPS uses port 8443.
-Existing lab configurations are preserved. Before upgrading an existing lab,
-set `nginx.inputs_dir` to its `maestro/nginx` directory and follow the
-[input relocation procedure](migration.md#nginx-input-relocation-in-09).
+`nginx-inputs/nginx.yaml`. HTTP uses port 8080 and HTTPS uses port 8443.
+New labs use the native YAML schema and the state directory's `nginx-inputs/`, `nginx/`, `certificates/` and `logs/` paths. Old experimental labs are not supported; back up and initialize a fresh lab.
 The smoke test uses a separate temporary directory under `/tmp`.
 
 ## Declarative Applications and File Sharing
@@ -534,127 +521,14 @@ root capabilities. Avoid blanket sudo, `SETENV`, or additional allowlisted
 programs. This boundary requires a disposable-guest security review in both
 helper-free and helper-enabled deployments before production use.
 
-## Continued Phase 2 implementation status (unverified)
+## Release acceptance
 
-The Linux release build now stages three separate executables with checksums:
-`maestro` (non-root HTTP/UI server), `maestro-admin` (optional installed
-restricted root helper), and `maestro-mcp-stdio` (non-root agent transport).
-The new `scripts/install-linux.sh` offers a reviewed dry run, non-root
-systemd service installation, explicit helper opt-in/removal and conservative
-existing-binary rollback. It preserves workload configuration and does not
-install packages or change groups automatically. **These new installation
-paths have not passed disposable-guest acceptance; do not deploy them on
-production hosts yet.**
-
-The privileged helper policy now has independent default-deny flags:
-
-```json
-{
-  "version": 1,
-  "workload_uid": 1001,
-  "system_units": [],
-  "package_writes": false,
-  "samba_password": false,
-  "share_writes": false
-}
-```
-
-Protected package and share writes require a matching root-owned helper policy,
-strict sudoers rule, native backend readiness and explicit operation confirmation.
-Linux YAML does not add a separate authorization gate. Without the helper,
-user operations and read-only native status remain available.
-The Samba password tool never accepts a selected account; the root helper
-resolves the non-root sudo caller and passes the password only via stdin.
-The helper now has source implementations of the Server Man native share
-definition validation/publication/rollback and server setup operations.
-Publication additionally requires `share_writes: true` in the root-owned
-policy. Setup also requires `package_writes: true` and the fixed mandatory
-system units in `system_units`: APT Samba uses `smbd.service` and
-`wsdd-server.service`; other supported Samba distributions use
-`smb.service` and `wsdd.service`; NFS uses `nfs-server.service`.
-Optional NetBIOS services are attempted only when authorized.
-Samba setup sets `smb2 leases = no` and `smb3 directory leases = no` in
-`[global]` and reloads Samba, prioritizing visibility of host-side filesystem
-changes over client caching. A single **Notify clients of filesystem changes**
-checkbox in Samba setup controls both global `change notify` and
-`kernel change notify`, enabling both by default. Clear it to set both to `no`.
-The `shares_setup` tool accepts the optional boolean `changeNotify` (default
-`true`) for the same behavior. Existing Windows connections must reconnect to
-negotiate the changed settings. Repeating setup also updates existing configs;
-unrelated settings and shares are preserved.
-The Linux daemon now uses the same native share operations for the fixed
-reference configuration paths and enabled management policy. The
-`managed_share_publish` tool changes the authoritative YAML publication
-toggle through the revisioned apply journal; `shares_setup` is a separate
-confirmed job. The coordinator compares the complete protocol set against
-the reviewed before/after configuration and refuses unknown native state.
-Without authorized grants, native writes remain unavailable and read-only
-inventory remains accessible within the workload account's permissions.
-Native validation and differential helper acceptance remain outstanding.
-These are source-level development contracts, not approval to install or
-enable the helper on production hosts.
-
-Configuration's new backup panel is **metadata-only and non-restorable**.
-Private configuration history retains up to eight recent revisions and displays
-their timestamps and validity. It is available only when management writes are
-enabled; it contains configuration rather than workload-data backups.
-Each history entry can be inspected and reviewed for restoration through
-`managed_config_revert_plan` and `managed_config_revert`. Restoration uses the
-shared revision-checked apply journal, preserves exact historical YAML bytes,
-and archives the outgoing revision. Native changes require provider readiness;
-server-setting changes require restarting Maestro. Revert may supersede a
-published pending transition when native inspection confirms its removals and
-unchanged resources will not be abandoned. Prepared transitions must be recovered
-first. Native state outside the reviewed before/after definitions, including an
-unchanged but unfinished resource, requires recovery before revert.
-`mode: next_start` is implemented for managed directories and configured rootless
-Quadlet publication. It records the mode in the recovery journal and publishes
-Quadlet definitions without lifecycle commands, allowing existing active units
-to use changed definitions at their next start. Active removals and transitional
-units remain blocked, and running containers may require a later explicit restart.
-Other native providers still require their ownership/lifecycle acceptance work.
-Native capture, manifests, verification, publication, interrupted recovery
-and actual restores must not be inferred from the inventory. The Configuration
-page has typed storage/share editor forms over the existing YAML store; it
-cannot safely complete every reference definition/next-start workflow yet.
-Unified-YAML startup and administrator setup/password login are implemented;
-installer migration and complete native next-start publication remain pending.
-
-The new shared MCP dispatcher and stdio executable require official SDK
-contract tests, including protocol negotiation, schema parity and error
-handling. The separate Agent Access and Activity UI flows have not been
-browser-accepted. Consult the
-[Phase 2 parity matrix](plans/proposed/server-man-phase2-parity-matrix.md)
-before claiming completed Server Man functionality.
-
-### Phase 2 unified YAML startup (in development)
-
-Linux builds now accept an absolute `.yaml` or `.yml` path through `--config`.
-The selected file contains `version: 1`, optional `server` settings and the
-workload sections. HTTP and stdio MCP inspect and edit that same document.
-The file and its directory must be private to the workload account; `server.token_file`
-selects a separate owner-only bearer-token file. Server defaults use loopback
-port 8080 and a Maestro directory below `XDG_STATE_HOME` (or `~/.local/state`).
-The default token is next to the selected YAML. Invalid workload definitions
-remain readable for repair when server settings are valid.
-
-This path is not yet the installer's production configuration contract. The
-Configuration page can review and save the authoritative YAML. Save server
-settings separately from resource edits; plans report when Maestro must restart.
-After saving changed server settings, further managed mutations require that
-restart. Next-start publication supports managed directories and prepared
-rootless Quadlet directories; other provider and lifecycle paths remain gated.
-The sign-in
-page can create an administrator using the bootstrap token and a password of
-12–256 bytes. Setup preserves authored comments and resource text, stores a
-fixed-format password hash in the same YAML, revokes
-bootstrap cookies, and switches browser login to username/password. Bearer-token
-access remains available for agents. Browser sessions persist across restart;
-sign-out revokes the selected session. Setup requires loopback HTTP or an
-explicitly allowed HTTP/HTTPS origin.
-The existing Linux lab layout remains available after its one-time YAML migration. The parity ledger tracks the
-remaining auth, installer, helper and native-provider acceptance work.
-
+The implementation includes native Linux providers and the optional helper.
+Source implementation is not evidence of complete native acceptance. The
+[remaining Phase 2 gates](plans/proposed/modular-platform-ui-migration.md)
+and [reference parity ledger](plans/proposed/server-man-phase2-parity-matrix.md)
+track verification. Do not treat historic implementation status as a current
+feature limitation without checking the source and tests.
 
 ### Native generator and offline engine checks
 

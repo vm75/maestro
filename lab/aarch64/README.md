@@ -168,7 +168,7 @@ The provisioning script:
 4. Installs the `/bin/nvram` mock, `/usr/local/libexec/router-lab/service` mock, and syslog fallback.
 5. Installs `wireguard-tools` and `wg-quick`, configures `/opt/etc/wireguard/wgs1.conf`, and sets up short-name links.
 6. Launches BusyBox httpd with Basic Auth on port 8080, adds a stunnel TLS listener on 8443, and seeds `/www/require/modules/menuTree.js` and `/www/state.js`.
-7. Seeds `/opt/etc/maestro/firewall-policy.json` (disabled) and generates `/opt/etc/maestro/maestro.toml`.
+7. Seeds `/opt/etc/maestro/firewall-policy.json` (disabled) and generates `/opt/etc/maestro/maestro.yaml`.
 8. Validates the SHA-256 checksum and installs `maestro_*_aarch64-3.10.ipk` via Entware `opkg`.
 
 During ISO installation, provisioning runs with `LAB_OFFLINE=1`: OpenRC service

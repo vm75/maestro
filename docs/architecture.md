@@ -19,7 +19,7 @@ configured
 router programs and files: Entware init scripts, nginx, dehydrated/OpenSSL,
 ipset/iptables, NVRAM, and optionally an AdGuard Home HTTP API.
 
-Maestro owns `MAESTRO_INPUT`/`MAESTRO_FORWARD` firewall chains and rules tagged `maestro:ban-attack`. The one-time Router Hub migration must retire old firewall objects before starting Maestro.
+Maestro owns `MAESTRO_INPUT`/`MAESTRO_FORWARD` firewall chains and rules tagged `maestro:ban-attack`.
 
 ## Components
 
@@ -90,9 +90,7 @@ remain available to both builds.
 
 Authenticated Linux workload operations are always enabled. Protected package
 and share operations depend on native readiness and the optional helper's
-root-owned grants; workload YAML adds no write-enable gate. The retired
-`server.allow_writes` and `server.privileged_operations` fields are accepted but
-ignored for existing native Linux authorities and omitted from settings output.
+root-owned grants; workload YAML adds no write-enable gate. Unknown settings, including retired write gates, are rejected.
 Router routes retain bearer-token authentication without administrator creation.
 
 A Linux build with the `linux-ui` feature embeds the static Svelte shell and
@@ -130,13 +128,10 @@ directory through cleanup. Start and completion events go to the owner-only
 
 The declarative workload foundation stores authored YAML and content-addressed
 history in an owner-only directory. History retains eight revisions by recency,
-refreshes reused bases, and reports safe validity/error metadata. Selected YAML
-authorities use separate `<filename>.history` directories; legacy workload stores
-retain their existing `history` directory. Directory scans and file reads are
+refreshes reused bases, and reports safe validity/error metadata. Selected YAML authorities use separate `<filename>.history` directories. Directory scans and file reads are
 bounded, and unexpected files are retained rather than pruned. Linux startup accepts a private YAML authority
 whose server settings are checked separately from repairable workload definitions.
-HTTP and stdio MCP use that same selected file; migrated legacy Linux layouts retain
-`<data_dir>/workloads/workloads.yaml`. Configuration plans compare effective
+HTTP and stdio MCP use that same selected file. Configuration plans compare effective
 server settings against the running settings and live administrator credentials.
 Server settings must be saved separately from native resource changes. Saving
 them reports a restart requirement and blocks further managed mutations until
@@ -242,7 +237,7 @@ configuration is deliberately emitted in its shell-sourceable format, with
 shell-quoted paths and validated hook variable names; installed hooks remain
 administrator-trusted programs.
 
-The native Linux platform (`platform = "linux"`, `test_mode = false`)
+The native Linux platform (private native `version: 1` YAML)
 uses the same command runner and application services as production, but
 does not mount the ASUS menu, write an ASP page at standalone startup, or
 query NVRAM for AdGuard LAN IP discovery. It requires real Linux command paths,
@@ -463,9 +458,7 @@ at `/opt/etc/maestro/firewall-policy.json`. The Linux platform only
 loads and saves `data_dir/firewall-policy.json` to avoid touching host
 or router data.
 
-The engine reads only version-1 `ban-attack-state.json`. Older ban documents
-must be migrated by running 0.7.2 before upgrading; see the
-[migration guide](migration.md). A malformed state file or unsupported
+The engine reads only version-1 `ban-attack-state.json`. A malformed state file or unsupported
 schema is logged and leaves the worker running in `degraded` state.
 Engine writes do not serialize historical mirror fields.
 Engine writes are dirty-state writes: ordinary matches wait for the configured
@@ -522,10 +515,7 @@ restarts dnsmasq through the configured service command and arguments.
   render-data fragments are read there. `nginx.root_dir` holds final nginx files,
   including generated `settings/*.conf` runtime includes. A rollback guard spans
   both roots during settings saves, validation, and reload. Test mode overrides
-  both paths. `migrate-nginx-inputs` relocates current-format legacy inputs while
-  Maestro is stopped: destinations must be absent or byte-identical, validation
-  failures restore both trees, and legacy `.conf` files remain usable runtime
-  includes. Legacy text inputs are removed only within that transaction; TOML format conversion uses private migration backups.
+  both paths. Offline preparation of an existing router is documented in [installation](installation.md#upgrade-from-maestro-0110).
 - Versioned Jinja policies are embedded in the binary. Deployment data fragments
   cannot shadow policy modules. No template/root-file editor or legacy
   configuration conversion is exposed by the service.
@@ -593,9 +583,4 @@ flows; unit tests cover path safety, storage atomicity, command simulation,
 UI rendering, matching, aggregation, and log rotation.
 
 
-Configuration format migration is explicit through `config_migration`. TOML is
-linked only for this conversion path. Main, managed nginx global and managed
-site configuration use bounded YAML readers that reject aliases, anchors,
-explicit tags, duplicate mapping keys and multiple documents. Conversion retains
-private exact-byte backups, publishes without replacing conflicting destinations,
-and retires active TOML files only after their YAML replacement is durable.
+Configuration is YAML only. The root `version` field selects the native Linux schema; other documents use the router schema and cannot select Linux. Missing configuration fails startup except for explicitly requested simulation. Bounded YAML readers reject aliases, anchors, explicit tags, duplicate mapping keys and multiple documents. Unknown configuration fields fail validation.

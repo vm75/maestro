@@ -1,8 +1,8 @@
 # Server Man → Maestro Phase 2 functional parity ledger
 
-**Status:** active and incomplete — none of the reference capabilities is accepted.
+**Status:** historical evidence ledger; native acceptance remains open. Individual implementation increments below describe their dates, not necessarily current limitations. Current requirements are in the linked remaining acceptance plan.
 **Frozen reference:** [Server Man commit c1a9f32](https://github.com/vm75/server-man/tree/c1a9f32f5898146ae7ac339043b910b8e2a2c438), audited source and tests on 2026-11-23.
-**Maestro branch:** `feature/linux-phase2`; updated plan: [modular-platform-ui-migration.md](modular-platform-ui-migration.md).
+**Maestro branch:** `feature/linux-phase2`; remaining acceptance: [modular-platform-ui-migration.md](modular-platform-ui-migration.md).
 **Requirement:** cover *every* implemented reference feature, not just matching tool names; 100% behavioral parity with helper, graceful reduction without it. No Server Man features are waived.
 
 ## Evidence rules and current result

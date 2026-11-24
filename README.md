@@ -40,13 +40,12 @@ compatibility still needs testing on matching hardware and firmware. Legacy MIPS
 support is not promised.
 
 1. Back up your configuration and persistent state. For an existing installation,
-   read the [Maestro migration guide](docs/maestro-migration.md) first; existing nginx configuration
-   must be ported to the current bundle before deployment.
+   follow the [offline router upgrade procedure](docs/installation.md#upgrade-from-maestro-0110) before deployment.
 2. For a new install, download the matching `.ipk` and checksum from
    [GitHub Releases](https://github.com/vm75/maestro/releases), verify the
    checksum, then run `/opt/bin/opkg install /tmp/<package>.ipk` as root.
    The IPK installs Maestro, initializes configuration, and starts the
-   service. Migrating an existing Router Hub IPK requires the separate [rebrand migration](docs/maestro-migration.md); **do not install the new package over the legacy package**.
+   service. Existing Maestro installations must have current YAML inputs before installing.
 
    Alternatively, download the matching tarball and checksum from
    [GitHub Releases](https://github.com/vm75/maestro/releases).
@@ -116,7 +115,7 @@ an alias for `make run-simulated`.
 
 ## Configure and use
 
-Existing TOML installations require the [one-time YAML migration](docs/migration.md#one-time-toml-to-yaml-migration) before startup.
+Router configuration is YAML; Linux uses a separate native version: 1 YAML authority. Older router TOML must be converted offline before installation.
 
 Start with the [example YAML](config/maestro.example.yaml) for paths,
 authentication, commands, and integration settings. Then use the UI to manage
@@ -137,8 +136,7 @@ security, nginx settings, and firewall tuning.
 | --- | --- |
 | [Installation](docs/installation.md) | Packages, source builds, installer options, service commands |
 | [Configuration](docs/configuration.md) | YAML mappings, nginx settings, Ban Shield tuning, operational notes |
-| [Upgrading](docs/maestro-migration.md) | One-time cutover and rollback; no legacy runtime aliases |
-| [Legacy migrations](docs/migration.md) | Historical nginx and storage compatibility |
+| [Phase 2 validation](docs/plans/proposed/modular-platform-ui-migration.md) | Remaining acceptance gates and reference parity ledger |
 | [Development](docs/development.md) | Prerequisites, local checks, certificate tests, API overview |
 | [Linux integration](docs/linux.md) | Real-service lab setup and smoke tests |
 | [Architecture](docs/architecture.md) | Components, data flows, persistence, invariants |

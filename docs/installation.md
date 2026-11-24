@@ -18,7 +18,7 @@ MIPS compatibility is
 not promised; a target is supported only after testing it on the matching
 router CPU and firmware.
 
-For Router Hub 0.10.5 installations, follow the [Maestro migration guide](maestro-migration.md) before uninstalling anything. Historical schema migrations are in [legacy upgrading](migration.md).
+For an installed Maestro 0.11.0 router, complete the offline upgrade preparation below before replacing the package.
 
 ## Install a published version
 
@@ -41,19 +41,39 @@ sha256sum -c "${PACKAGE}.sha256"
 
 Use a root shell. The package owns the Maestro binary, Entware init script,
 example configuration, and shared setup helper, but **not** runtime settings or
-state. The `postinst` hook initializes first-install Maestro configuration, migrates
-NGINX input layouts *within Maestro* where needed, installs JFFS reconciliation hooks,
+state. The `postinst` hook initializes first-install Maestro YAML configuration, installs JFFS reconciliation hooks,
 validates configuration and starts the service. `prerm` stops the service
 before an upgrade or removal; it does not delete persistent data.
 
-**Migrating from a Router Hub package or tarball:** Maestro no longer
-auto-imports legacy installations. Back up first, follow the explicit
-[one-time migration guide](maestro-migration.md), remove old startup hooks,
-uninstall the old package, reboot to clear old firewall objects and only
-then install Maestro. The IPK conflict prevents the two packages from
-being installed together.
-The new package does not delete legacy administrator-created state. Removing the IPK also intentionally
-leaves administrator-created configuration, data and JFFS hooks in place.
+### Upgrade from Maestro 0.11.0
+
+The router must be prepared offline before installing the new package. Maestro
+does not convert TOML or import earlier layouts at runtime or during install.
+Linux is a fresh installation and has no migration procedure.
+
+1. Make an independent backup using the installed version and separately copy
+   the configuration, nginx inputs and runtime tree, certificate directories,
+   custom paths, JFFS hooks and installed IPK/binary. Keep the backup private.
+2. Stop Maestro. Convert `/opt/etc/maestro/maestro.toml` to
+   `/opt/etc/maestro/maestro.yaml` using an offline TOML reader/YAML writer or
+   manual conversion against [the current example](../config/maestro.example.yaml).
+   Preserve every configured value and set `platform: asuswrt`. Restrict the YAML
+   to mode 0600; retain the old TOML in the independent backup.
+3. Convert existing managed `nginx.toml` and `sites.toml` to the matching YAML
+   mappings. Place them under the configured `nginx.inputs_dir` (default
+   `/opt/etc/maestro/nginx`). If persistent render inputs are still under
+   `/opt/etc/nginx/settings`, copy the authored data fragments to the input
+   directory as well. Do not copy Jinja templates or remove live nginx includes.
+   Compare against existing destination files and resolve conflicts manually.
+   Preserve JSON state, native nginx configuration, keys and certificates.
+4. Install the verified package. Use `maestro --config /opt/etc/maestro/maestro.yaml check-config`
+   and `/opt/sbin/nginx -t`. Confirm configured paths and check the ASUS UI,
+   nginx, certificate renewals, WireGuard, AdGuard and BanShield.
+5. On failure, stop the new daemon and restore the old binary and matching
+   configuration/state from the independent backup before restarting it.
+
+Do not start a fresh configuration over an existing deployment. The installer
+does not delete administrator-created state.
 
 ### Backups
 
@@ -65,7 +85,7 @@ Create a backup from the installed binary:
 
 On routers this writes `/tmp/maestro-backup-YYYYMMDD-HHMMSS.tar.gz` using
 local time. Copy it off the router before rebooting, since `/tmp` is temporary.
-On native Linux (`platform = "linux"` or `--linux-mode`), the archive is saved
+On native Linux (native `version: 1` YAML), the archive is saved
 alongside the configuration file selected by `--config`:
 
 ```sh
@@ -176,8 +196,8 @@ it prints the exact manual command.
 If opkg fails, the verified package remains in `/tmp`; the retry command is
 printed before launching opkg. Network or checksum errors abort without
 installing. During installation, `prerm` stops the running service and `postinst`
-executes `migrate-nginx-inputs`, then `init-nginx`, validates the configuration,
-and restarts the service. A migration or configuration failure stops the install
+executes `init-nginx`, validates the configuration,
+and restarts the service. A configuration failure stops the install
 hook and leaves the service stopped for administrator review; it never deletes
 existing persistent state or silently claims rollback of the installed binary.
 

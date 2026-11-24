@@ -117,11 +117,10 @@ runtime includes, and administrator-authored custom sites. Jinja templates remai
 embedded in the binary and are not installed as editable configuration.
 Relative `inputs_dir` values resolve against `maestro.yaml`'s directory.
 Back up both the inputs directory and custom nginx files. For existing installs,
-follow the [0.9 input relocation procedure](migration.md#nginx-input-relocation-in-09).
+follow the [offline upgrade procedure](installation.md#upgrade-from-maestro-0110).
 
 For named listeners, reusable source access rules, blocked paths and temporary
-HTTP-01 exposure, see [nginx ingress](nginx-ingress.md), including migration and
-WAN adapter limitations.
+HTTP-01 exposure, see [nginx ingress](nginx-ingress.md), including WAN adapter limitations.
 
 In Nginx → Global settings, configure listeners, workers, DNS, PWA headers,
 client IP/CIDR allowlists, shared domain suffixes, and site defaults. Settings are
@@ -177,8 +176,4 @@ Listener and filesystem choices must match the nginx paths configured in YAML.
 Python is needed only for lab setup and bundle tests, not by Maestro at runtime.
 
 
-Maestro configuration is YAML on all platforms. TOML files are accepted only by
-[`migrate-config`](migration.md#one-time-toml-to-yaml-migration), which retains
-private exact-byte originals as `.toml.bak`. Active TOML and YAML are never read
-as competing authorities. Installed paths and values retain their meanings after
-conversion; state JSON and authored native service files keep their formats.
+Maestro configuration is YAML on all platforms. Router and native Linux use separate schemas, and TOML is not accepted. Linux uses a private version: 1 authority and token file; see [Linux configuration](linux.md). State JSON and authored native service files retain their formats.
