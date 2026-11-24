@@ -29,7 +29,7 @@ Create one modular Rust management application with common modules, platform-spe
 
 - **One backend:** Rust modular monolith, one service process per host. No dynamic Rust/JS plugins, microservices, or permanent Go sidecar.
 - **Platforms:** `asuswrt` and `linux` initially; model future routers as adapters rather than branching feature logic throughout the code. **Runtime identity/privilege is platform-specific:** Maestro runs as root on the router and as a non-root workload-owner account on Linux. Linux-only protected operations require the **optional** restricted helper; without it those operations are unavailable rather than elevating the server. Model privileged execution behind a narrow platform abstraction so a future OpenWrt adapter could differ; **do not add OpenWrt support to Phase 2**.
-- **Core vs platform:** feature behavior and API contracts are shared where possible; platform operations depend on explicit adapters.
+- **Core vs platform:** Maestro is one modular application with shared, router-specific and Linux-specific feature modules, not a router application and a separate Server Man application. Feature behavior and API contracts are shared where possible; platform operations depend on explicit adapters. Module target metadata determines availability and UI contribution independently of the renderer and build profile. Shared features are first-class on both targets, not router-only compatibility features.
 - **UI:** one persistent Dashboard; navigation tabs are logical groups that contain one or more feature sections. Each feature may contribute zero or more dashboard widgets. UI availability is driven by backend capabilities and permissions, never trusted as backend authorization.
 - **ASUS:** preserve current build-free, offline-capable, embedded HTML/JS + ASP integration; do not require npm/Svelte, an external CDN, or runtime asset downloads on a router.
 - **Linux:** keep current Router Hub real-Linux integration operational during Phase 1. Svelte 5/Vite is introduced in Phase 2 and compiled to static assets at build/release time.
@@ -52,20 +52,26 @@ A **tab is not a backend module**. An Applications tab will aggregate all suppor
 
 ### Initial module ownership / target availability
 
-| Module | Phase 1 origin | ASUS target | Linux target | Phase 2 origin |
-| --- | --- | --- | --- | --- |
-| NGINX sites, ingress, rendering, rollback | Router Hub | Existing behavior | Existing behavior / adapted runtime | Shared, unchanged domain |
-| Certificates / ACME | Router Hub | Existing behavior | Existing compatible paths | Shared |
-| Services | Router Hub | Entware `S*` init scripts | Existing Linux compatibility wrapper | Server Man systemd adapter |
-| Monitoring and dashboard | Router Hub | Existing metrics | Existing metrics | Server Man richer sampler/processes |
-| Ban Shield / firewall | Router Hub | Current ipset/iptables | Existing behavior, cautious support | Future Linux adapter only if justified |
-| AdGuard Home / DNS | Router Hub | AdGuard + ASUS DNSmasq integration | Supported client; no ASUS NVRAM side effects | Optional Linux DNS adapter |
-| WireGuard, Wake-on-LAN | Router Hub | Current behavior | As available | Shared |
-| ASUS menu, Entware router/NGINX upgrades | Router Hub | Router-only | Never exposed | No port |
-| Applications: containers and VMs | None | Unsupported | Not in Phase 1 | Server Man declarative coordinator/providers |
-| Storage, Samba/NFS shares | None | Unsupported | Not in Phase 1 | Server Man |
-| Linux OS package updates | None | Unsupported | Not in Phase 1 | Server Man |
-| MCP / agent access | None | Unsupported | Not in Phase 1 | Required Server Man HTTP + stdio feature parity |
+**User clarification (2026-11-23):** the platform profiles select a composition of shared and target-specific modules. The direct Server Man port expands the Linux module set; it does not replace or fork Maestro's shared modules. The following is the intended target ownership, not a claim of current Linux native verification.
+
+| Module | Ownership | ASUS target | Linux target |
+| --- | --- | --- | --- |
+| System monitoring and dashboard | Shared | Existing lightweight metrics | Common metrics plus Linux-specific richer Server Man sampler/process details as needed |
+| NGINX sites, ingress, rendering, rollback | Shared | Existing behavior | Same domain, native paths/service adapter as needed |
+| Certificates / ACME | Shared | Existing behavior | Same certificate domain, native paths/service adapter as needed |
+| Ban Shield / firewall | Shared | Existing ipset/iptables implementation | Reuse domain; validate native backend and permission requirements, never grant unbounded privilege |
+| Services | Shared logical feature with distinct native implementations | Router services / Entware init | Server Man systemd inventory and lifecycle |
+| Wake-on-LAN | Existing shared target metadata | Existing behavior | Preserve existing compatible behavior; no new port scope |
+| AdGuard Home / DNS | Router-targeted for now | Existing AdGuard and ASUS DNSmasq integration | Sharing may be added later if needed; no new Linux integration required in this port |
+| WireGuard | Router-targeted for now | Existing behavior | Sharing may be added later if needed; no new Linux integration required in this port |
+| ASUS UI, menu/ASP integration, Entware router/NGINX upgrades | Router-specific | Existing behavior | Not exposed as Linux features |
+| Server Man applications, containers and VMs | Linux-specific | Unsupported | Direct port of declarative coordinator and native providers |
+| Server Man storage, Samba/NFS shares, workload configuration/recovery | Linux-specific | Unsupported | Direct port |
+| Linux OS package updates/dependencies, systemd-specific management | Linux-specific | Unsupported | Direct port |
+| Server Man MCP/agent access and optional privileged helper | Linux-specific initially | Unsupported | Direct port and integration |
+
+The existing registry currently advertises AdGuard and WireGuard for both targets. The target direction is router-first; do not use this clarification to remove already validated Linux compatibility or introduce an unrelated breaking change. Defer new Linux work on these integrations unless explicitly needed. Where a shared feature needs Linux privileges, use ordinary delegated permissions or narrowly scoped authorized operations as appropriate; do not run the Linux server as root or expand the helper to arbitrary commands. If a shared feature lacks a working Linux adapter, record that limitation separately from Server Man parity and do not report it ready. Sharing domain logic does not require identical UI rendering, native command implementations or resource consumption on every platform.
+
 
 Every module should distinguish **unsupported** (not a target), **disabled** (configured off), **unavailable/degraded** (supported but dependency or permission missing), and **ready**. Do not hide missing dependencies inside generic disabled status. The backend rejects operations for unsupported/disabled modules even if a caller bypasses the UI.
 
@@ -95,7 +101,7 @@ A module declares stable identifiers, applicable backend capability IDs, optiona
 
 All currently accessible independent views (Dashboard, Services, NGINX, Certificates, Wake-on-LAN, Ban Shield, AdGuard, WireGuard) must remain accessible after grouping. If preserving existing view/tab IDs as aliases is simpler or safer than immediate grouping, implement aliases and migrate navigation gradually. Preserve all forms, actions, modals, error/success feedback, accessibility, refresh behavior, deep links, IDs used by scripts, and ASUS ASP rendering. The visual layout may be reorganized; **functional parity is mandatory**.
 
-For Linux in Phase 2, the same logical contract can add Applications (Podman Quadlet, Podman Compose, Docker Compose, libvirt, Incus), File Sharing, Updates, expanded Monitoring, Configuration and Agent Access without creating one top-level tab per provider.
+For Linux in Phase 2, the same logical contract composes shared Dashboard/Monitoring, Web (NGINX and certificates) and Security (Ban Shield) contributions with Linux Services and Server Man's Applications (Podman Quadlet, Podman Compose, Docker Compose, libvirt, Incus), File Sharing, Updates, Configuration and Agent Access. Use the existing Svelte workflows for the direct port and integrate shared feature views at the same navigation seam. Do not create one top-level tab per provider or a separate Server Man UI disconnected from Maestro. Expose only supported and authorized actions; preserve existing router rendering.
 
 **Dashboard rules:**
 
@@ -244,7 +250,7 @@ Do not start porting the Go Server Man capabilities until acceptance.
 
 **User authorization:** undo, replace or delete Phase 2 implementation where it is faster to transplant working Server Man behavior. The existing branch is a source of reusable work, not a mandatory architecture or a requirement to preserve every commit's resulting code. Preserve history through ordinary corrective commits (no force-push or broad reset); do not revert accepted Phase 1/1.5 router behavior, user changes, or unrelated work.
 
-Use the original reference package boundaries as the default implementation layout. Keep Maestro platform/module registration and router profile boundaries thin. Do not force the translated Linux domain to conform to router-oriented internals or unfinished Rust module shapes when a small adapter would suffice. A complete working provider is preferred over several modeled/gated partial implementations.
+Use the original reference package boundaries as the default implementation layout for Linux-specific functionality. Keep Maestro platform/module registration and build-profile boundaries thin. Keep existing shared modules (monitoring, NGINX, certificates, Ban Shield) available to both platform compositions; reuse their domain logic, with native adapters and renderer contributions as necessary. Integrate Server Man monitoring extensions with the common monitoring surface instead of maintaining duplicate dashboards. The port is additive to shared Maestro features, not a replacement Linux product. Do not force the translated Linux domain to conform to router-oriented internals or unfinished Rust module shapes when a small adapter would suffice. A complete working provider is preferred over several modeled/gated partial implementations.
 
 | Area | Corrective action |
 | --- | --- |
@@ -402,7 +408,10 @@ the boundary at their module and dependency entry points.
 - Keep **Axum and Tokio** as the shared HTTP and async infrastructure. Share
   domain modules, REST contracts, configuration and command execution where
   both targets use them. Keep the ASUS ASP renderer, Entware init scripts,
-  router upgrade and existing integrations in the router build.
+  router upgrade and router-targeted integrations in the router build.
+  Shared feature modules remain available to both target compositions. Gate
+  the Server Man-specific richer sampler and provider dependencies separately
+  from the existing lightweight common monitoring code.
 - Use `asuswrt` and `linux` for platform modes and their matching Cargo
   features. Keep `asuswrt` as the default for
   existing build commands and Entware packaging. Select `linux` with
