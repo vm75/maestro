@@ -17,6 +17,7 @@ pub use journal::{ApplyJournal, ApplyPhase};
 pub mod libvirt;
 mod libvirt_render;
 mod model;
+pub mod native_inventory;
 pub mod native_shares;
 pub(crate) mod share_definitions;
 mod plan;

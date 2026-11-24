@@ -11,6 +11,7 @@
     initialBackend,
     initialContainer,
     initialRemoval = false,
+    singleContainer = false,
     onClose,
     onSaved
   }: {
@@ -18,6 +19,7 @@
     resourceID?: string
     initialContainer?: string
     initialRemoval?: boolean
+    singleContainer?: boolean
     initialKind?: 'container' | 'vm'
     initialEngine?: 'podman' | 'docker'
     initialBackend?: 'quadlet' | 'compose' | 'libvirt' | 'incus'
@@ -411,14 +413,14 @@
       <label>Resource ID <input required maxlength="63" bind:value={id} disabled={!!resourceID} /></label>
       {#if kind === 'service'}
         <label>Display name <input bind:value={service.name} maxlength="128" /></label><label>Description <textarea bind:value={service.description}></textarea></label>
-        <label>Application type <select aria-label="Application type" value={service.kind} disabled={!!resourceID} onchange={(e) => setKind(e.currentTarget.value)}><option value="container">Container application</option><option value="vm">Virtual machine</option></select></label>
+        <label>Application type <select aria-label="Application type" value={service.kind} disabled={!!resourceID || singleContainer} onchange={(e) => setKind(e.currentTarget.value)}><option value="container">Container application</option><option value="vm">Virtual machine</option></select></label>
         <label><input type="checkbox" bind:checked={service.enabled} /> Start at boot (does not start now)</label>
         <label>Required application IDs <input bind:value={dependencyText} placeholder="database, cache" /></label>
         {#if service.kind === 'container'}
           <label>Container engine <select aria-label="Container engine" bind:value={service.engine} disabled={!!resourceID} onchange={(e) => { service.backend = e.currentTarget.value === 'docker' ? 'compose' : 'quadlet' }}><option value="podman">Podman</option><option value="docker">Docker</option></select></label>
           <label>Container backend <select aria-label="Container backend" bind:value={service.backend} disabled={!!resourceID || service.engine === 'docker'}><option value="quadlet" disabled={service.engine === 'docker'}>Quadlet (default for Podman)</option><option value="compose">Compose</option></select></label>
-          <fieldset><legend>Containers</legend><label>Selected container <select aria-label="Selected container" value={selectedContainer} onchange={(e) => switchContainer(e.currentTarget.value)}>{#each Object.keys(service.containers ?? {}) as name}<option value={name}>{name}</option>{/each}</select></label>
-            <div class="actions"><label>New container ID <input bind:value={newContainer} /></label><button type="button" onclick={addContainer}>Add container</button><button type="button" disabled={Object.keys(service.containers ?? {}).length <= 1} onclick={() => { if (!service.containers) return; delete service.containers[selectedContainer]; selectContainer(Object.keys(service.containers)[0] ?? 'app') }}>Remove selected container</button></div>
+          <fieldset><legend>{singleContainer ? 'Container' : 'Containers'}</legend>{#if singleContainer}<p>Creates one managed container through the existing Compose or Quadlet provider. No separate runtime or configuration is created.</p>{:else}<label>Selected container <select aria-label="Selected container" value={selectedContainer} onchange={(e) => switchContainer(e.currentTarget.value)}>{#each Object.keys(service.containers ?? {}) as name}<option value={name}>{name}</option>{/each}</select></label>
+            <div class="actions"><label>New container ID <input bind:value={newContainer} /></label><button type="button" onclick={addContainer}>Add container</button><button type="button" disabled={Object.keys(service.containers ?? {}).length <= 1} onclick={() => { if (!service.containers) return; delete service.containers[selectedContainer]; selectContainer(Object.keys(service.containers)[0] ?? 'app') }}>Remove selected container</button></div>{/if}
             {#if container}
               <label>Container image <input required bind:value={container.image} placeholder="docker.io/library/nginx:stable" /></label>
                <label>Native container name (optional) <input bind:value={container.containerName} placeholder="Leave blank for a generated managed name" /></label>

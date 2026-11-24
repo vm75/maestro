@@ -151,6 +151,27 @@ impl CompositeProvider {
         }
     }
 
+    pub async fn external_inventory(&self, config: &Config) -> super::native_inventory::NativeInventory {
+        use super::native_inventory::NativeInventory;
+        if self.simulated { return NativeInventory::default(); }
+        let (docker, podman, incus, libvirt) = tokio::join!(
+            self.docker_compose.external_inventory(config),
+            self.podman_compose.external_inventory(config),
+            tokio::time::timeout(std::time::Duration::from_secs(12), self.incus.external_inventory(config)),
+            self.libvirt.external_inventory(config),
+        );
+        let mut result = incus.unwrap_or_else(|_| NativeInventory {
+            workloads: vec![], warnings: vec!["Incus inventory timed out.".into()]
+        });
+        for (name, rows) in [("docker", docker), ("podman", podman), ("libvirt", libvirt)] {
+            match rows {
+                Ok(rows) => result.workloads.extend(rows),
+                Err(_) => result.warnings.push(format!("{name}: local inventory unavailable or exceeds limit.")),
+            }
+        }
+        result.workloads.sort_by(|a,b| (&a.provider,&a.scope,&a.name,&a.id).cmp(&(&b.provider,&b.scope,&b.name,&b.id)));
+        result
+    }
     pub fn list_applications(&self, config: &Config) -> Vec<ApplicationSummary> {
         let mut apps = Vec::new();
         for (id, service) in &config.services {

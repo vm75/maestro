@@ -25,6 +25,17 @@ Create one modular Rust management application with common modules, platform-spe
 
 **CI hold:** No automatic GitHub Actions CI on the planning/implementation branch before all three Phase 1 steps are implemented. The existing `ci.yml` triggers are already limited to pushes on `main` and `ci/**`, plus explicit `workflow_dispatch`; there is no ordinary PR trigger. Keep this branch named `refactor/modular-architecture`, **do not push it to `ci/**`, do not merge it into `main`, do not push `v*` tags, and do not manually dispatch CI until Phase 1 implementation is complete and ready for validation. No workflow edits are needed merely to achieve this hold. Keep existing `main` CI and separate manually triggered NGINX/toolchain workflows intact.
 
+## Phase 2 additional scope: earlier Maestro runtime features
+
+User direction (2026-11-24): incorporate the useful earlier Maestro archive (`maestro.tgz`) capabilities in Phase 2, not a separate expansion phase. Exclude the old Arch Linux installer; preserve existing package-manager support and installer behavior. Preserve all Server Man parity gates and the modular Linux-only composition. Reuse the earlier Go runtime adapters as source references, not a separate service or configuration store.
+
+- Discover externally provisioned OCI containers, Incus system containers and VMs, and Libvirt VMs; distinguish them from managed workloads. The initial native inventory is read-only, bounded, local, and excludes known or reserved Maestro identities. Complete lifecycle (start/stop/restart), bounded logs/inspection and explicitly confirmed safe deletion where supported only after identity, orchestration, permission, pending-recovery and native scope checks; do not port forced deletion or name-only authority.
+- Extend the existing Incus provider with system-container definitions, local image, storage and networking, lifecycle, recovery and appropriate backup checks. Preserve VM behavior; container-specific settings must not assume a guest kernel, QEMU or VM-only exports.
+- Offer simple single-container creation through the existing typed Compose/Quadlet editor and apply pipeline. Do not introduce a second direct-run orchestration engine.
+- Evaluate LXD compatibility via a separate provider adapter sharing Incus logic only where the native API and safety semantics are verified; no silent assumption of interchangeability.
+- Provide a Linux-only optional browser terminal using the existing authenticated session and explicit local non-root PTY; disabled by default, bounded resources, strict origin validation, no credentials in URLs and no privileged helper shell. Do not port the archive's bespoke WebSocket or root service.
+- All additions require source tests, Linux UI/API and native acceptance; no extra router runtime dependencies. The first source increment is native read-only inventory and a single-container editor shortcut; mutation, managed Incus system containers, LXD and terminal remain open until implemented and verified.
+
 ## Scope, boundaries, and non-goals
 
 - **One backend:** Rust modular monolith, one service process per host. No dynamic Rust/JS plugins, microservices, or permanent Go sidecar.

@@ -226,6 +226,12 @@ impl ComposeProvider {
         ensure!(result.status.success(),"native Compose engine command failed");
         Ok(result)
     }
+    pub async fn external_inventory(&self, config: &Config) -> Result<Vec<super::super::native_inventory::NativeWorkload>> {
+        // Same explicit local connection and bounded runner as managed Compose.
+        let output = self.engine_command(&["ps", "--all", "--no-trunc", "--format", "json"], None, 5, 1024 * 1024, false).await?;
+        ensure!(!output.truncated, "native container inventory truncated");
+        super::super::native_inventory::oci_rows(&output.stdout, &self.engine, config)
+    }
     async fn compose_command(&self,id:&str,file:&Path,action:&[&str],seconds:u64,limit:usize,tail:bool)->Result<crate::command::CapturedOutput>{
         let argv=args(file,id,action)?;
         let argv=argv.iter().map(String::as_str).collect::<Vec<_>>();

@@ -823,6 +823,7 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
         json!({"name":"managed_storage_plan","module":"managed_storage","title":"Review new storage","description":"Inspect an absent owned path and stopped consumers without creating data. Existing parents must be owned real directories. Private paths require management writes.","readOnly":true,"destructive":false,"inputSchema":{"additionalProperties":false,"properties":{"revision":{"type":"string","description":"Current configuration revision","minLength":1,"maxLength":64},"sizeGiB":{"type":"integer","description":"New disk capacity in GiB; omit or use zero for a directory","minimum":0,"maximum":4096},"storage":{"type":"string","description":"Existing storage reference ID","minLength":1,"maxLength":63}},"required":["revision","storage"],"type":"object"}}),
     ]);
 
+    tools.push(json!({"name":"native_workloads_list","module":"workloads","title":"External workload inventory","description":"Read local Docker, Podman, configured Incus project and Libvirt inventory. Excludes known and reserved Maestro-managed identities. No mutation or adoption.","readOnly":true,"destructive":false,"inputSchema":{"type":"object","additionalProperties":false,"properties":{}}}));
     // Keep the reference's individual lifecycle contracts on the existing provider path.
     tools.extend([
         json!({"name":"managed_container_action","module":"managed_lifecycle","title":"Manage a container","description":"Start, stop, restart or pull the configured image for one managed container.","readOnly":false,"destructive":true,"inputSchema":{"additionalProperties":false,"properties":{"service":{"type":"string","minLength":1,"maxLength":63},"container":{"type":"string","minLength":1,"maxLength":63},"action":{"enum":["start","stop","restart","pull"]},"confirm":{"type":"boolean"}},"required":["service","container","action","confirm"],"type":"object"}}),
@@ -2842,6 +2843,21 @@ pub async fn execute_tool(
                     ),
                 }
             }
+        }
+
+        "native_workloads_list" => {
+            if !arguments.is_empty() {
+                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "This tool accepts no arguments."));
+            }
+            let config = match store.read() {
+                Ok(Some(snapshot)) => match snapshot.config() {
+                    Ok(config) => config,
+                    Err(_) => return (StatusCode::CONFLICT, json_err("invalid_config", "Repair the authoritative configuration before classifying external workloads.")),
+                },
+                Ok(None) => Default::default(),
+                Err(_) => return (StatusCode::CONFLICT, json_err("invalid_config", "Cannot read the authoritative configuration.")),
+            };
+            (StatusCode::OK, json!(provider.external_inventory(&config).await))
         }
 
         "applications_list" => {

@@ -191,6 +191,49 @@ impl IncusProvider{
         ensure!(response.kind=="sync"&&response.error_code==0,"invalid or failed Incus response");
         serde_json::from_value(response.metadata).map_err(|_|anyhow!("unsupported Incus response metadata"))
     }
+    pub async fn external_inventory(&self, config: &Config) -> super::native_inventory::NativeInventory {
+        use super::native_inventory::{NativeInventory, NativeWorkload, reserved, valid_text};
+        let mut result = NativeInventory::default();
+        let mut projects = std::collections::BTreeSet::from(["default".to_owned()]);
+        projects.extend(config.bindings.values().filter(|b| b.kind == "project" && binding_name(&b.name)).map(|b| b.name.clone()));
+        // Explicitly scoped projects only; never follow a remote or discover other accounts.
+        if projects.len() > 16 {
+            result.warnings.push("Incus project inventory is limited to 16 configured projects.".into());
+            return result;
+        }
+        for project in projects {
+            let rows: Result<Vec<Value>> = self.get(Some(&project), "/1.0/instances?recursion=1").await;
+            match rows {
+                Ok(rows) if rows.len() <= 1024 => {
+                    for row in rows {
+                        let name = row.get("name").and_then(Value::as_str).unwrap_or("");
+                        let kind = row.get("type").and_then(Value::as_str).unwrap_or("");
+                        let state = row.get("status").and_then(Value::as_str).unwrap_or("unknown");
+                        let Some(native_config) = row.get("config").and_then(Value::as_object) else { continue };
+                        if !valid_text(name) || reserved(name) || !matches!(kind, "container" | "virtual-machine")
+                            || native_config.keys().any(|key| key.starts_with("user.maestro.")) {
+                            continue;
+                        }
+                        let addresses = row.pointer("/state/network").and_then(Value::as_object)
+                            .into_iter().flat_map(|net| net.values())
+                            .filter_map(|iface| iface.get("addresses").and_then(Value::as_array))
+                            .flatten().filter(|address| address.get("scope").and_then(Value::as_str) == Some("global"))
+                            .filter_map(|address| address.get("address").and_then(Value::as_str))
+                            .filter(|address| address.parse::<std::net::IpAddr>().is_ok())
+                            .take(32).map(str::to_owned).collect();
+                        result.workloads.push(NativeWorkload {
+                            provider: "incus".into(), scope: project.clone(), id: name.into(), name: name.into(),
+                            kind: if kind == "container" { "system-container".into() } else { "virtual-machine".into() },
+                            state: if valid_text(state) { state.to_owned() } else { "unknown".into() },
+                            image: String::new(), addresses,
+                        });
+                    }
+                }
+                _ => result.warnings.push(format!("Incus project {project}: inventory unavailable or exceeds limit.")),
+            }
+        }
+        result
+    }
     async fn run(&self,project:&str,definition:Option<&Definition>,args:&[&str],seconds:u64)->Result<()>{
         ensure!(self.binary.is_absolute()&&binding_name(project),"invalid Incus client or project");
         let mut argv=vec!["--force-local","--project",project];argv.extend_from_slice(args);

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import DefinitionEditor from '../lib/DefinitionEditor.svelte'
+  import NativeWorkloads from '../lib/NativeWorkloads.svelte'
   import Icon from '../lib/Icon.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
   import type { ConfigurationIssue, ConfigurationHealth } from '../lib/managed'
@@ -17,6 +18,7 @@
     id: string
     initialContainer?: string
     initialRemoval?: boolean
+    singleContainer?: boolean
     initialKind?: 'container' | 'vm'
     initialEngine?: 'podman' | 'docker'
     initialBackend?: 'quadlet' | 'compose' | 'libvirt' | 'incus'
@@ -43,13 +45,15 @@
   function openEditor(
     kind: 'container' | 'vm',
     engine?: 'podman' | 'docker',
-    backend?: 'quadlet' | 'compose' | 'libvirt' | 'incus'
+    backend?: 'quadlet' | 'compose' | 'libvirt' | 'incus',
+    singleContainer = false
   ) {
     editor = {
       id: '',
       initialKind: kind,
       initialEngine: engine,
-      initialBackend: backend
+      initialBackend: backend,
+      singleContainer
     }
   }
 
@@ -117,6 +121,8 @@
 
 <div class="toolbar">
   <div class="define-actions" role="group" aria-label="Define applications">
+    <button class="small-button primary" disabled={!allowWrites || activeJob !== null} onclick={() => openEditor('container', 'podman', 'quadlet', true)}>Single Podman container</button>
+    <button class="small-button primary" disabled={!allowWrites || activeJob !== null} onclick={() => openEditor('container', 'docker', 'compose', true)}>Single Docker container</button>
     <button class="small-button primary" disabled={!allowWrites || activeJob !== null} onclick={() => openEditor('container', 'podman', 'compose')}>Podman Compose</button>
     <button class="small-button primary" disabled={!allowWrites || activeJob !== null} onclick={() => openEditor('container', 'podman', 'quadlet')}>Podman Quadlet</button>
     <button class="small-button primary" disabled={!allowWrites || activeJob !== null} onclick={() => openEditor('container', 'docker', 'compose')}>Docker Compose</button>
@@ -130,12 +136,15 @@
   <button disabled={loading} onclick={() => load(true)}>{loading ? 'Checking…' : 'Check configuration'}</button>
 </div>
 
+<NativeWorkloads {query} />
+
 {#if editor}
   <dialog class="modal-card" aria-label="Application definition" bind:this={editorDialog} use:showModal onclose={() => { editor = null }}>
     {#key `${editor.id}-${editor.initialKind}-${editor.initialEngine}-${editor.initialBackend}`}
       <DefinitionEditor
         kind="service"
         resourceID={editor.id}
+        singleContainer={editor.singleContainer}
         initialContainer={editor.initialContainer}
         initialRemoval={editor.initialRemoval}
         initialKind={editor.initialKind}

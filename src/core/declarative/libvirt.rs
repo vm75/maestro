@@ -99,6 +99,35 @@ impl LibvirtProvider{
         ensure!(output.status.success(),"native Libvirt schema validation failed");
         Ok(())
     }
+    pub async fn external_inventory(&self, config: &Config) -> Result<Vec<super::native_inventory::NativeWorkload>> {
+        use super::native_inventory::{NativeWorkload, reserved, valid_text};
+        use futures_util::{StreamExt, TryStreamExt, stream};
+        let data = self.command(&["list", "--all", "--uuid"], 5, 256 * 1024, false).await?;
+        let ids = std::str::from_utf8(&data)?.split_whitespace().collect::<Vec<_>>();
+        ensure!(ids.len() <= 128, "native Libvirt inventory exceeds limit");
+        let scope = self.connection()?.to_owned();
+        let workloads = stream::iter(ids.into_iter().map(|id| {
+            let scope = scope.clone();
+            async move {
+                ensure!(uuid::Uuid::parse_str(id).is_ok(), "invalid native domain UUID");
+                if config.services.values().any(|s| s.backend == "libvirt" && s.vm.as_ref().is_some_and(|v| v.uuid == id)) {
+                    return Ok::<Option<NativeWorkload>, anyhow::Error>(None);
+                }
+                let name = self.command(&["domname", id], 5, 4096, false).await?;
+                let name = std::str::from_utf8(&name)?.trim();
+                if !valid_text(name) || reserved(name) { return Ok(None); }
+                let xml = self.command(&["dumpxml", "--domain", id], 5, super::MAX_CONFIG_BYTES, false).await?;
+                if std::str::from_utf8(&xml)?.contains(xml::NS) { return Ok(None); }
+                Ok(Some(NativeWorkload {
+                    provider: "libvirt".into(), scope, id: id.into(), name: name.into(),
+                    kind: "virtual-machine".into(), state: self.state(id).await?,
+                    image: String::new(), addresses: vec![],
+                }))
+            }
+        })).buffer_unordered(8).try_collect::<Vec<_>>();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(12), workloads).await??;
+        Ok(result.into_iter().flatten().collect())
+    }
     async fn exists(&self,id:&str,uuid:&str)->Result<bool>{
         let uuids=self.command(&["list","--all","--uuid"],5,256*1024,false).await.map_err(|_|anyhow!("Libvirt inventory is unavailable"))?;
         let uuids=std::str::from_utf8(&uuids)?;
