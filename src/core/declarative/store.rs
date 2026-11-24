@@ -206,6 +206,7 @@ impl Store {
         let candidate = parse(bytes)?;
         let directory = self.lock_directory()?;
         super::journal::ensure_idle(&directory)?;
+        super::backup_capture::ensure_idle_locked(self,&directory)?;
         self.save_locked(&directory, bytes, expected, &candidate)
     }
 
