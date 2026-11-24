@@ -3,7 +3,6 @@ use std::{
     fs::{self, File},
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use rustix::{
@@ -356,68 +355,16 @@ impl ComposeProvider {
     }
 
     pub async fn action(&self, service_id: &str, action: &str) -> Result<String> {
-        let file = self.compose_file(service_id);
-        ensure!(
-            file.exists(),
-            "compose file does not exist for {service_id}"
-        );
-        let cmd_action = match action {
-            "start" => "start",
-            "stop" => "stop",
-            "restart" => "restart",
-            "up" => "up",
-            "down" => "down",
-            other => return Err(anyhow!("unsupported compose action: {other}")),
-        };
-        if self.runner.is_test_mode() {
-            return Ok(format!("SIMULATED: Compose {cmd_action} on {service_id}"));
-        }
-        let file_str = file.to_str().ok_or_else(|| anyhow!("invalid path"))?;
-        let output = if cmd_action == "up" {
-            self.runner
-                .capture_bounded(
-                    &self.binary,
-                    &["compose", "-f", file_str, "up", "-d"],
-                    Duration::from_secs(60),
-                    64 * 1024,
-                )
-                .await?
-        } else {
-            self.runner
-                .capture_bounded(
-                    &self.binary,
-                    &["compose", "-f", file_str, cmd_action],
-                    Duration::from_secs(30),
-                    64 * 1024,
-                )
-                .await?
-        };
-        Ok(String::from_utf8_lossy(&output).trim().to_string())
+        ensure!(self.runner.is_test_mode(),"native Compose actions require authoritative configuration");
+        ensure!(super::id_valid(service_id) && self.compose_file(service_id).exists(),"unknown Compose service");
+        ensure!(matches!(action,"start"|"stop"|"restart"),"unsupported Compose action");
+        Ok(format!("SIMULATED: Compose {action} on {service_id}"))
     }
 
     pub async fn logs(&self, service_id: &str, tail: usize) -> Result<String> {
-        let file = self.compose_file(service_id);
-        ensure!(
-            file.exists(),
-            "compose file does not exist for {service_id}"
-        );
-        if self.runner.is_test_mode() {
-            return Ok(format!(
-                "SIMULATED: Compose logs for {service_id} (tail {tail})"
-            ));
-        }
-        let tail_str = tail.to_string();
-        let file_str = file.to_str().ok_or_else(|| anyhow!("invalid path"))?;
-        let output = self
-            .runner
-            .capture_bounded(
-                &self.binary,
-                &["compose", "-f", file_str, "logs", "--tail", &tail_str],
-                Duration::from_secs(15),
-                128 * 1024,
-            )
-            .await?;
-        Ok(String::from_utf8_lossy(&output).to_string())
+        ensure!(self.runner.is_test_mode(),"native Compose logs require authoritative configuration");
+        ensure!(super::id_valid(service_id) && self.compose_file(service_id).exists(),"unknown Compose service");
+        Ok(format!("SIMULATED: Compose logs for {service_id} (tail {tail})"))
     }
 }
 
