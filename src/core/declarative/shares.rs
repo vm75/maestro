@@ -312,6 +312,44 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
+    fn reference_protocol_sets_resolve_storage_and_default_nfs_options() {
+        let provider = ShareProvider::new("/etc/samba/server-man.conf".into(),
+            "/etc/exports.d/server-man.exports".into(),"/srv/workloads".into());
+        let config = super::super::parse(br#"version: 1
+storage:
+  files: {kind: directory, path: volumes/files}
+  external: {kind: directory, path: /srv/archive, external: true}
+shares:
+  archive: {protocol: nfs, storage: external, enabled: true, clients: ["192.0.2.5/24"]}
+  disabled: {protocol: nfs, storage: files, enabled: false, clients: ["*"]}
+  docs: {protocol: samba, storage: files, enabled: true, users: ["alice"], path: docs}
+"#).unwrap();
+        let nfs = provider.definitions("nfs",&config,false).unwrap();
+        assert_eq!(nfs.len(),1);
+        assert_eq!(nfs[0].name,"archive");
+        assert_eq!(nfs[0].path,"/srv/archive");
+        assert_eq!(nfs[0].clients,["192.0.2.0/24"]);
+        assert!(nfs[0].root_squash);
+        assert_eq!(nfs[0].security,"sys");
+        let samba = provider.definitions("samba",&config,false).unwrap();
+        assert_eq!(samba.len(),1);
+        assert_eq!(samba[0].path,"/srv/workloads/volumes/files/docs");
+        assert_eq!(samba[0].users,["alice"]);
+        assert!(!provider.native_enabled());
+    }
+
+    #[test]
+    fn inspection_requires_both_configured_and_runtime_state() {
+        let make = |matches,runtime_matches,available| DefinitionState {
+            revision:"a".repeat(64),matches,runtime_matches,available
+        };
+        assert!(make(true,true,true).exact());
+        assert!(!make(true,false,true).exact());
+        assert!(!make(false,true,true).exact());
+        assert!(!make(true,true,false).exact());
+    }
+
+    #[test]
     fn test_render_samba_and_nfs() {
         let mut shares = BTreeMap::new();
         shares.insert(
