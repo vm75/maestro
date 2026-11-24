@@ -56,7 +56,20 @@ fn unit_arg(value: &str) -> Result<String> {
     Ok(format!("\"{}\"",value.replace('\\',"\\\\").replace('"',"\\\"").replace('%',"%%").replace('$',"$$")))
 }
 
-fn render_boot(config: &Config,id: &str,binary: &Path,file: &Path) -> Result<Vec<u8>> {
+fn short_mount_sources(config: &Config,id: &str,storage_base: &Path) -> Result<Vec<PathBuf>> {
+    let service=config.services.get(id).ok_or_else(||anyhow!("unknown Compose service"))?;
+    let mut result=BTreeSet::new();
+    for mount in service.containers.values().flat_map(|c|&c.mounts) {
+        if mount.selinux.is_empty()&&!mount.chown{continue}
+        let storage=config.storage.get(&mount.storage).ok_or_else(||anyhow!("missing Compose storage reference"))?;
+        let base=storage_base.join(&storage.path);
+        let source=if mount.path.is_empty(){base}else{base.join(&mount.path)};
+        result.insert(source);
+    }
+    Ok(result.into_iter().collect())
+}
+
+fn render_boot(config: &Config,id: &str,binary: &Path,file: &Path,storage_base:&Path) -> Result<Vec<u8>> {
     let service = config.services.get(id).ok_or_else(|| anyhow!("unknown Compose service"))?;
     ensure!(binary.is_absolute() && file.is_absolute(),"Compose bootstrap paths must be absolute");
     let directory = file.parent().and_then(Path::to_str).ok_or_else(|| anyhow!("invalid Compose directory"))?;
@@ -78,7 +91,14 @@ fn render_boot(config: &Config,id: &str,binary: &Path,file: &Path) -> Result<Vec
         !line.strip_prefix("UnsetEnvironment=").is_some_and(|key| env(&service.engine).iter().any(|(k,_)| *k==key))
     }).map(|line| format!("{line}\n")).collect();
     for (key,value) in env(&service.engine) { result.push_str(&format!("Environment={}\n",unit_arg(&format!("{key}={value}"))?)); }
-    result.push_str(&format!("WorkingDirectory={}\nExecStart=",directory.replace('%',"%%")));
+    result.push_str(&format!("WorkingDirectory={}\n",directory.replace('%',"%%")));
+    // The reference's short bind options can cause providers to create a
+    // missing source. Preserve Maestro's no-implicit-data-creation boundary.
+    for source in short_mount_sources(config,id,storage_base)? {
+        let source=source.to_str().ok_or_else(||anyhow!("non-UTF-8 Compose mount source"))?;
+        result.push_str(&format!("ExecStartPre=/usr/bin/test -e {}\n",unit_arg(source)?));
+    }
+    result.push_str("ExecStart=");
     let mut argv = vec![binary.to_str().ok_or_else(|| anyhow!("invalid engine path"))?.to_owned()];
     if service.engine == "podman" { argv.push("--remote=false".into()); }
     argv.extend(args(file,id,&["up","--detach","--no-build"])?);
@@ -209,7 +229,7 @@ impl ComposeProvider {
         let Some(service)=config.services.get(id) else{return Ok(None)};
         ensure!(self.matches(service),"resource belongs to another Compose provider");
         let compose=render_compose(config,id,&runtime_fingerprint(config,id)?,&self.storage_base)?.into_bytes();
-        let boot=render_boot(config,id,&self.binary,&self.compose_file(id))?;
+        let boot=render_boot(config,id,&self.binary,&self.compose_file(id),&self.storage_base)?;
         ensure!(compose.len()<=super::super::MAX_CONFIG_BYTES && boot.len()<=super::super::MAX_CONFIG_BYTES,"Compose artifacts exceed limit");
         Ok(Some(Artifacts{compose,boot}))
     }
@@ -270,6 +290,9 @@ impl ComposeProvider {
     }
     async fn validate_candidate(&self,config:&Config,id:&str)->Result<()>{
         let art=self.artifacts(config,id)?.ok_or_else(||anyhow!("missing Compose definition"))?;
+        for source in short_mount_sources(config,id,&self.storage_base)? {
+            ensure!(source.exists(),"provision the declared bind source before applying SELinux or ownership options");
+        }
         let temp=TempDefinition::new(&art.compose)?;
         self.compose_command(id,&temp.0.join("compose.yaml"),&["config"],15,0,true).await
             .map_err(|_|anyhow!("installed Compose provider rejected the generated definition"))?;
@@ -467,15 +490,15 @@ mod tests {
         let fingerprint=runtime_fingerprint(&c,"app").unwrap();
         c.services.get_mut("app").unwrap().enabled=true;
         assert_eq!(runtime_fingerprint(&c,"app").unwrap(),fingerprint);
-        let boot=String::from_utf8(render_boot(&c,"app",Path::new("/usr/bin/docker"),Path::new("/home/user/generated/app/compose.yaml")).unwrap()).unwrap();
+        let boot=String::from_utf8(render_boot(&c,"app",Path::new("/usr/bin/docker"),Path::new("/home/user/generated/app/compose.yaml"),Path::new("/storage")).unwrap()).unwrap();
         assert!(boot.contains("RemainAfterExit=yes"));
         assert!(boot.contains("WorkingDirectory=/home/user/generated/app"));
         assert!(boot.contains("\"--project-name\""));
         assert!(boot.contains("\"--env-file\" \"/dev/null\""));
         assert!(boot.contains("DOCKER_HOST=unix:///var/run/docker.sock"));
-        let spaced=String::from_utf8(render_boot(&c,"app",Path::new("/usr/bin/docker"),Path::new("/home/user/has space %percent/compose.yaml")).unwrap()).unwrap();
+        let spaced=String::from_utf8(render_boot(&c,"app",Path::new("/usr/bin/docker"),Path::new("/home/user/has space %percent/compose.yaml"),Path::new("/storage")).unwrap()).unwrap();
         assert!(spaced.contains("WorkingDirectory=/home/user/has space %%percent\n"));
-        assert!(render_boot(&c,"app",Path::new("/usr/bin/docker"),Path::new("/home/user/bad\npath/compose.yaml")).is_err());
+        assert!(render_boot(&c,"app",Path::new("/usr/bin/docker"),Path::new("/home/user/bad\npath/compose.yaml"),Path::new("/storage")).is_err());
     }
     #[test]
     fn parses_docker_lines_and_podman_arrays_without_claiming_foreign_projects(){
