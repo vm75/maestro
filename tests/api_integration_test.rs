@@ -2596,6 +2596,12 @@ async fn linux_workloads_and_applications_lifecycle() {
     let (status, _) = call("managed_config_readiness", serde_json::json!({"force":true})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
+    let (status, _) = call("managed_config_check", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let (status, services) = call("managed_services", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(services, serde_json::json!({"configured":false,"services":[]}));
+
     // 2. Plan a valid workload
     let yaml = r#"version: 1
 storage:
@@ -2654,6 +2660,15 @@ shares:
     assert_eq!(readiness["runtimeChecked"], false);
     assert!(readiness["health"]["issues"].is_array());
     assert!(readiness["health"]["runtimeCheckedAt"].is_null());
+
+    let (status, health) = call("managed_config_check", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(health["issues"].is_array());
+    assert!(health["runtimeCheckedAt"].is_null());
+    let (status, services) = call("managed_services", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(services["services"][0]["id"], "web");
+    assert_eq!(services["services"][0]["backend"], "docker/compose");
 
     // 4. Check applications_list
     let (status, val) = call("applications_list", serde_json::json!({})).await;
@@ -2812,6 +2827,8 @@ async fn linux_mcp_protocol_flow() {
         "managed_service_restart",
         "managed_service_logs",
         "managed_config_readiness",
+        "managed_config_check",
+        "managed_services",
     ] {
         let actual = tools.iter().find(|tool| tool["name"] == name).unwrap();
         let expected = reference["tools"]
