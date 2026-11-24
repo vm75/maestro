@@ -611,8 +611,33 @@ pub async fn helper_main() -> Result<()> {
     }
     let request = reference::decode(&input)?;
     let _lock = lock_root_operation()?;
-    let response = timeout(Duration::from_secs(25 * 60), reference::execute(request, &policy, caller_uid))
-        .await.context("context deadline exceeded")?;
+    let (cancel, receiver) = tokio::sync::watch::channel(false);
+    // A share apply may have published its candidate before activation fails.
+    // Keep the lock and await its bounded rollback on interruption or timeout.
+    let share_apply = request.operation == "shares_definitions_apply";
+    let response = if share_apply {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut terminate = signal(SignalKind::terminate())?;
+        let mut interrupt = signal(SignalKind::interrupt())?;
+        let operation = reference::execute(request, &policy, caller_uid, receiver);
+        tokio::pin!(operation);
+        tokio::select! {
+            response = &mut operation => response,
+            _ = async {
+                tokio::select! {
+                    _ = terminate.recv() => {},
+                    _ = interrupt.recv() => {},
+                    _ = tokio::time::sleep(Duration::from_secs(25 * 60)) => {},
+                }
+            } => {
+                cancel.send_replace(true);
+                operation.await
+            }
+        }
+    } else {
+        timeout(Duration::from_secs(25 * 60), reference::execute(request, &policy, caller_uid, receiver))
+            .await.context("context deadline exceeded")?
+    };
     let mut stdout = std::io::stdout().lock();
     serde_json::to_writer(&mut stdout, &response)?;
     stdout.write_all(b"\n")?;
