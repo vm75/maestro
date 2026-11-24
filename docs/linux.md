@@ -63,8 +63,10 @@ installer and guest validation for these rules are not yet complete.
 
 The separate, Linux-only `maestro-admin` is a root-owned one-shot program,
 invoked exclusively via fixed `sudo -n -- /usr/local/libexec/maestro-admin`
-without command-line arguments. It accepts a small versioned JSON request on
-stdin, does not listen on a socket and has no general command execution verb.
+without command-line arguments. Management operations use Server Man's
+one-shot JSON operation/arguments envelope on stdin. The earlier versioned
+capability probe remains transitional. The helper does not listen on a socket
+and has no general command execution verb.
 The root-owned private policy file is fixed at
 `/etc/maestro/admin-policy.json`, with the following **illustrative** shape:
 
@@ -73,7 +75,9 @@ The root-owned private policy file is fixed at
   "version": 1,
   "workload_uid": 1001,
   "system_units": ["example.service"],
-  "package_writes": false
+  "package_writes": false,
+  "samba_password": false,
+  "share_writes": false
 }
 ```
 
@@ -349,7 +353,8 @@ The privileged helper policy now has independent default-deny flags:
   "workload_uid": 1001,
   "system_units": [],
   "package_writes": false,
-  "samba_password": false
+  "samba_password": false,
+  "share_writes": false
 }
 ```
 
@@ -360,7 +365,17 @@ capability alone. A matching root-owned helper policy, strict sudoers rule,
 native backend readiness and explicit operation confirmation remain required.
 The Samba password tool never accepts a selected account; the root helper
 resolves the non-root sudo caller and passes the password only via stdin.
-Samba/NFS candidate publication and server setup are still unavailable.
+The helper now has source implementations of the Server Man native share
+definition validation/publication/rollback and server setup operations.
+Publication additionally requires `share_writes: true` in the root-owned
+policy. Setup also requires `package_writes: true` and the fixed mandatory
+system units in `system_units`: APT Samba uses `smbd.service` and
+`wsdd-server.service`; other supported Samba distributions use
+`smb.service` and `wsdd.service`; NFS uses `nfs-server.service`.
+Optional NetBIOS services are attempted only when authorized.
+The main daemon's native publication remains gated pending integration and
+native validation. These are source-level development contracts, not approval
+to install or enable the helper on production hosts.
 
 Configuration's new backup panel is **metadata-only and non-restorable**.
 Private configuration history retains up to eight recent revisions and displays
