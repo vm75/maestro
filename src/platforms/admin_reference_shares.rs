@@ -4,7 +4,7 @@ use std::{collections::{BTreeMap, BTreeSet}, fs, path::{Path, PathBuf}};
 use anyhow::{Result, ensure};
 use serde_json::{Map, Value, json};
 
-use super::{Failure, OperationResult, Policy, SYSTEMD_ENV, Tail, MAX_TAIL, capture, capture_in, program, run, string};
+use super::{Failure, OperationResult, Policy, PackageBackend, SYSTEMD_ENV, Tail, MAX_TAIL, admin_packages, capture, capture_in, program, run, safe_system_unit, service, string};
 use tokio::{sync::watch, time::{Duration, timeout}};
 use crate::core::declarative::{
     native_shares::{Definition, Export, connections, option_flag, option_value, parse_exports, parse_samba, share_key},
@@ -539,15 +539,124 @@ async fn replace_definitions(protocol: &str, old: &Snapshot, previous: &[Definit
     Ok(json!({"revision":revision}))
 }
 
+// shares/setup.go prepare and updates/share_server.go. Native setup
+// is separate from definition publication; it never edits firewall rules or
+// installs credentials and never rewrites administrator-owned share data.
+fn setup_units(protocol: &str, family: admin_packages::Family) -> OperationResult<(&'static str, Option<&'static str>)> {
+    match protocol {
+        "samba" if family == admin_packages::Family::Apt => Ok(("smbd.service",Some("wsdd-server.service"))),
+        "samba" => Ok(("smb.service",Some("wsdd.service"))),
+        "nfs" => Ok(("nfs-server.service",None)),
+        _ => Err(Failure::invalid("unsupported share protocol")),
+    }
+}
+
+fn ensure_native_directory(path: &Path) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    for ancestor in path.ancestors().filter(|p| *p != path) {
+        let metadata = fs::symlink_metadata(ancestor)?;
+        ensure!(metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0,
+            "native share configuration directory has an untrusted ancestor");
+    }
+    match fs::DirBuilder::new().mode(0o755).create(path) {
+        Ok(()) => {},
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
+        Err(error) => return Err(error.into()),
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    ensure!(metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0,
+        "native share configuration directory is not trusted");
+    Ok(())
+}
+
+fn samba_setup_data(original: &Snapshot) -> Result<Option<Vec<u8>>> {
+    let text = std::str::from_utf8(&original.data)?;
+    for line in text.split('\n') {
+        if let Some((key,value)) = line.trim().split_once('=') {
+            if key.trim().eq_ignore_ascii_case("include") && value.trim() == SAMBA_MANAGED {
+                shadow(&original.data,SAMBA_MANAGED)?;
+                return Ok(None);
+            }
+        }
+    }
+    if original.exists {
+        let mut data = original.data.clone();
+        data.extend_from_slice(format!("\ninclude = {SAMBA_MANAGED}\n").as_bytes());
+        Ok(Some(data))
+    } else {
+        Ok(Some(format!("[global]\n\tworkgroup = WORKGROUP\n\tserver string = %h server (Samba)\n\tserver role = standalone server\n\tmulticast dns register = yes\ninclude = {SAMBA_MANAGED}\n").into_bytes()))
+    }
+}
+
+async fn prepare_server(protocol: &str) -> Result<()> {
+    if protocol == "nfs" {
+        return ensure_native_directory(Path::new(NFS_DIR));
+    }
+    ensure!(protocol == "samba","unsupported share protocol");
+    let managed = defs::read_file(Path::new(SAMBA_MANAGED),true)?;
+    defs::load("samba",&managed).map_err(|_| anyhow::anyhow!("Samba managed filename already contains unowned or invalid configuration"))?;
+    let path = Path::new(SAMBA_MAIN);
+    let original = defs::read_file(path,true)?;
+    let directory = path.parent().expect("fixed Samba path");
+    ensure_native_directory(directory)?;
+    let Some(data) = samba_setup_data(&original)? else { return Ok(()) };
+    let candidate = defs::Candidate::new(directory,&data,if original.exists { original.mode } else { 0o644 })?;
+    samba_effective(candidate.text()).await?;
+    ensure!(defs::same_file(path,&original), "Samba configuration changed during setup; retry");
+    // A directory fsync failure can follow a successful rename; attempt
+    // rollback only if our exact candidate remains at the destination.
+    if let Err(error) = candidate.publish(path) {
+        if defs::read_file(path,true).is_ok_and(|now| now.exists && now.data == data) {
+            defs::restore(path,&original,&data)?;
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+async fn setup_action(unit: &str, action: &str, policy: &Policy, output: &mut Tail) -> OperationResult<Value> {
+    let args = json!({"scope":"system","unit":unit});
+    service(&format!("services_{action}"),args.as_object().expect("fixed service input"),policy,output).await
+}
+
+async fn setup(protocol: &str, policy: &Policy, output: &mut Tail) -> OperationResult<Value> {
+    if !policy.share_writes || !policy.package_writes {
+        return Err(Failure::denied("Share server setup is disabled by root-owned policy"));
+    }
+    let mut backend = PackageBackend::new();
+    let family = backend.family.ok_or_else(|| Failure::invalid("unsupported dependency target or package manager"))?;
+    let (unit,discovery) = setup_units(protocol,family)?;
+    // Retain Maestro's existing independent service authorization. Check
+    // mandatory units before installing packages; optional NetBIOS units are
+    // attempted only when specifically allowed.
+    for required in std::iter::once(unit).chain(discovery) {
+        if !safe_system_unit(required) || !policy.system_units.iter().any(|allowed| allowed == required) {
+            return Err(Failure::denied(format!("Share server setup requires root policy authorization for {required}")));
+        }
+    }
+    let names = admin_packages::dependency_packages(family,&backend.distribution_id,protocol)
+        .map_err(|_| Failure::invalid("unsupported dependency target or package manager"))?;
+    backend.install(Some(names),output).await?;
+    prepare_server(protocol).await.map_err(|e|Failure::failed(e.to_string()))?;
+    for action in ["enable","start"] { setup_action(unit,action,policy,output).await?; }
+    if let Some(discovery) = discovery {
+        for action in ["enable","start"] {
+            setup_action(discovery,action,policy,output).await
+                .map_err(|e|Failure::failed(format!("WS-Discovery setup ({discovery}): {}",e.message)))?;
+        }
+        for optional in ["nmbd.service","nmb.service"] {
+            if policy.system_units.iter().any(|allowed| allowed == optional) {
+                for action in ["enable","start"] { let _ = setup_action(optional,action,policy,output).await; }
+            }
+        }
+    }
+    Ok(json!({"protocol":protocol,"unit":unit,"action":"server configured and started"}))
+}
+
 pub(super) async fn execute(operation: &str, input: &Map<String,Value>, policy: &Policy, output: &mut Tail, cancel: watch::Receiver<bool>) -> OperationResult<Value> {
     let protocol = string(input,"protocol");
     if operation == "shares_list" { return list(protocol).await; }
-    if operation == "shares_setup" {
-        if !policy.share_writes || !policy.package_writes {
-            return Err(Failure::denied("Share server setup is disabled by root-owned policy"));
-        }
-        return Err(Failure::unavailable("Native reference share setup has not yet been ported"));
-    }
+    if operation == "shares_setup" { return setup(protocol,policy,output).await; }
     let definitions = defs::decode(string(input,"definitions")).map_err(|e|Failure::invalid(e.to_string()))?;
     let definitions = defs::normalize(protocol,definitions,operation != "shares_definitions_inspect")
         .map_err(|e|Failure::invalid(e.to_string()))?;
@@ -571,6 +680,37 @@ pub(super) async fn execute(operation: &str, input: &Map<String,Value>, policy: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_preserves_main_file_and_uses_fixed_units() {
+        let original = Snapshot { data:b"[global]\nworkgroup = CUSTOM\n[existing]\npath = /srv/data\n".to_vec(), exists:true, mode:0o640 };
+        let added = samba_setup_data(&original).unwrap().unwrap();
+        assert!(added.starts_with(&original.data));
+        assert!(String::from_utf8_lossy(&added).ends_with(&format!("\ninclude = {SAMBA_MANAGED}\n")));
+        let configured = Snapshot { data:added.clone(), exists:true, mode:0o640 };
+        assert!(samba_setup_data(&configured).unwrap().is_none());
+        let duplicate = Snapshot { data:[added,format!("include = {SAMBA_MANAGED}\n").into_bytes()].concat(),exists:true,mode:0o640 };
+        assert!(samba_setup_data(&duplicate).is_err());
+        assert_eq!(setup_units("samba",admin_packages::Family::Apt).unwrap(),("smbd.service",Some("wsdd-server.service")));
+        assert_eq!(setup_units("samba",admin_packages::Family::Dnf).unwrap(),("smb.service",Some("wsdd.service")));
+        assert_eq!(setup_units("nfs",admin_packages::Family::Pacman).unwrap(),("nfs-server.service",None));
+        assert!(setup_units("unknown",admin_packages::Family::Apt).is_err());
+    }
+
+    #[test]
+    fn nfs_verification_is_limited_to_touched_entries() {
+        let old = Export { path:"/srv/docs".into(),client:"192.0.2.0/24".into(),options:vec!["ro".into()] };
+        let mut next = old.clone(); next.client = "2001:db8::/64".into();
+        let unrelated = Export { path:"/srv/other".into(),client:"*".into(),options:vec!["rw".into()] };
+        assert_eq!(target(&next),"[2001:db8::]/64:/srv/docs");
+        let before = BTreeMap::from([(key(&old),old.clone())]);
+        let after = BTreeMap::from([(key(&next),next.clone())]);
+        assert!(verify_nfs(&before,&after,&[next.clone(),unrelated.clone()]).is_ok());
+        assert!(verify_nfs(&before,&after,&[old,next.clone(),unrelated.clone()]).is_err());
+        assert!(verify_nfs(&before,&after,&[unrelated]).is_err());
+        let mut wrong = next; wrong.options = vec!["rw".into()];
+        assert!(verify_nfs(&before,&after,&[wrong]).is_err());
+    }
 
     #[test]
     fn nfs_conflicts_block_unmanaged_and_unrestorable_entries() {
