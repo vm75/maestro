@@ -15,7 +15,7 @@ pub struct Config {
     pub secrets: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DiskSource {
     pub path: String,
