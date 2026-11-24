@@ -304,7 +304,7 @@ fn inspect_archive(c: &Config, export: &NativeExport, file: File, end: Instant) 
     let mut archive=tar::Archive::new(file);
     let mut members=BTreeMap::new();let mut index=None;
     for row in archive.entries()?{
-        ensure!(Instant::now()<end&&members.len()<50000,"Incus archive verification exceeded bounds");
+        capture::check_time(end)?;ensure!(members.len()<50000,"Incus archive verification exceeded bounds");
         let mut row=row?;
         let raw=row.path_bytes();
         let name=std::str::from_utf8(&raw)?.trim_end_matches('/').to_owned();
@@ -329,7 +329,7 @@ fn inspect_archive(c: &Config, export: &NativeExport, file: File, end: Instant) 
             index=Some(serde_yaml::from_slice::<serde_yaml::Value>(&bytes)?);
         }else{
             let mut buffer=[0;65536];let mut count=0u64;
-            loop{ensure!(Instant::now()<end,"Incus archive verification timed out");let n=row.read(&mut buffer)?;if n==0{break}count+=n as u64;}
+            loop{capture::check_time(end)?;let n=row.read(&mut buffer)?;if n==0{break}count+=n as u64;}
             ensure!(count==size,"truncated Incus archive member");
         }
     }
@@ -338,7 +338,7 @@ fn inspect_archive(c: &Config, export: &NativeExport, file: File, end: Instant) 
     let mut file=archive.into_inner();
     let mut trailing=[0;65536];let mut count=0u64;
     loop {
-        ensure!(Instant::now()<end,"Incus archive verification timed out");
+        capture::check_time(end)?;
         let n=file.read(&mut trailing)?;if n==0{break}
         ensure!(trailing[..n].iter().all(|b|*b==0),"unexpected data after Incus tar end");
         count+=n as u64;
@@ -458,7 +458,7 @@ fn resolve_references(exports: &[NativeExport], volumes: &mut BTreeMap<usize,BTr
     export: &NativeExport, references: References, end: Instant) -> Result<()> {
     let consumer = &export.resources[0];
     for (pool, name) in references {
-            ensure!(Instant::now() < end, "Incus archive dependency verification timed out");
+            capture::check_time(end)?;
             let mut matches = volumes.keys().copied().filter(|at| {
                 let candidate = &exports[*at];
                 candidate.native.pool == pool && candidate.native.name == name

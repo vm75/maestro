@@ -61,8 +61,8 @@ fn unique_manifest_json(raw:&[u8])->Result<()>{
     let mut d=serde_json::Deserializer::from_slice(raw);
     let result=Node(0).deserialize(&mut d);
     check_cancel()?;
-    result?;
-    d.end()?;
+    result.map_err(|_|anyhow!("invalid private backup manifest JSON"))?;
+    d.end().map_err(|_|anyhow!("invalid private backup manifest JSON"))?;
     Ok(())
 }
 const MAX_ENTRIES:usize=50000;
@@ -98,8 +98,8 @@ fn is_zero(v:&u64)->bool{*v==0}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Manifest{
-    source_root:String,principal:Principal,verification_required:Vec<String>,version:u8,stage:String,
-    revision:String,created_at:DateTime<Utc>,server_man_version:String,files:Vec<ManifestFile>,
+    source_root:String,principal:Principal,#[serde(with="go_slice")]verification_required:Vec<String>,version:u8,stage:String,
+    revision:String,#[serde(serialize_with="serialize_go_time")]created_at:DateTime<Utc>,server_man_version:String,files:Vec<ManifestFile>,
     #[serde(with="go_slice")]native_exports:Vec<NativeExport>,
     #[serde(with="go_slice")]running_workloads_at_backup:Vec<String>,
     #[serde(with="go_slice")]resumed_workloads:Vec<String>,
@@ -174,6 +174,7 @@ fn pending(j:&Recovery)->bool{
 }
 fn validate(j:&Recovery)->Result<()>{
     let a=&j.artifact;
+    ensure!(a.reviewed_destination.as_ref().is_none_or(|d|d.inode!=0&&d.device==a.parent_device&&(d.device,d.inode)!=(a.device,a.inode)),"invalid reviewed destination identity");
     let stage=Path::new(&a.staging_path);let dest=Path::new(&j.destination);
     let nonce=stage.file_name().and_then(|v|v.to_str()).and_then(|v|v.strip_prefix(".staging-backup-")).unwrap_or("");
     ensure!(j.version==1&&store::valid_revision(&j.revision)&&clean_absolute(&j.destination)&&clean_absolute(&a.staging_path)
@@ -268,7 +269,7 @@ fn check_cancel()->Result<()>{
     if BACKUP_CANCEL.try_with(|s|*s.borrow()).unwrap_or(false){return Err(BackupCancelled.into())}
     Ok(())
 }
-fn check_time(end:Instant)->Result<()>{check_cancel()?;ensure!(Instant::now()<end,"backup deadline exceeded");Ok(())}
+pub(super) fn check_time(end:Instant)->Result<()>{check_cancel()?;ensure!(Instant::now()<end,"backup deadline exceeded");Ok(())}
 async fn cancelled(){
     let Ok(mut s)=BACKUP_CANCEL.try_with(Clone::clone) else{return std::future::pending::<()>().await};
     if s.wait_for(|v|*v).await.is_err(){std::future::pending::<()>().await;}
@@ -283,8 +284,27 @@ pub(super) fn hash_file(mut file:&File,end:Instant)->Result<(u64,String)>{
     ensure!(count==before.len()&&same(&before,&file.metadata()?),"backup file changed while hashing");
     Ok((count,format!("{:x}",h.finalize())))
 }
+// Go uses RFC3339Nano, trimming all trailing fractional zeroes.
+fn go_timestamp(t:&DateTime<Utc>)->String{
+    let mut value=t.to_rfc3339_opts(chrono::SecondsFormat::Nanos,true);
+    value.pop(); // Z
+    while value.ends_with('0'){value.pop();}
+    if value.ends_with('.') {value.pop();}
+    value.push('Z');
+    value
+}
+fn serialize_go_time<S:serde::Serializer>(t:&DateTime<Utc>,s:S)->std::result::Result<S::Ok,S::Error>{
+    s.serialize_str(&go_timestamp(t))
+}
+// encoding/json escapes HTML-sensitive characters and Unicode line separators.
+// Only string contents can contain these characters in valid JSON.
+fn encode_manifest(m:&Manifest)->Result<Vec<u8>>{
+    let raw=serde_json::to_string(m)?;
+    Ok(raw.replace('&',"\\u0026").replace('<',"\\u003c").replace('>',"\\u003e")
+        .replace('\u{2028}',"\\u2028").replace('\u{2029}',"\\u2029").into_bytes())
+}
 fn metadata(meta:&Metadata,kind:&str,path:&str)->Result<ManifestFile>{
-    let ts=|sec,nsec|DateTime::<Utc>::from_timestamp(sec,nsec as u32).map(|t|t.to_rfc3339_opts(chrono::SecondsFormat::AutoSi,true)).context("invalid file timestamp");
+    let ts=|sec,nsec|DateTime::<Utc>::from_timestamp(sec,nsec as u32).map(|t|go_timestamp(&t)).context("invalid file timestamp");
     Ok(ManifestFile{kind:kind.into(),uid:meta.uid(),gid:meta.gid(),atime:ts(meta.atime(),meta.atime_nsec())?,
         mtime:ts(meta.mtime(),meta.mtime_nsec())?,mode:format!("{:04o}",meta.mode()&0o7777),source_link_count:meta.nlink(),
         source_allocated_bytes:meta.blocks().saturating_mul(512),captured_link_count:if kind=="file"{1}else{0},
@@ -608,6 +628,7 @@ impl Publication{
         let stage=Path::new(&self.artifact.staging_path).file_name().unwrap();
         let dest=Path::new(&self.destination).file_name().unwrap();
         let _reviewed=destination_matches(&self.parent,dest.to_str().context("invalid destination leaf")?,self.artifact.reviewed_destination.as_ref())?;
+        self.check()?;
         check_time(end)?;
         // Atomic directory rename refuses nonempty destinations. Never unlink
         // the reviewed empty directory before publication.
@@ -747,9 +768,11 @@ fn validate_file_metadata(files:&[ManifestFile])->Result<()>{
     let mut entries=BTreeMap::new();
     let mut counts=BTreeMap::<&str,u64>::new();
     for f in files{
+        check_cancel()?;
         ensure!(portable(&f.bundle_path)&&f.bundle_path!="manifest.json"&&!f.bundle_path.starts_with("manifest.json/")
             &&!f.bundle_path.starts_with("native/")&&f.bundle_path!="native","invalid capture path");
-        ensure!(f.source_link_count>0&&f.mode.len()==4&&u32::from_str_radix(&f.mode,8).is_ok_and(|v|v<=0o7777)
+        ensure!(f.source_link_count>0&&f.size_bytes<=i64::MAX as u64&&f.source_allocated_bytes<=i64::MAX as u64
+            &&f.mode.len()==4&&f.mode.bytes().all(|b|(b'0'..=b'7').contains(&b))
             &&DateTime::parse_from_rfc3339(&f.atime).is_ok()&&DateTime::parse_from_rfc3339(&f.mtime).is_ok(),"invalid captured metadata");
         ensure!(matches!(f.xattr_coverage.as_str(),"visible"|"unsupported_source_fs")&&f.xattrs.len()<=256
             &&(f.xattr_coverage!="unsupported_source_fs"||f.xattrs.is_empty()),"invalid attribute coverage");
@@ -777,6 +800,7 @@ fn validate_file_metadata(files:&[ManifestFile])->Result<()>{
         ensure!(entries.insert(f.bundle_path.as_str(),f).is_none(),"duplicate manifest payload");
     }
     for f in files{
+        check_cancel()?;
         if f.kind=="file"{ensure!(counts[f.bundle_path.as_str()]==f.captured_link_count,"manifest hardlink count differs");}
         else if f.kind=="hardlink"{
             let canonical=entries.get(f.hardlink_to.as_str()).context("hardlink canonical payload missing")?;
@@ -796,11 +820,13 @@ fn expected_paths(m:&Manifest)->Result<BTreeMap<String,(String,u64,String)>>{
     validate_file_metadata(&m.files)?;
     let mut expected=BTreeMap::new();
     for f in &m.files{
+        check_cancel()?;
         ensure!(expected.insert(f.bundle_path.clone(),(f.kind.clone(),f.size_bytes,f.sha256.clone())).is_none(),"duplicate manifest payload");
     }
     ensure!(expected.get("server-man.yaml").is_some_and(|(k,_,hash)|k=="file"&&hash==&m.revision),"capture has no pinned configuration");
     for export in &m.native_exports{
-        ensure!(portable(&export.bundle_path)&&export.bundle_path.starts_with("native/")&&export.size_bytes>0
+        check_cancel()?;
+        ensure!(portable(&export.bundle_path)&&export.bundle_path.starts_with("native/")&&export.size_bytes>0&&export.size_bytes<=i64::MAX as u64&&!export.native.name.is_empty()
             &&store::valid_revision(&export.sha256)&&export.backend==export.native.backend
             &&matches!((export.backend.as_str(),export.kind.as_str()),("incus","incus_instance_export")|("incus","incus_custom_volume")|("libvirt","libvirt_guest_state"))
             && !export.resources.is_empty() && export.resources.len()<=128
@@ -810,6 +836,7 @@ fn expected_paths(m:&Manifest)->Result<BTreeMap<String,(String,u64,String)>>{
     }
     let keys:Vec<_>=expected.keys().cloned().collect();
     for key in keys{
+        check_cancel()?;
         let mut at=Path::new(&key).parent();
         let mut depth=0;
         while let Some(p)=at.filter(|p|!p.as_os_str().is_empty()){
@@ -825,8 +852,16 @@ fn expected_paths(m:&Manifest)->Result<BTreeMap<String,(String,u64,String)>>{
 fn read_small(root:&File,path:&str,limit:usize)->Result<Vec<u8>>{
     let file=read_payload(root,path,false)?;
     ensure!(private(&file.metadata()?,false),"private capture metadata permissions differ");
-    let mut raw=Vec::new();file.take(limit as u64+1).read_to_end(&mut raw)?;
-    ensure!(raw.len()<=limit,"capture metadata exceeds limit");Ok(raw)
+    let before=file.metadata()?;
+    let mut reader=(&file).take(limit as u64+1);
+    let mut raw=Vec::new();let mut buf=[0u8;64*1024];
+    loop{
+        check_cancel()?;
+        let n=reader.read(&mut buf)?;
+        if n==0{break}
+        raw.extend_from_slice(&buf[..n]);
+    }
+    ensure!(raw.len()<=limit&&same(&before,&file.metadata()?),"capture metadata changed or exceeds limit");Ok(raw)
 }
 fn verify_tree(root:&File,expected:&BTreeMap<String,(String,u64,String)>,files:&[ManifestFile],end:Instant)->Result<()>{
     struct Verifier<'a>{
@@ -905,7 +940,8 @@ fn verify_bundle(root:&File,checksum:&str,revision:&str,source_root:&Path,storag
     ensure!(super::revision(&raw)==checksum,"backup manifest changed since review");
     unique_manifest_json(&raw)?;
     check_time(end)?;
-    let manifest:Manifest=serde_json::from_slice(&raw)?;
+    let manifest:Manifest=serde_json::from_slice(&raw).map_err(|_|anyhow!("invalid private backup manifest"))?;
+    check_time(end)?;
     ensure!(manifest.revision==revision&&Path::new(&manifest.source_root)==source_root,"capture revision or source root differs");
     let mut expected=expected_paths(&manifest)?;
     expected.insert("manifest.json".into(),("file".into(),raw.len() as u64,checksum.into()));
@@ -1060,7 +1096,9 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
             version:1,stage:"captured".into(),revision:snapshot.revision.clone(),created_at:Utc::now(),server_man_version:env!("CARGO_PKG_VERSION").into(),
             files,native_exports:exports,running_workloads_at_backup:running,resumed_workloads:resumed.clone(),failed_resume:failed.clone()};
         expected_paths(&manifest)?;
-        let raw=serde_json::to_vec(&manifest)?;
+        check_time(end)?;
+        let raw=encode_manifest(&manifest)?;
+        check_time(end)?;
         ensure!(raw.len()<=MAX_MANIFEST,"private manifest exceeds capture limit");
         let checksum=super::revision(&raw);let mut file=create_payload(&publication.root,"manifest.json")?;file.write_all(&raw)?;file.sync_all()?;
         verify_bundle(&publication.root,&checksum,&snapshot.revision,source_root,storage_root,end)?;
@@ -1274,6 +1312,16 @@ mod tests{
         assert_eq!(released.journal.unwrap().stage,"released");assert!(ensure_idle(&store).is_ok());
         assert!(Path::new(&staged).is_dir());assert!(!dest.exists());
     }
+    // Fixed version-1 wire fixture using the reference Go struct field order,
+    // nil slice encoding, RFC3339Nano, and encoding/json HTML escaping.
+    #[test]
+    fn server_man_manifest_wire_fixture_round_trips(){
+        let raw=br#"{"sourceRoot":"/source\u003cprivate\u003e","principal":{"uid":1000,"gid":1000,"groups":null,"uidMap":"","gidMap":""},"verificationRequired":null,"version":1,"stage":"captured","revision":"b79606fb3afea5bd1609ed40b622142f1c98125abcfe89a76a661b0e8e343910","createdAt":"2026-11-23T12:00:00.12Z","serverManVersion":"fixture","files":[{"capturedLinkCount":1,"type":"file","uid":1000,"gid":1000,"atime":"2026-11-23T12:00:00.12Z","sourceLinkCount":1,"sourceAllocatedBytes":4096,"xattrCoverage":"visible","bundlePath":"server-man.yaml","sizeBytes":6,"sha256":"b79606fb3afea5bd1609ed40b622142f1c98125abcfe89a76a661b0e8e343910","mode":"0600","mtime":"2026-11-23T12:00:00.12Z"}],"nativeExports":null,"runningWorkloadsAtBackup":null,"resumedWorkloads":null}"#;
+        unique_manifest_json(raw).unwrap();
+        let manifest:Manifest=serde_json::from_slice(raw).unwrap();
+        assert!(expected_paths(&manifest).is_ok());
+        assert_eq!(encode_manifest(&manifest).unwrap().as_slice(),raw);
+    }
     #[test]
     fn manifest_rejects_duplicate_nested_keys_and_accepts_nil_slices(){
         assert!(unique_manifest_json(br#"{"xattrs":{"user.x":"a","user.x":"b"}}"#).is_err());
@@ -1326,6 +1374,63 @@ mod tests{
         assert!(error.is::<BackupCancelled>());
         assert!(!dest.exists());
         assert!(status(&store).unwrap().journal.is_none());
+    }
+    #[tokio::test]
+    async fn cancellation_interrupts_pending_capture_future(){
+        let (sender,signal)=watch::channel(false);
+        BACKUP_CANCEL.scope(signal,async{
+            let cancel=async move{tokio::task::yield_now().await;sender.send_replace(true);};
+            let capture=interruptible(std::future::pending::<Result<()>>());
+            let (_,result)=tokio::join!(cancel,capture);
+            assert!(result.unwrap_err().is::<BackupCancelled>());
+        }).await;
+    }
+    #[test]
+    fn cancelled_publication_preserves_reviewed_directory_and_stage(){
+        let (_tmp,store,_storage,dest)=fixture();
+        fs::create_dir(&dest).unwrap();
+        fs::set_permissions(&dest,fs::Permissions::from_mode(0o700)).unwrap();
+        let source=store.path();
+        let p=Publication::new(dest.to_str().unwrap(),source.parent().unwrap()).unwrap();
+        let original=fs::metadata(&dest).unwrap().ino();
+        let (_sender,signal)=watch::channel(true);
+        let error=BACKUP_CANCEL.sync_scope(signal,||p.rename(Instant::now()+Duration::from_secs(30))).unwrap_err();
+        assert!(error.is::<BackupCancelled>());
+        assert_eq!(fs::metadata(&dest).unwrap().ino(),original);
+        assert!(Path::new(&p.artifact.staging_path).is_dir());
+        assert!(fs::read_dir(&dest).unwrap().next().is_none());
+    }
+    #[tokio::test]
+    async fn reviewed_publish_recovers_staged_capture_into_existing_empty_directory(){
+        let (_tmp,store,storage,dest)=fixture();
+        let original=dest.with_extension("original");
+        let provider=CompositeProvider::new(&AppConfig::default(),CommandRunner::new(true));
+        let revision=store.read().unwrap().unwrap().revision;
+        prepare(&store,&storage,&provider,PrepareOptions{revision:revision.clone(),destination:original.to_str().unwrap().into(),quiesce:true,deadline_seconds:30}).await.unwrap();
+        fs::create_dir(&dest).unwrap();
+        fs::set_permissions(&dest,fs::Permissions::from_mode(0o700)).unwrap();
+        let source=store.path();
+        let publication=Publication::new(dest.to_str().unwrap(),source.parent().unwrap()).unwrap();
+        let stage=Path::new(&publication.artifact.staging_path);
+        for entry in fs::read_dir(&original).unwrap(){
+            let entry=entry.unwrap();
+            fs::rename(entry.path(),stage.join(entry.file_name())).unwrap();
+        }
+        let mut j=status(&store).unwrap().journal.unwrap();
+        let checksum=j.artifact.manifest_checksum.clone();
+        j.destination=dest.to_str().unwrap().into();
+        j.artifact=publication.artifact.clone();
+        j.artifact.manifest_checksum=checksum;
+        j.artifact.stage="synced".into();
+        {let dir=store::LockedDirectory::try_acquire(store.directory().unwrap()).unwrap();persist(&store,&dir,&mut j).unwrap();}
+        let review=status(&store).unwrap();
+        let (_sender,signal)=watch::channel(true);
+        assert!(matches!(publish_cancellable(&store,&storage,&revision,&review.review_token,30,signal),Err(e) if e.is::<BackupCancelled>()));
+        assert!(stage.is_dir()&&fs::read_dir(&dest).unwrap().next().is_none());
+        let result=publish(&store,&storage,&revision,&review.review_token,30).unwrap();
+        assert_eq!(result.journal.unwrap().artifact.stage,"published");
+        assert_eq!(fs::read(dest.join("storage/data/payload")).unwrap(),b"private payload");
+        assert!(!stage.exists());
     }
     #[test]
     fn publication_never_replaces_nonempty_directory(){
