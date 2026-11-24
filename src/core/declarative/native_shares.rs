@@ -21,15 +21,15 @@ const LIMIT: usize = 1024 * 1024;
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Definition {
-    name: String,
-    path: String,
-    read_only: bool,
-    guest: bool,
-    browseable: bool,
-    users: Vec<String>,
-    clients: Vec<String>,
-    root_squash: bool,
-    security: String,
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) read_only: bool,
+    pub(crate) guest: bool,
+    pub(crate) browseable: bool,
+    pub(crate) users: Vec<String>,
+    pub(crate) clients: Vec<String>,
+    pub(crate) root_squash: bool,
+    pub(crate) security: String,
 }
 
 #[derive(Serialize)]
@@ -67,11 +67,11 @@ pub struct Inventory {
     pub warnings: Vec<&'static str>,
 }
 
-fn share_key(name: &str) -> String {
+pub(crate) fn share_key(name: &str) -> String {
     name.split_whitespace().collect::<String>().to_lowercase()
 }
 
-fn parse_samba(text: &str) -> Result<Vec<Definition>> {
+pub(crate) fn parse_samba(text: &str) -> Result<Vec<Definition>> {
     let mut defaults = Definition {
         read_only: true,
         browseable: true,
@@ -123,10 +123,10 @@ fn parse_samba(text: &str) -> Result<Vec<Definition>> {
 }
 
 #[derive(Clone)]
-struct Export {
-    path: String,
-    client: String,
-    options: Vec<String>,
+pub(crate) struct Export {
+    pub(crate) path: String,
+    pub(crate) client: String,
+    pub(crate) options: Vec<String>,
 }
 
 impl Export {
@@ -172,7 +172,7 @@ fn export_fields(line: &str) -> Result<Vec<String>> {
 }
 
 /// As in netip.Prefix.Masked, IP selectors use a canonical network prefix.
-fn canonical_client(value: &str) -> String {
+pub(crate) fn canonical_client(value: &str) -> String {
     let (address, bits) = value.split_once('/').unwrap_or((value, ""));
     let Ok(address) = address.parse::<IpAddr>() else {
         return value.into();
@@ -204,7 +204,7 @@ fn canonical_client(value: &str) -> String {
     format!("{address}/{bits}")
 }
 
-fn parse_exports(text: &str) -> Result<Vec<Export>> {
+pub(crate) fn parse_exports(text: &str) -> Result<Vec<Export>> {
     let mut result = Vec::new();
     for line in text.replace("\\\n", "").lines() {
         let fields = export_fields(line)?;
@@ -245,7 +245,7 @@ fn parse_exports(text: &str) -> Result<Vec<Export>> {
     Ok(result)
 }
 
-fn option_flag(options: &[String], yes: &str, no: &str, default: bool) -> bool {
+pub(crate) fn option_flag(options: &[String], yes: &str, no: &str, default: bool) -> bool {
     let mut value = default;
     for option in options {
         if option == yes {
@@ -258,7 +258,7 @@ fn option_flag(options: &[String], yes: &str, no: &str, default: bool) -> bool {
     value
 }
 
-fn option_value<'a>(options: &'a [String], key: &str, default: &'a str) -> &'a str {
+pub(crate) fn option_value<'a>(options: &'a [String], key: &str, default: &'a str) -> &'a str {
     options
         .iter()
         .rev()
@@ -360,7 +360,7 @@ fn nfs_configured(main: &Path, directory: &Path) -> Result<Vec<Export>> {
     Ok(result)
 }
 
-fn connections(text: &str) -> Result<BTreeMap<String, usize>> {
+pub(crate) fn connections(text: &str) -> Result<BTreeMap<String, usize>> {
     let value: serde_json::Value = serde_json::from_str(text)?;
     let sessions = value
         .get("tcons")
