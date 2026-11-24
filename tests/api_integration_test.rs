@@ -2740,6 +2740,63 @@ shares:
 
 #[cfg(feature = "linux")]
 #[tokio::test]
+async fn linux_reviewed_storage_provisioning() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_, mut state, _temp) = setup_test_app().await;
+    let config = std::sync::Arc::make_mut(&mut state.config);
+    config.platform = maestro::config::Platform::Linux;
+    let token = config.server.auth_token.clone();
+    let root = config.paths.storage_dir.clone();
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let store = maestro::core::linux_config::store(config).unwrap();
+    let snapshot = store.save(b"version: 1\nstorage:\n  disk: {kind: file, path: disk.raw, format: raw}\n  missing: {path: absent/child}\n", "missing").unwrap();
+    let revision = snapshot.revision;
+    let app = api::app(state).unwrap();
+    let call = |tool: &'static str, body: serde_json::Value| {
+        let app = app.clone();
+        let token = token.clone();
+        async move {
+            let response = app.oneshot(Request::builder().method("POST")
+                .uri(format!("/api/tools/{tool}")).header(header::HOST, "localhost:3030")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap()).await.unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+            (status, serde_json::from_slice::<serde_json::Value>(&bytes).unwrap())
+        }
+    };
+    let (status, _) = call("managed_storage_plan", serde_json::json!({"storage":"missing","revision":revision})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(!root.join("absent").exists());
+    let (status, plan) = call("managed_storage_plan", serde_json::json!({"storage":"disk","revision":revision,"sizeGiB":1})).await;
+    assert_eq!(status, StatusCode::OK, "{plan:?}");
+    assert!(!root.join("disk.raw").exists());
+    let mut request = serde_json::json!({"storage":"disk","revision":revision,"sizeGiB":1,
+        "reviewToken":plan["reviewToken"],"purpose":"new_data","confirm":false});
+    let (status, _) = call("managed_storage_create", request.clone()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(!root.join("disk.raw").exists());
+    request["confirm"] = serde_json::json!(true);
+    let (status, started) = call("managed_storage_create", request).await;
+    assert_eq!(status, StatusCode::OK, "{started:?}");
+    let mut succeeded = false;
+    for _ in 0..100 {
+        let (_, job) = call("jobs_get", serde_json::json!({"id":started["job"]["id"]})).await;
+        if job["state"] == "succeeded" { succeeded = true; break; }
+        assert_ne!(job["state"], "failed", "{job:?}");
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+    assert!(succeeded);
+    assert_eq!(std::fs::metadata(root.join("disk.raw")).unwrap().len(), 1 << 30);
+    assert_eq!(store.read().unwrap().unwrap().revision, revision);
+    let (status, _) = call("managed_storage_plan", serde_json::json!({"storage":"disk","revision":revision,"sizeGiB":1})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[cfg(feature = "linux")]
+#[tokio::test]
 async fn linux_mcp_protocol_flow() {
     let (_, mut state, _temp) = setup_test_app().await;
     let config = std::sync::Arc::make_mut(&mut state.config);
