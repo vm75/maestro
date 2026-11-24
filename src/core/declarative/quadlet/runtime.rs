@@ -2,7 +2,7 @@ use crate::{
     command::CommandRunner,
     core::declarative::{Config, store},
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -164,7 +164,7 @@ pub(super) async fn inspect(
             256 * 1024,
         )
         .await
-        .map_err(|_| anyhow::anyhow!("Podman metadata is unavailable"))?;
+        .context("Podman metadata is unavailable")?;
     ensure!(
         output.status.success() && !output.truncated,
         "Podman metadata is unavailable or exceeds its limit"
@@ -193,7 +193,7 @@ pub(super) async fn inspect(
                     4096,
                 )
                 .await
-                .map_err(|_| anyhow::anyhow!("cannot establish native container absence"))?;
+                .context("cannot establish native container absence")?;
             ensure!(
                 !found.truncated && found.status.code() == Some(1),
                 "native container name is occupied or cannot be inspected"
@@ -224,7 +224,6 @@ pub(super) async fn inspect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
     const YAML: &[u8] = b"version: 1\nservices:\n  demo: {kind: container, containers: {web: {image: alpine}, worker: {image: alpine}}}\n";
     fn row(member: &str, state: &str, fingerprint: &str) -> serde_json::Value {
         serde_json::json!({"Names":[super::super::unit_name("demo", member)], "State":state,
@@ -234,8 +233,14 @@ mod tests {
         std::fs::write(root.join("rows.json"), rows).unwrap();
         std::fs::write(root.join("exists-code"), exists.to_string()).unwrap();
         let path = root.join("podman");
-        std::fs::write(&path, "#!/bin/sh\n[ \"$1\" = --remote=false ] || exit 97\ncase \"$2\" in\nps) [ \"$3\" = --all ] && [ \"$4\" = --filter ] && [ \"$5\" = label=io.maestro.service=demo ] && [ \"$6\" = --format ] && [ \"$7\" = json ] || exit 98; cat -- \"${0%/*}/rows.json\" ;;\ncontainer) [ \"$3\" = exists ] && [ \"$4\" = -- ] && [ -n \"$5\" ] || exit 99; exit \"$(cat -- \"${0%/*}/exists-code\")\" ;;\n*) exit 96 ;;\nesac\n").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // Use an immutable executable from the checkout. Rewriting a script
+        // just before spawn can race with inherited write descriptors in other
+        // concurrently spawning tests (ETXTBSY on Linux).
+        if !path.exists() {
+            let executable = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("test-fixtures/phase2/podman-inventory-stub.sh");
+            std::os::unix::fs::symlink(executable, &path).unwrap();
+        }
         path
     }
     #[tokio::test]
