@@ -429,6 +429,16 @@ impl ComposeProvider {
             name:name.clone(),state:members.get(name).map_or("missing".into(),|m|m.state.clone())
         }).collect()})
     }
+    pub(crate) async fn verify_provision_stopped(&self, config: &Config, id: &str) -> Result<()> {
+        let members = self.inventory(id).await?;
+        let fields = self.boot(id).await?;
+        ensure!(self.matches_state(config, id, ApplyMode::NextStart, &members, &fields).await?,
+            "native Compose identity or artifacts differ");
+        ensure!(fields.get("ActiveState").is_some_and(|s| matches!(s.as_str(), "active" | "inactive" | "failed"))
+            && members.values().all(|m| matches!(m.state.as_str(), "exited" | "stopped" | "created" | "configured")),
+            "all referencing Compose containers must be verified stopped before provisioning");
+        Ok(())
+    }
     pub async fn verify_boot_policy(&self,config:&Config,id:&str)->Result<()>{
         self.status_details(config,id).await.map(|_|())
     }

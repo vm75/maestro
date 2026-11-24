@@ -363,17 +363,12 @@ impl StorageProvider {
             }) || service.vm.as_ref().is_some_and(|vm| vm.disks.iter().any(|disk| disk == id));
             if !uses_storage { continue; }
             consumers.push(format!("service/{service_id}"));
-            let stopped = if state.runner.is_test_mode() {
-                !service.enabled
-            } else if service.backend == "quadlet" {
-                if let Some(provider) = &providers.quadlet {
-                    provider.status_details(&config, service_id).await.is_ok_and(|status| status.state == "stopped")
-                } else { false }
-            } else { false };
-            ensure!(stopped, "all referencing services must be verified stopped before provisioning");
+            providers.verify_storage_consumer_stopped(&config, service_id).await?;
         }
-        for share in config.shares.values() {
-            ensure!(share.storage != id, "referencing shares must be verified unpublished; native ownership verification is not available");
+        for (share_id, share) in &config.shares {
+            if share.storage != id { continue; }
+            consumers.push(format!("share/{share_id}"));
+            providers.shares.verify_unpublished(&config, share_id).await?;
         }
         consumers.sort();
         let uid = unsafe { libc::geteuid() };

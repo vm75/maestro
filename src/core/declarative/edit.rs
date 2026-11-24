@@ -88,26 +88,24 @@ pub fn edit(store: &Store, input: &EditInput) -> Result<Vec<u8>> {
 
     match input.kind.as_str() {
         "service" => {
-            // Server Man's PrepareIdentities preserves the UUID and MAC
-            // when the editor omits them. Do not generate random identities
-            // independently during plan and save: both must use identical
-            // reviewed candidate bytes. New guests currently need explicit
-            // identities until the reference candidate workflow is ported.
             if input.operation == "remove" {
                 ensure!(config.services.remove(&input.id).is_some(),"resource does not exist");
             } else {
                 let mut value: Service = serde_json::from_str(definition)
                     .context("invalid typed definition or unknown JSON fields")?;
-                if let Some(old) = config.services.get(&input.id) {
-                    if let (Some(prior),Some(next)) = (&old.vm,&mut value.vm) {
-                        ensure!(old.backend == value.backend,"existing VM backend cannot be changed");
-                        ensure!(next.uuid.is_empty() || prior.uuid.is_empty() || next.uuid == prior.uuid,"existing VM identity cannot be changed");
-                        ensure!(next.mac.is_empty() || prior.mac.is_empty() || next.mac == prior.mac,"existing VM identity cannot be changed");
-                        if next.uuid.is_empty() { next.uuid = prior.uuid.clone(); }
-                        if next.mac.is_empty() { next.mac = prior.mac.clone(); }
+                for container in value.containers.values_mut() {
+                    for mount in &mut container.mounts {
+                        resolve_mount_storage(&mut config, &input.id, mount)?;
                     }
                 }
-                config.services.insert(input.id.clone(),value);
+                prepare_identity(
+                    store,
+                    actual,
+                    &input.id,
+                    config.services.get(&input.id),
+                    &mut value,
+                )?;
+                config.services.insert(input.id.clone(), value);
             }
         },
         "storage" => edit_map!(config.storage, Storage),
@@ -140,60 +138,171 @@ pub fn edit(store: &Store, input: &EditInput) -> Result<Vec<u8>> {
     Ok(yaml.into_bytes())
 }
 
-// Server Man's typed share editor accepts a direct directory path and
-// translates it to a storage reference in the same reviewed candidate.
-// Keep the Rust model's existing storage-relative share.path semantics when
-// a reference is explicitly supplied; a manual path is never a subpath.
+// The typed editor accepts paths, but persisted definitions reference storage.
+fn clean_reference_path(path: &str) -> Result<String> {
+    ensure!(!path.is_empty() && !path.chars().any(char::is_control),
+        "enter a clean host path or select a storage reference");
+    let absolute = path.starts_with('/');
+    let mut components = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => anyhow::bail!("parent traversal is not allowed in storage paths"),
+            part => components.push(part),
+        }
+    }
+    let cleaned = if absolute {
+        format!("/{}", components.join("/"))
+    } else if components.is_empty() {
+        ".".into()
+    } else {
+        components.join("/")
+    };
+    ensure!(super::path_valid(&cleaned, absolute), "invalid storage path");
+    Ok(cleaned)
+}
+
+fn resolve_storage(config: &mut Config, base_id: &str, path: &str, kind: &str) -> Result<String> {
+    if let Some((storage_id, storage)) = config.storage.iter().find(|(_, s)| s.path == path) {
+        ensure!(
+            (kind == "file") == (storage.kind == "file"),
+            "storage path is already referenced with a different data type"
+        );
+        return Ok(storage_id.clone());
+    }
+    ensure!(super::id_valid(base_id), "invalid generated storage identifier");
+    let storage_id = if !config.storage.contains_key(base_id) {
+        base_id.to_owned()
+    } else {
+        (1..=256)
+            .map(|n| {
+                let suffix = if n == 1 { "-storage".into() } else { format!("-storage-{n}") };
+                format!("{}{}", &base_id[..base_id.len().min(63 - suffix.len())], suffix)
+            })
+            .find(|id| !config.storage.contains_key(id))
+            .context("no available storage identifier")?
+    };
+    config.storage.insert(storage_id.clone(), Storage {
+        path: path.into(),
+        external: path.starts_with('/'),
+        kind: kind.into(),
+        ..Storage::default()
+    });
+    Ok(storage_id)
+}
+
 fn resolve_share_storage(config: &mut Config, id: &str, share: &mut Share) -> Result<()> {
     if !share.storage.is_empty() {
+        // Accept a full path echoed by a Server Man client; otherwise retain
+        // Maestro's existing explicit-reference relative subpath semantics.
+        if config.storage.get(&share.storage).is_some_and(|s| s.path == share.path) {
+            share.path.clear();
+        }
         return Ok(());
     }
-    let path = std::path::Path::new(&share.path);
-    let external = path.is_absolute();
-    ensure!(
-        super::path_valid(&share.path, external),
-        "enter a clean directory path or select a storage reference"
-    );
-    if let Some((storage_id, storage)) = config
-        .storage
-        .iter()
-        .find(|(_, storage)| storage.path == share.path)
-    {
-        ensure!(storage.kind != "file", "share requires directory storage");
-        share.storage = storage_id.clone();
-    } else {
-        // Names must be deterministic for preview/save fingerprints, valid
-        // even for maximum-length share IDs, and must not overwrite storage.
-        let storage_id = if !config.storage.contains_key(id) {
-            id.to_owned()
-        } else {
-            (1..=256)
-                .map(|n| {
-                    let suffix = if n == 1 {
-                        "-storage".to_owned()
-                    } else {
-                        format!("-storage-{n}")
-                    };
-                    format!("{}{}", &id[..id.len().min(63 - suffix.len())], suffix)
-                })
-                .find(|candidate| !config.storage.contains_key(candidate))
-                .context("no available storage identifier")?
-        };
-        config.storage.insert(
-            storage_id.clone(),
-            Storage {
-                path: share.path.clone(),
-                external,
-                kind: "directory".into(),
-                ..Storage::default()
-            },
-        );
-        share.storage = storage_id;
-    }
-    // The full directory is now the storage's path. Leaving it here would
-    // append the path a second time (or bypass the referenced base).
+    let path = clean_reference_path(&share.path)?;
+    share.storage = resolve_storage(config, id, &path, "directory")?;
     share.path.clear();
     Ok(())
+}
+
+fn resolve_mount_storage(config: &mut Config, id: &str, mount: &mut super::Mount) -> Result<()> {
+    if !mount.storage.is_empty() {
+        if config.storage.get(&mount.storage).is_some_and(|s| s.path == mount.path) {
+            mount.path.clear();
+        }
+        return Ok(());
+    }
+    let path = clean_reference_path(&mount.path)?;
+    let kind = match mount.kind.as_str() {
+        "file" => "file",
+        "directory" => "directory",
+        "" => {
+            if let Some(storage) = config.storage.values().find(|s| s.path == path) {
+                if storage.kind == "file" { "file" } else { "directory" }
+            } else if path.starts_with('/') && std::fs::metadata(&path).is_ok_and(|m| m.is_file()) {
+                "file"
+            } else {
+                "directory"
+            }
+        }
+        _ => anyhow::bail!("invalid container mount data type"),
+    };
+    let name = std::path::Path::new(&path).file_name().and_then(|s| s.to_str()).unwrap_or("storage");
+    let suffix: String = name.bytes().map(|b| {
+        let b = b.to_ascii_lowercase();
+        if b.is_ascii_alphanumeric() || b"-_".contains(&b) { b as char } else { '-' }
+    }).collect();
+    let base = format!("{id}-{suffix}");
+    let base = base[..base.len().min(63)].trim_end_matches('-');
+    mount.storage = resolve_storage(config, base, &path, kind)?;
+    mount.path.clear();
+    mount.kind = kind.into();
+    Ok(())
+}
+
+// Deterministically prepare a fresh identity for this exact reviewed revision.
+// Unlike a random generation on each request, this gives the same candidate
+// bytes on plan and save, and remains persisted after the initial save.
+fn prepare_identity(store: &Store, revision: &str, id: &str, previous: Option<&Service>,
+    service: &mut Service) -> Result<bool> {
+    use sha2::{Digest, Sha256};
+    let Some(vm) = service.vm.as_mut() else { return Ok(false) };
+    let mut changed = false;
+    if let Some(old) = previous {
+        if let Some(prior) = &old.vm {
+            ensure!(old.backend == service.backend, "existing VM backend cannot be changed");
+            ensure!(vm.uuid.is_empty() || prior.uuid.is_empty() || vm.uuid == prior.uuid,
+                "existing VM identity cannot be changed");
+            ensure!(vm.mac.is_empty() || prior.mac.is_empty() || vm.mac == prior.mac,
+                "existing VM identity cannot be changed");
+            if vm.uuid.is_empty() && !prior.uuid.is_empty() { vm.uuid = prior.uuid.clone(); changed = true; }
+            if vm.mac.is_empty() && !prior.mac.is_empty() { vm.mac = prior.mac.clone(); changed = true; }
+        }
+    }
+    if vm.uuid.is_empty() || vm.mac.is_empty() {
+        // Namespace generated identities by host, configuration and revision.
+        // Host identity is never written to the candidate or returned by the API.
+        let machine = std::fs::read_to_string("/etc/machine-id").unwrap_or_default();
+        let seed = serde_json::to_vec(&("maestro-vm-identity-v1", machine.trim(),
+            store.path(), revision, id))?;
+        let digest = Sha256::digest(&seed);
+        if vm.uuid.is_empty() {
+            let mut bytes = [0u8; 16];
+            bytes.copy_from_slice(&digest[..16]);
+            bytes[6] = (bytes[6] & 0x0f) | 0x80; // RFC 9562 custom/version 8 UUID
+            bytes[8] = (bytes[8] & 0x3f) | 0x80;
+            vm.uuid = uuid::Uuid::from_bytes(bytes).hyphenated().to_string();
+            changed = true;
+        }
+        if vm.mac.is_empty() {
+            let mut bytes = [0u8; 6];
+            bytes.copy_from_slice(&digest[16..22]);
+            bytes[0] = (bytes[0] | 2) & 0xfe; // locally administered unicast
+            vm.mac = bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":");
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
+
+/// Raw YAML follows the same identity preparation as typed forms. Preserve
+/// exact authored bytes if no VM needs identity preparation.
+pub fn prepare_yaml_identities(store: &Store, bytes: &[u8], expected: &str) -> Result<Vec<u8>> {
+    let mut desired = parse(bytes)?;
+    let snapshot = store.read()?;
+    let actual = snapshot.as_ref().map_or(MISSING_REVISION, |s| s.revision.as_str());
+    ensure!(expected == actual, "configuration revision changed; review again");
+    let previous = snapshot.as_ref().map(|s| s.config()).transpose()?.unwrap_or_default();
+    let mut changed = false;
+    for (id, service) in &mut desired.services {
+        changed |= prepare_identity(store, expected, id, previous.services.get(id), service)?;
+    }
+    if !changed { return Ok(bytes.to_vec()); }
+    desired.validate()?;
+    let encoded = serde_yaml::to_string(&desired)?.into_bytes();
+    parse(&encoded)?;
+    Ok(encoded)
 }
 
 #[cfg(test)]
@@ -325,6 +434,60 @@ mod tests {
         ] {
             assert!(edit(&store, &share_request(&store, "media", definition)).is_err());
         }
+    }
+
+    #[test]
+    fn container_paths_reuse_typed_references_and_keep_review_deterministic() {
+        let (_temp, store) = fixture();
+        let initial = store.read().unwrap().unwrap().revision;
+        store.save(b"version: 1\nstorage:\n  existing: {path: /mnt/media, external: true, mount: /dev/sdb1}\n", &initial).unwrap();
+        let request = EditInput {
+            kind: "service".into(), id: "app".into(), operation: "save".into(),
+            definition: Some(serde_json::json!({
+                "kind":"container","engine":"podman","backend":"quadlet",
+                "containers":{"web":{"image":"alpine","mounts":[
+                    {"path":"/mnt/media/","target":"/media"},
+                    {"path":"/etc/localtime","kind":"file","target":"/etc/localtime","read_only":true},
+                    {"path":"config","target":"/config"}]}}
+            }).to_string()), revision: store.read().unwrap().unwrap().revision,
+        };
+        let bytes = edit(&store, &request).unwrap();
+        assert_eq!(bytes, edit(&store, &request).unwrap());
+        let config = parse(&bytes).unwrap();
+        let mounts = &config.services["app"].containers["web"].mounts;
+        assert_eq!(mounts[0].storage, "existing");
+        assert_eq!(config.storage["existing"].mount, "/dev/sdb1");
+        assert_eq!(config.storage[&mounts[1].storage].kind, "file");
+        assert!(!config.storage[&mounts[2].storage].external);
+        assert!(mounts.iter().all(|m| m.path.is_empty()));
+        assert_eq!(config.storage.len(), 3);
+        assert!(store.read().unwrap().unwrap().config().unwrap().services.is_empty());
+    }
+
+    #[test]
+    fn vm_identity_is_generated_and_preserved_across_reviews_and_edits() {
+        let (_temp, store) = fixture();
+        let initial = store.read().unwrap().unwrap().revision;
+        store.save(b"version: 1\nstorage:\n  disk: {path: disk.raw, kind: file, format: raw}\nbindings:\n  net: {kind: network, name: default}\n", &initial).unwrap();
+        let request = EditInput {
+            kind: "service".into(), id: "guest".into(), operation: "save".into(),
+            definition: Some(serde_json::json!({"kind":"vm","backend":"libvirt",
+                "vm":{"cpus":2,"memory_mib":2048,"network":"net","disks":["disk"]}}).to_string()),
+            revision: store.read().unwrap().unwrap().revision,
+        };
+        let bytes = edit(&store, &request).unwrap();
+        assert_eq!(bytes, edit(&store, &request).unwrap());
+        let config = parse(&bytes).unwrap();
+        let vm = config.services["guest"].vm.as_ref().unwrap();
+        assert!(uuid::Uuid::parse_str(&vm.uuid).is_ok());
+        assert!(super::super::valid_mac(&vm.mac));
+        let saved = store.save(&bytes, &request.revision).unwrap();
+        let mut request = request;
+        request.revision = saved.revision;
+        let edited = parse(&edit(&store, &request).unwrap()).unwrap();
+        assert_eq!(edited.services["guest"].vm.as_ref().unwrap().uuid, vm.uuid);
+        assert_eq!(edited.services["guest"].vm.as_ref().unwrap().mac, vm.mac);
+        assert_eq!(prepare_yaml_identities(&store, &bytes, &request.revision).unwrap(), bytes);
     }
 
     #[test]

@@ -3357,7 +3357,8 @@ async fn linux_next_start_config_typed_edit_and_revert_share_the_recorded_mode()
     assert_eq!(status, StatusCode::OK, "{started}");
     let saved = finish(&app, &token, &started).await;
     assert_eq!(saved["mode"], "next_start");
-    assert!(storage_root.join("docs").is_dir());
+    assert!(!storage_root.join("docs").exists());
+    std::fs::create_dir_all(storage_root.join("docs")).unwrap();
     std::fs::write(storage_root.join("docs/operator-file"), "preserve me").unwrap();
     let args = serde_json::json!({"kind":"storage","id":"archive","operation":"save","definition":"{\"kind\":\"directory\",\"path\":\"archive\"}","revision":saved["revision"]});
     let (status, plan) = tool(&app, &token, "managed_resource_plan", args.clone()).await;
@@ -3377,7 +3378,7 @@ async fn linux_next_start_config_typed_edit_and_revert_share_the_recorded_mode()
     assert_eq!(status, StatusCode::OK, "{started}");
     let edited = finish(&app, &token, &started).await;
     assert_eq!(edited["mode"], "next_start");
-    assert!(storage_root.join("archive").is_dir());
+    assert!(!storage_root.join("archive").exists());
     let (status, started) = tool(&app, &token, "managed_config_revert", serde_json::json!({"target":initial.revision,"revision":edited["revision"],"mode":"next_start","confirm":true})).await;
     assert_eq!(status, StatusCode::OK, "{started}");
     let restored = finish(&app, &token, &started).await;

@@ -147,11 +147,10 @@ impl ShareProvider {
             ensure!(storage.kind != "file", "share requires directory storage");
             let base = if storage.external { PathBuf::from(&storage.path) } else { self.storage_base.join(&storage.path) };
             let path = if share.path.is_empty() { base } else { base.join(&share.path) };
-            // Preserve the existing typed explicit users when present; the
-            // pinned reference defaults non-guest Samba to its workload account.
-            let users = if protocol == "samba" && !share.guest && share.users.is_empty() {
+            // Legacy users remain readable, but never select access identities.
+            let users = if protocol == "samba" && !share.guest {
                 vec![admin::workload_account()?]
-            } else { share.users.clone() };
+            } else { Vec::new() };
             definitions.push(Definition {
                 name: id.clone(),
                 path: path.to_str().context("share path is not UTF-8")?.into(),
@@ -165,6 +164,34 @@ impl ShareProvider {
             });
         }
         share_definitions::normalize(protocol, definitions, check_paths)
+    }
+
+    pub(super) async fn verify_unpublished(&self, config: &Config, id: &str) -> Result<()> {
+        let share = config.shares.get(id).context("unknown referencing share")?;
+        ensure!(!share.enabled, "unpublish referencing shares before provisioning new data");
+        if self.simulated { return Ok(()); }
+        ensure!(self.native_enabled, "unpublished share state cannot be checked without authorized helper grants");
+        let expected = self.definitions(&share.protocol, config, false)?;
+        let observed = self.inspect(&share.protocol, &expected).await?;
+        ensure!(observed.exact(), "referencing shares must be verified unpublished before provisioning new data");
+        // The protocol-wide fragment comparison alone does not detect a
+        // lingering unmanaged export or Samba section with this identity.
+        let storage = config.storage.get(&share.storage).context("referenced storage not found")?;
+        let base = if storage.external { PathBuf::from(&storage.path) } else { self.storage_base.join(&storage.path) };
+        let path = base.join(&share.path);
+        let path = path.to_str().context("invalid shared directory path")?.trim_end_matches('/');
+        let (inventory, _) = admin::share_operation("shares_list", json!({"protocol":share.protocol})).await?;
+        let rows = inventory["shares"].as_array().context("native share inventory is unavailable")?;
+        let conflict = rows.iter().any(|row| {
+            let same = if share.protocol == "samba" {
+                row["name"].as_str().is_some_and(|name| name.eq_ignore_ascii_case(id))
+            } else {
+                row["path"].as_str().is_some_and(|p| p.trim_end_matches('/') == path)
+            };
+            same && (row["configured"] != false || !matches!(row["runtime"].as_str(), Some("not_exported" | "disconnected")))
+        });
+        ensure!(!conflict, "referencing share remains configured or active");
+        Ok(())
     }
 
     async fn inspect(&self, protocol: &str, definitions: &[Definition]) -> Result<DefinitionState> {
@@ -334,7 +361,7 @@ shares:
         let samba = provider.definitions("samba",&config,false).unwrap();
         assert_eq!(samba.len(),1);
         assert_eq!(samba[0].path,"/srv/workloads/volumes/files/docs");
-        assert_eq!(samba[0].users,["alice"]);
+        assert_eq!(samba[0].users, vec![admin::workload_account().unwrap()]);
         assert!(!provider.native_enabled());
     }
 

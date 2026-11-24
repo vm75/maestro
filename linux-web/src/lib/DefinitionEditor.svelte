@@ -184,8 +184,10 @@
   function payload() {
     if (kind === 'service') {
       saveContainerInputs()
-      if (service.containers) {
-        for (const c of Object.values(service.containers)) {
+      // Build a plain candidate without mutating form state during review.
+      const candidate = structuredClone($state.snapshot(service))
+      if (candidate.containers) {
+        for (const c of Object.values(candidate.containers)) {
           if (c.mounts) {
             for (const m of c.mounts) {
               if (m.source === 'selector' && m.storage) {
@@ -193,6 +195,7 @@
                 delete m.kind
               } else {
                 m.path = (m.path ?? '').trim()
+                m.storage = ''
                 if (!m.kind) {
                   m.kind = 'directory'
                 }
@@ -202,9 +205,9 @@
           }
         }
       }
-      service.dependsOn = splitList(dependencyText)
-      if (service.vm) service.vm.disks = splitList(vmDisks)
-      return service
+      candidate.dependsOn = splitList(dependencyText)
+      if (candidate.vm) candidate.vm.disks = splitList(vmDisks)
+      return candidate
     }
     if (kind === 'storage') return storage
     if (kind === 'share') {
@@ -263,11 +266,13 @@
             for (const m of c.mounts ?? []) {
               if (m.path) {
                 m.source = 'manual'
-                m.kind = m.kind || (result.config.storage[m.storage]?.kind === 'file' ? 'file' : 'directory')
+                const st = result.config.storage[m.storage]
+                m.kind = m.kind || (st?.kind === 'file' ? 'file' : 'directory')
+                if (st) m.path = st.path === '.' ? m.path : st.path.replace(/\/$/, '') + '/' + m.path
               } else if (m.storage && result.config.storage[m.storage]) {
                 m.source = 'selector'
                 const st = result.config.storage[m.storage]
-                m.path = st.path
+                m.path = ''
                 m.kind = st.kind === 'file' ? 'file' : 'directory'
               } else {
                 m.source = 'selector'
@@ -492,7 +497,7 @@
         {:else if service.vm}
           <label>VM backend <select aria-label="VM backend" bind:value={service.backend} disabled={!!resourceID}><option value="libvirt">KVM/libvirt</option><option value="incus">Incus</option></select></label>
           {#if service.backend === 'incus'}<p>{incusEditNotice}</p>{/if}
-          <label>VM UUID (canonical, optional for supported providers) <input bind:value={service.vm.uuid} disabled={!!resourceID} /></label><label>VM MAC address <input bind:value={service.vm.mac} disabled={!!resourceID} placeholder="02:00:00:00:00:01" /></label>
+          <p class="field-hint">Persistent VM UUID and MAC address are generated automatically and retained on edits.</p>
           <label>Virtual CPUs <input required type="number" min="1" max="1024" bind:value={service.vm.cpus} /></label><label>Memory in MiB <input required type="number" min="128" bind:value={service.vm.memoryMiB} /></label>
           <label>Network binding <select aria-label="Network binding" required bind:value={service.vm.network}><option value="">Choose network</option>{#each bindingChoices.filter(([,b]) => b.kind === 'network' || b.kind === 'bridge') as [bindingID,b]}<option value={bindingID}>{bindingID} ({b.name})</option>{/each}</select></label>
           {#if service.backend === 'incus'}<label>Local image alias or fingerprint <input bind:value={service.vm.image} disabled={!!resourceID} /></label><label>Root disk GiB <input type="number" min="1" bind:value={service.vm.rootSizeGiB} placeholder="20" /></label>

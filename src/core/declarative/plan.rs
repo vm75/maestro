@@ -189,28 +189,9 @@ pub(super) fn service_fingerprint(config: &Config, id: &str) -> Result<String> {
 
 fn resources(config: &Config) -> Result<Vec<Resource>> {
     let mut result = Vec::new();
-    let mut managed_storage: Vec<_> = config
-        .storage
-        .iter()
-        .filter(|(_, storage)| {
-            super::storage::managed_directory(storage) || storage.source.is_some()
-        })
-        .collect();
-    managed_storage.sort_unstable_by(|(_, left), (_, right)| left.path.cmp(&right.path));
-    for (id, storage) in managed_storage {
-        let key = format!("storage/{id}");
-        let encoded = serde_json::to_vec(&json!({"key": key, "definition": storage}))?;
-        result.push(Resource {
-            key,
-            backend: if storage.source.is_some() {
-                "storage/disk"
-            } else {
-                "storage"
-            }
-            .into(),
-            fingerprint: revision(&encoded),
-        });
-    }
+    // Storage declarations describe existing or future data. They are not
+    // native publication operations. Only explicit reviewed provisioning may
+    // create directories/disks, including references added by typed forms.
     for id in config.service_order()? {
         let service = &config.services[id];
         let mut storage = BTreeMap::new();
@@ -301,7 +282,7 @@ services:
                 .iter()
                 .map(|change| change.resource.as_str())
                 .collect::<Vec<_>>(),
-            ["storage/cache", "service/cache", "service/web"]
+            ["service/cache", "service/web"]
         );
         assert!(store.read().unwrap().is_none());
         let current = store.save(WORKLOADS.as_bytes(), MISSING_REVISION).unwrap();
@@ -345,7 +326,7 @@ services:
                 .iter()
                 .map(|change| change.resource.as_str())
                 .collect::<Vec<_>>(),
-            ["service/web", "service/cache", "storage/cache"]
+            ["service/web", "service/cache"]
         );
         assert!(
             store
@@ -354,6 +335,16 @@ services:
                 .unwrap()
                 .is::<RevisionConflict>()
         );
+    }
+
+    #[test]
+    fn storage_reference_only_review_has_no_native_creation() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::new(temp.path().to_path_buf());
+        let yaml = b"version: 1\nstorage:\n  data: {path: data, kind: directory}\n";
+        let plan = store.preview(yaml, MISSING_REVISION).unwrap();
+        assert!(plan.changes.is_empty());
+        assert!(!temp.path().join("data").exists());
     }
 
     #[test]

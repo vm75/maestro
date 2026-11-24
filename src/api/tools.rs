@@ -2299,7 +2299,7 @@ pub async fn execute_tool(
                 confirm: Option<bool>,
             }
             let save = matches!(name, "managed_config_save" | "managed_config_revert");
-            let Ok(input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
+            let Ok(mut input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
                 return (
                     StatusCode::BAD_REQUEST,
                     json_err(
@@ -2330,6 +2330,12 @@ pub async fn execute_tool(
                     StatusCode::FORBIDDEN,
                     json_err("writes_disabled", "Workload writes are disabled."),
                 );
+            }
+            if !revert {
+                match crate::core::declarative::edit::prepare_yaml_identities(store, input.content.as_bytes(), &input.revision) {
+                    Ok(bytes) => input.content = String::from_utf8(bytes).expect("validated YAML is UTF-8"),
+                    Err(error) => return (StatusCode::CONFLICT, json_err("plan_unavailable", &error.to_string())),
+                }
             }
             if revert {
                 if let Err(error) = store

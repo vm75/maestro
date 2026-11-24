@@ -242,6 +242,29 @@ impl CompositeProvider {
         apps
     }
 
+    /// Provisioning must use native ownership and runtime inspection, not
+    /// the desired boot-enabled flag or a cached UI status.
+    pub(super) async fn verify_storage_consumer_stopped(&self, config: &Config, id: &str) -> Result<()> {
+        let service = config.services.get(id).ok_or_else(|| anyhow!("unknown storage consumer"))?;
+        if self.simulated {
+            ensure!(!service.enabled, "simulated storage consumer is running");
+            return Ok(());
+        }
+        let stopped = match service.backend.as_str() {
+            "quadlet" => self.quadlet.as_ref().ok_or_else(|| anyhow!("Quadlet provider unavailable"))?
+                .status_details(config, id).await?.state == "stopped",
+            "compose" => {
+                self.compose_provider(&service.engine).verify_provision_stopped(config, id).await?;
+                true
+            }
+            "libvirt" => self.libvirt.status_details(config, id).await?.state == "stopped",
+            "incus" => self.incus.status_details(config, id).await?.state == "stopped",
+            _ => false,
+        };
+        ensure!(stopped, "all referencing services must be verified stopped before provisioning");
+        Ok(())
+    }
+
     pub fn list_shares(&self, config: &Config) -> Vec<ShareSummary> {
         config
             .shares
