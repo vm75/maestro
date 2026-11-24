@@ -352,3 +352,14 @@ The service supports the usual Entware init actions:
 
 `reconcile` requests an immediate firewall reconciliation from the running
 process and is used by the installed `post-mount` and `firewall-start` hooks.
+
+
+## Guided native Linux backend setup
+
+The Linux release installer supports explicit backend preparation in addition to its minimal deployment mode:
+
+```bash
+sudo ./scripts/install-linux.sh --user YOUR_ACCOUNT --config /home/YOUR_ACCOUNT/.config/maestro/maestro.yaml --binary /absolute/path/maestro --initialize-config --backends all --dry-run
+```
+
+Review the plan and repeat without `--dry-run` to apply. Select `podman,docker,virtualization,incus,samba,nfs` individually or `all`. Omitting `--backends` preserves the minimal deployment behavior. `--skip-packages` verifies existing native packages without upgrading them. On Ubuntu/Debian the installer refreshes APT and installs native packages; on Arch it performs a synchronized full upgrade. It adds required Docker, libvirt and Incus groups, starts their socket/service units, enables lingering and prepares the workload user's D-Bus socket before Maestro starts. No external repositories are added. Docker and Incus group membership confers broad host control. Samba/NFS publication and Incus initialization remain explicit. The helper is independently optional (`--with-helper --helper /absolute/path/maestro-admin`); root-owned grants still default to deny. Package, group and daemon changes are not rolled back after later failures.

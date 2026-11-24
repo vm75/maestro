@@ -129,9 +129,6 @@ pub fn render_quadlet_at(
         if container.memory_mib > 0 {
             writeln!(body, "PodmanArgs=--memory={}m", container.memory_mib)?;
         }
-        if container.cpus > 0 {
-            writeln!(body, "PodmanArgs=--cpus={}", container.cpus)?;
-        }
         if !container.working_dir.is_empty() {
             ensure!(
                 super::path_valid(&container.working_dir, true),
@@ -210,6 +207,9 @@ pub fn render_quadlet_at(
             .ok_or_else(|| anyhow!("Quadlet stop grace period exceeds native timeout range"))?;
         let stop = if stop == 0 { 90 } else { u64::from(stop) + 30 };
         writeln!(body, "TimeoutStopSec={stop}")?;
+        if container.cpus > 0 {
+            writeln!(body, "CPUQuota={}%", u64::from(container.cpus) * 100)?;
+        }
         if service.enabled {
             writeln!(body, "\n[Install]\nWantedBy=default.target")?;
         }
@@ -532,6 +532,8 @@ services:
         let container = config.services.get_mut("demo").unwrap().containers.get_mut("web").unwrap();
         container.entrypoint = vec!["/entrypoint".into(), "two words".into(), "$VALUE".into()];
         container.tty = true;
+        container.privileged = true;
+        container.cpus = 2;
         container.shm_size = "256MB".into();
         container.stop_grace_period = "1m30.5s".into();
         container.mounts[0].selinux = "private".into();
@@ -634,6 +636,9 @@ mod managed_unit_routing_tests {
         assert!(body.contains("TimeoutStopSec=121"));
         assert!(body.contains("TimeoutStartSec=900"));
         assert!(body.contains("RestartSec=5"));
+        assert!(body.contains("NoNewPrivileges=false"));
+        assert!(body.contains("CPUQuota=200%"));
+        assert!(!body.contains("--cpus="));
         assert!(body.contains(":/cache:ro,Z"));
     }
 

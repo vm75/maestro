@@ -7,17 +7,20 @@ usage() {
   echo "Usage: install-linux.sh --user ACCOUNT --config /absolute/maestro.yaml --binary /path/to/release"
   echo "       [--with-helper --helper /path/to/maestro-admin | --remove-helper]"
   echo "       [--initialize-config] [--enable-linger] [--dry-run] [--yes]"
+  echo "       [--backends all|podman,docker,virtualization,incus,samba,nfs] [--skip-packages]"
 }
 account= config= binary= helper= helper_mode=keep
-yes=0 dry=0 linger=0 initialize=0
+yes=0 dry=0 linger=0 initialize=0 skip_packages=0
+backends=none
 while (($#)); do
   case "$1" in
-    --user|--config|--binary|--helper)
+    --user|--config|--binary|--helper|--backends)
       flag=$1; shift
       (($#)) || { echo "Missing value: $flag" >&2; exit 2; }
       case "$flag" in
         --user) account=$1 ;; --config) config=$1 ;;
         --binary) binary=$1 ;; --helper) helper=$1 ;;
+        --backends) backends=$1 ;;
       esac ;;
     --with-helper)
       [[ "$helper_mode" == keep ]] || exit 2
@@ -26,6 +29,7 @@ while (($#)); do
       [[ "$helper_mode" == keep ]] || exit 2
       helper_mode=remove ;;
     --initialize-config) initialize=1 ;;
+    --skip-packages) skip_packages=1 ;;
     --enable-linger) linger=1 ;;
     --dry-run) dry=1 ;;
     --yes) yes=1 ;;
@@ -110,6 +114,50 @@ if [[ -e "$service" ]]; then
     { echo "Refusing to overwrite a foreign maestro.service" >&2; exit 1; }
 fi
 
+# Explicit backend preparation preserves the minimal installer by default.
+packages=() groups=() units=() targets=()
+manager=none
+if [[ "$backends" != none ]]; then
+  [[ "$backends" == all ]] && backends=podman,docker,virtualization,incus,samba,nfs
+  [[ "$backends" =~ ^[a-z]+(,[a-z]+)*$ ]] || { echo "Invalid backend list" >&2; exit 2; }
+  IFS=, read -r -a targets <<< "$backends"
+  distribution=$(sed -n 's/^ID=//p' /etc/os-release | tr -d "\"'" | head -n1)
+  case "$distribution" in
+    ubuntu|debian) manager=apt; packages+=(dbus-user-session) ;;
+    arch) manager=pacman ;;
+    *) echo "Guided backend setup supports Ubuntu, Debian and Arch Linux" >&2; exit 1 ;;
+  esac
+  if [[ "$helper_mode" == install ]]; then packages+=(sudo); fi
+  declare -A seen=()
+  for backend in "${targets[@]}"; do
+    [[ -z "${seen[$backend]+x}" ]] || { echo "Duplicate backend: $backend" >&2; exit 2; }
+    seen[$backend]=1
+    case "$backend:$manager" in
+      podman:apt) packages+=(podman podman-compose uidmap slirp4netns passt netavark aardvark-dns nftables) ;;
+      podman:pacman) packages+=(podman podman-compose passt netavark aardvark-dns nftables) ;;
+      docker:apt)
+        if [[ "$distribution" == ubuntu ]]; then packages+=(docker.io docker-compose-v2)
+        else packages+=(docker.io docker-cli docker-compose); fi ;;
+      docker:pacman) packages+=(docker docker-compose) ;;
+      virtualization:apt) packages+=(qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-daemon-driver-qemu libvirt-clients) ;;
+      virtualization:pacman) packages+=(qemu-base libvirt) ;;
+      incus:apt) packages+=(incus qemu-utils ovmf qemu-system-modules-spice dnsmasq-base) ;;
+      incus:pacman) packages+=(incus cdrtools) ;;
+      samba:apt) packages+=(samba wsdd-server) ;;
+      samba:pacman) packages+=(samba wsdd) ;;
+      nfs:apt) packages+=(nfs-kernel-server) ;;
+      nfs:pacman) packages+=(nfs-utils) ;;
+      *) echo "Unknown backend: $backend" >&2; exit 2 ;;
+    esac
+    case "$backend" in
+      docker) groups+=(docker); units+=(docker.socket docker.service) ;;
+      virtualization) groups+=(libvirt); units+=(libvirtd.socket) ;;
+      incus) groups+=(incus-admin); units+=(incus.socket) ;;
+    esac
+  done
+  linger=1
+fi
+
 cat <<PLAN
 Maestro native Linux installation plan
   Workload user: $account (UID $uid, GID $gid)
@@ -122,14 +170,49 @@ Maestro native Linux installation plan
   Exact sudoers rule: /etc/sudoers.d/maestro
   Enable lingering: $linger
   Initialize missing private YAML/token: $initialize (config exists: $config_exists)
-  Existing config/token, data, user/groups and native packages are preserved.
-  No host package setup, daemon groups or backend initialization is automatic.
+  Selected backends: $backends
+  Native manager: $manager (skip packages: $skip_packages)
+  Packages: ${packages[*]}
+  Supplementary groups: ${groups[*]}
+  Native units to enable/start: ${units[*]}
+  Existing config/token and data are preserved. Docker/Incus groups grant broad host control.
+  Package installation can start daemons; Arch performs a full system upgrade.
+  No repositories, VM pools, Incus networks or share definitions are created.
+  Completed package/account changes are not rolled back if a later step fails.
 PLAN
 if ((dry)); then exit 0; fi
 ((EUID == 0)) || { echo "Apply must run as root" >&2; exit 1; }
 if ((!yes)); then
   read -r -p "Apply this plan? [y/N] " approval || exit 1
   [[ "$approval" == y || "$approval" == Y ]] || { echo "Cancelled"; exit 1; }
+fi
+
+if [[ "$manager" != none ]]; then
+  export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+  if ((!skip_packages)); then
+    case "$manager" in
+      apt) apt-get update; apt-get install -y --no-install-recommends "${packages[@]}" ;;
+      pacman) pacman -Syu --needed --noconfirm "${packages[@]}" ;;
+    esac
+  else
+    for package in "${packages[@]}"; do
+      case "$manager" in
+        apt) [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null)" == 'install ok installed' ]] ;;
+        pacman) pacman -Q "$package" >/dev/null ;;
+      esac || { echo "Required package missing: $package" >&2; exit 1; }
+    done
+  fi
+  for group_name in "${groups[@]}"; do
+    getent group "$group_name" >/dev/null || { echo "Missing group: $group_name" >&2; exit 1; }
+    usermod -a -G "$group_name" "$account"
+  done
+  loginctl enable-linger "$account"
+  systemctl start "user@$uid.service"
+  runtime="/run/user/$uid"
+  as_workload env XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" systemctl --user daemon-reload
+  as_workload env XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" systemctl --user start dbus.socket
+  [[ -S "$runtime/bus" ]] || { echo "Workload user D-Bus socket unavailable" >&2; exit 1; }
+  for unit in "${units[@]}"; do systemctl enable --now "$unit"; done
 fi
 
 if ((initialize && !config_exists)); then
@@ -180,6 +263,8 @@ User=$account
 Group=$group
 WorkingDirectory=$home
 Environment=HOME=$home
+Environment=XDG_RUNTIME_DIR=/run/user/$uid
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus
 ExecStart=/usr/local/bin/maestro --config $config --linux-mode serve
 Restart=on-failure
 RestartSec=5s

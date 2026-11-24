@@ -6,7 +6,8 @@ use anyhow::{Result, ensure};
 use super::{Container, word};
 
 pub(super) fn render(body: &mut String, container: &Container) -> Result<()> {
-    let mut no_new_privileges = true;
+    // Match the declared privileged mode unless an explicit security option overrides it.
+    let mut no_new_privileges = !container.privileged;
     for option in &container.security_opt {
         match option.as_str() {
             "no-new-privileges" | "no-new-privileges:true" => no_new_privileges = true,
