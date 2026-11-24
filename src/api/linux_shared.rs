@@ -40,7 +40,9 @@ pub(super) fn router(state: AppState) -> Router<AppState> {
         )
         .route("/shared/nginx/status", get(super::nginx::status))
         .route("/shared/nginx/sites", get(super::nginx::list_objects))
-        .route("/shared/nginx/settings", get(nginx_settings))
+        .route("/shared/nginx/settings", get(nginx::get_settings).put(nginx::put_settings))
+        .route("/shared/nginx/access-preview", post(nginx::preview_access))
+        .route("/shared/nginx/ingress-usage", get(nginx::ingress_usage))
         .route("/shared/nginx/logs", get(super::nginx::list_logs))
         .route("/shared/nginx/logs/{*path}", get(super::nginx::get_log))
         .route("/shared/certificates", get(certificates).post(create_certificate))
@@ -78,18 +80,6 @@ pub(super) fn router(state: AppState) -> Router<AppState> {
         .route("/shared/wireguard/toggle", post(wireguard_toggle))
         .route("/shared/wireguard/peers", get(wireguard_peers).put(write_wireguard_peers))
         .route_layer(middleware::from_fn_with_state(state, authorize_mutation))
-}
-
-// Only the counts needed by the workspace are returned; global settings
-// may contain private configuration values.
-async fn nginx_settings(State(state): State<AppState>) -> Result<Json<Value>, super::ApiError> {
-    let Json(settings) = super::nginx::get_settings(State(state)).await?;
-    Ok(Json(json!({
-        "listener_profiles": settings.listener_profiles.len(),
-        "access_policies": settings.access_policies.len(),
-        "limit_policies": settings.limit_policies.len(),
-        "allowed_ips": settings.allowed_ips.len(),
-    })))
 }
 
 // Never send DNS hook environment variables (which may contain credentials)

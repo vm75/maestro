@@ -183,6 +183,17 @@ shared_write -X PUT -d '{"enabled":false,"api_endpoint":"http://127.0.0.1:3000",
 shared_get adguard/config | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["username"]=="test" and "password" not in x'
 [[ $(shared_code -b "$lab/cookies" -H "Origin: $api" -H 'Content-Type: application/json' -X PUT -d '{"enabled":true,"observe_only":false}' "$api/api/shared/firewall") == 400 ]]
 [[ $(shared_code -b "$lab/cookies" -H "Origin: $api" -H 'Content-Type: application/json' -d '{"name":"bad","domains":["example.test"],"method":"dns","staging":true,"auto_renew":false,"hook":"/tmp/invalid"}' "$api/api/shared/certificates") == 422 ]]
+shared_get nginx/settings > "$lab/shared-nginx-settings.json"
+python3 - "$lab/shared-nginx-settings.json" <<'PYSHAREDNGINX'
+import json, sys
+x=json.load(open(sys.argv[1]))
+assert isinstance(x["shared"],dict) and isinstance(x["site_defaults"],dict), x
+assert isinstance(x["allowed_ips"],list) and isinstance(x["limit_policies"],dict), x
+PYSHAREDNGINX
+shared_get nginx/ingress-usage | python3 -c 'import json,sys; assert isinstance(json.load(sys.stdin),dict)'
+shared_write -d '{"kind":"domain","domain":"preview.test","settings":{"access_policy":"public"}}' "$api/api/shared/nginx/access-preview" | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["access_policy"]=="public" and x["allowed_sources"] is None, x'
+[[ $(shared_code -b "$lab/cookies" -H 'Content-Type: application/json' -X PUT --data-binary "@$lab/shared-nginx-settings.json" "$api/api/shared/nginx/settings") == 403 ]]
+shared_write -X PUT --data-binary "@$lab/shared-nginx-settings.json" "$api/api/shared/nginx/settings" >/dev/null
 shared_write -X POST "$api/api/shared/nginx/test" | real_result
 
 post /api/nginx/test | real_result

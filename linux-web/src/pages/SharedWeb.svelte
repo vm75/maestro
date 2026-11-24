@@ -3,21 +3,29 @@
   import Icon from '../lib/Icon.svelte'
   import { request } from '../lib/api'
   import type { SharedDiscovery } from '../lib/shared'
+  import NginxGlobalEditor from '../lib/NginxGlobalEditor.svelte'
+  import NginxPolicyEditor from '../lib/NginxPolicyEditor.svelte'
+  import {normalizeGlobal,clone,type GlobalSettings,type Settings,type EffectiveAccess,type Usage} from '../lib/nginx-config'
 
   let { discovery, allowWrites }: { discovery: SharedDiscovery; allowWrites: boolean } = $props()
   const hasNginx = $derived(discovery.modules.some(m => m.id === 'nginx' && m.availability === 'ready'))
   const hasCertificates = $derived(discovery.modules.some(m => m.id === 'certificates' && m.availability === 'ready'))
   let section = $state<'nginx' | 'certificates'>('nginx')
   interface NginxStatus { running: boolean; config_path: string; root_dir: string }
-  interface Site { kind: string; domain: string; name: string; display_name: string; port?: number; managed: boolean; enabled: boolean; state: string }
+  interface Site { kind: string; domain: string; name: string; display_name: string; port?: number; managed: boolean; enabled: boolean; state: string; effective_access?: EffectiveAccess }
   interface Log { path: string; size: number }
-  interface Settings { listener_profiles: number; access_policies: number; limit_policies: number; allowed_ips: number }
   interface Certificate { id: string; name: string; domains: string[]; method: string; staging: boolean; auto_renew: boolean; exists: boolean; expires_at?: string; days_remaining?: number; renewal_due: boolean }
   interface HttpAccess { state: string; expires_at?: string; names: string[]; wan_control: string }
   interface Lock { locked: boolean; status: string }
   let status = $state<NginxStatus | null>(null)
   let sites = $state<Site[]>([])
-  let settings = $state<Settings | null>(null)
+  let settings = $state<GlobalSettings | null>(null)
+  let globalDraft = $state<GlobalSettings | null>(null)
+  let usage = $state<Usage>({})
+  let preview = $state<EffectiveAccess | null>(null)
+  let previewError = $state('')
+  let previewBusy = $state(false)
+  let previewController: AbortController | undefined
   let logs = $state<Log[]>([])
   let certificates = $state<Certificate[]>([])
   let httpAccess = $state<HttpAccess | null>(null)
@@ -45,7 +53,8 @@
     if (hasNginx) requests.push(
       read<NginxStatus>('Nginx status', 'nginx/status', v => status = v),
       read<Site[]>('Sites', 'nginx/sites', v => sites = v),
-      read<Settings>('Global settings', 'nginx/settings', v => settings = v),
+      read<GlobalSettings>('Global settings', 'nginx/settings', v => settings = normalizeGlobal(v)),
+      read<Usage>('Ingress usage', 'nginx/ingress-usage', v => usage = v),
       read<Log[]>('Logs', 'nginx/logs', v => { logs = v; if (!v.some(l => l.path === selectedLog)) selectedLog = v[0]?.path ?? '' }),
     )
     if (hasCertificates) requests.push(
@@ -76,7 +85,8 @@
   let siteName = $state('')
   let siteUpstream = $state('')
   let editingSite = $state<Site | null>(null)
-  let siteSettings = $state('{}')
+  let siteSettings = $state<Settings>({})
+  let siteEnabled = $state(false)
   let siteServerNames = $state('')
   let siteContent = $state('')
   let customSite = $state(false)
@@ -88,35 +98,54 @@
   let certificateRenew = $state(false)
   const objectPath = (site: Site) => 'nginx/objects/' + [site.kind, site.domain, site.name].map(encodeURIComponent).join('/')
   async function mutate(path: string, method = 'POST', body?: unknown, timeout = 60_000) {
-    if (!allowWrites || busy) return
+    if (!allowWrites || busy) return false
     busy = true; actionError = ''; actionMessage = ''
     try {
       const result = await request<{success?: boolean; message?: string; stderr?: string}>('/api/shared/' + path, {method, body: body === undefined ? undefined : JSON.stringify(body)}, timeout)
       if (result.success === false) throw new Error(result.stderr || 'Command failed')
       actionMessage = result.message || 'Operation completed'
       await refresh()
-    } catch (failure) { actionError = failure instanceof Error ? failure.message : 'Operation failed' }
+      return true
+    } catch (failure) { actionError = failure instanceof Error ? failure.message : 'Operation failed'; return false }
     finally { busy = false }
   }
   async function editSite(site: Site) {
     if (busy) return
     actionError = ''; busy = true
     try {
-      const detail = await request<{settings: unknown; content: string; upstream?: string; server_names: string[]}>('/api/shared/' + objectPath(site))
+      const detail = await request<{settings: Settings | null; content: string; upstream?: string; server_names: string[]}>('/api/shared/' + objectPath(site))
       editingSite = site; siteKind = site.kind; siteDomain = site.domain; siteName = site.name
       siteUpstream = detail.upstream || ''; customSite = !site.managed
-      siteSettings = JSON.stringify(detail.settings || {}, null, 2); siteContent = detail.content; siteServerNames = detail.server_names.join(' ')
+      siteSettings = detail.settings || {}; preview = null; previewError = ''; siteContent = detail.content; siteServerNames = detail.server_names.join(' ')
     } catch (failure) { actionError = String(failure) }
     finally { busy = false }
   }
-  function resetSite() { editingSite = null; siteDomain = ''; siteName = ''; siteUpstream = ''; siteSettings = '{}'; siteContent = ''; siteServerNames = ''; customSite = false }
+  function resetSite() { editingSite = null; siteDomain = ''; siteName = ''; siteUpstream = ''; siteSettings = {}; siteEnabled = false; preview = null; previewError = ''; previewController?.abort(); previewBusy = false; siteContent = ''; siteServerNames = ''; customSite = false }
   async function saveSite() {
     try {
-      const body = { ...(customSite ? {content: siteContent} : {settings: JSON.parse(siteSettings)}), upstream: siteUpstream, ...(siteServerNames.trim() ? {server_names: siteServerNames.trim().split(/\s+/)} : {}) }
-      if (editingSite) await mutate(objectPath(editingSite), 'PUT', body)
-      else await mutate('nginx/objects/' + siteKind, 'POST', {...body, domain: siteDomain, name: siteKind === 'domain' ? siteDomain : siteName, enabled: false})
-      if (!actionError) resetSite()
+      const body = { ...(customSite ? {content: siteContent} : {settings: siteSettings}), upstream: siteUpstream, server_names: siteServerNames.trim().split(/\s+/).filter(Boolean) }
+      const saved = editingSite ? await mutate(objectPath(editingSite), 'PUT', body) :
+        await mutate('nginx/objects/' + siteKind, 'POST', {...body, domain: siteDomain, name: siteKind === 'domain' ? siteDomain : siteName, enabled: siteEnabled})
+      if (saved) resetSite()
     } catch (failure) { actionError = String(failure) }
+  }
+  async function saveGlobal(value: GlobalSettings) {
+    if (await mutate('nginx/settings','PUT',value)) globalDraft = null
+  }
+  async function previewAccess() {
+    previewController?.abort(); const active = new AbortController(); previewController = active
+    previewBusy = true; preview = null; previewError = ''
+    try {
+      const result = await request<EffectiveAccess>('/api/shared/nginx/access-preview',{method:'POST',body:JSON.stringify({kind:siteKind,domain:siteDomain,settings:siteSettings}),signal:active.signal})
+      if (!active.signal.aborted) preview = result
+    } catch(e) { if (!active.signal.aborted) previewError = String(e) }
+    finally { if (!active.signal.aborted) previewBusy = false }
+  }
+  function launchSite(site: Site) {
+    const [host,...parts] = site.display_name.split('/')
+    const port = site.effective_access?.https[0]?.port
+    if (!host || !/^[A-Za-z0-9.-]+$/.test(host)) return
+    window.open('https://'+host+(port && port!==443 ? ':'+port : '')+(parts.length ? '/'+parts.map(encodeURIComponent).join('/') : ''),'_blank','noopener,noreferrer')
   }
   function editCertificate(cert: Certificate) {
     certificateId = cert.id; certificateName = cert.name; certificateDomains = cert.domains.join(', ')
@@ -132,7 +161,7 @@
   onMount(() => {
     if (!hasNginx && hasCertificates) section = 'certificates'
     void refresh()
-    return () => { controller?.abort(); logController?.abort() }
+    return () => { controller?.abort(); logController?.abort(); previewController?.abort() }
   })
 </script>
 
@@ -162,8 +191,9 @@
       <label for="site-filter">Filter sites</label><input id="site-filter" type="search" bind:value={filter} placeholder="Find a domain or subfolder…" />
       <div class="shared-table"><table><thead><tr><th>Site</th><th>Port</th><th>Configuration</th><th>State</th><th>Actions</th></tr></thead><tbody>
       {#each visibleSites as site (site.kind + '/' + site.domain + '/' + site.name)}
-        <tr><td><strong>{site.display_name || site.name}</strong><small>{site.kind}</small></td><td>{site.port ?? '—'}</td><td>{site.managed ? 'Managed' : 'Native'}</td><td>{site.enabled ? site.state : 'Disabled'}</td><td>
+        <tr><td><strong>{site.display_name || site.name}</strong><small>{site.kind}</small></td><td>{site.port ?? '—'}</td><td>{site.managed ? 'Managed' : 'Native'}{#if site.effective_access}<small>{site.effective_access.listener_profile} · {site.effective_access.access_policy}</small><small>{site.effective_access.https.map(e=>e.address+':'+e.port).join(', ')}</small>{/if}</td><td>{site.enabled ? site.state : 'Disabled'}</td><td>
           <button disabled={!allowWrites || busy} onclick={() => editSite(site)}>Edit</button>
+          <button type="button" onclick={() => launchSite(site)}>Launch</button>
           <button disabled={!allowWrites || busy} onclick={() => { if (!site.enabled || confirm('Disable this site?')) void mutate(objectPath(site) + (site.enabled ? '/disable' : '/enable')) }}>{site.enabled ? 'Disable' : 'Enable'}</button>
           <button disabled={!allowWrites || busy} onclick={() => { if (confirm('Delete ' + site.display_name + '?')) void mutate(objectPath(site), 'DELETE') }}>Delete</button>
         </td></tr>
@@ -173,21 +203,39 @@
       {#if allowWrites}
         <details open={!!editingSite}><summary>{editingSite ? 'Edit site' : 'Add site'}</summary>
           <form onsubmit={event => { event.preventDefault(); void saveSite() }}>
-            <label>Kind <select bind:value={siteKind} disabled={!!editingSite}><option value="domain">Domain</option><option value="subdomain">Subdomain</option><option value="subfolder">Subfolder</option></select></label>
+            <label>Kind <select bind:value={siteKind} disabled={!!editingSite} onchange={()=>{if(siteKind==='subfolder'){const next={...siteSettings};delete next.listener_profile;siteSettings=next}preview=null}}><option value="domain">Domain</option><option value="subdomain">Subdomain</option><option value="subfolder">Subfolder</option></select></label>
             <label>Domain <input bind:value={siteDomain} required disabled={!!editingSite} /></label>
             {#if siteKind !== 'domain'}<label>Name <input bind:value={siteName} required disabled={!!editingSite} /></label>{/if}
             <label>Upstream <input bind:value={siteUpstream} placeholder="http://127.0.0.1:8080" /></label>
             <label>Server names (optional, space separated) <input bind:value={siteServerNames} /></label>
             <label><input type="checkbox" bind:checked={customSite} disabled={!!editingSite} /> Custom Nginx configuration</label>
             {#if customSite}<label>Configuration <textarea bind:value={siteContent} rows="8" required></textarea></label>
-            {:else}<label>Managed settings (JSON) <textarea bind:value={siteSettings} rows="6" required></textarea></label>{/if}
-            <button type="submit" disabled={busy}>Save site</button><button type="button" onclick={resetSite} disabled={busy}>Reset</button>
+            {:else if settings}
+              {#key siteKind+'|'+(editingSite?.name ?? '')}
+                <NginxPolicyEditor bind:value={siteSettings} global={settings} kind={siteKind} disabled={busy}/>
+              {/key}
+              <button type="button" disabled={previewBusy || !siteDomain} onclick={previewAccess}>{previewBusy ? 'Resolving…' : 'Preview effective access'}</button>
+              {#if previewError}<p class="form-error">{previewError}</p>{/if}
+              {#if preview}<div class="policy-note">
+                <strong>Effective access (last preview)</strong>
+                <p>Listener: {preview.listener_profile} · Access: {preview.access_policy}{preview.inherited_from ? ' · Parent: '+preview.inherited_from : ''}</p>
+                <p>HTTPS: {preview.https.map(e=>e.address+':'+e.port).join(', ') || 'None'} · HTTP: {preview.http.map(e=>e.address+':'+e.port).join(', ') || 'None'}</p>
+                <p>Allowed sources: {preview.allowed_sources === null ? 'Public' : preview.allowed_sources.join(', ') || 'Denied'}</p>
+                {#each preview.routes as route}<p><code>{route.path}</code> · {route.access_policy} · {route.allowed_sources === null ? 'Public' : route.allowed_sources.join(', ') || 'Denied'}</p>{/each}
+              </div>{/if}
+            {:else}<p class="form-error">Load global settings before editing managed sites.</p>{/if}
+            {#if !editingSite}<label><input type="checkbox" bind:checked={siteEnabled}/> Enable after creating</label>{/if}
+            <button type="submit" disabled={busy || (!customSite && !settings)}>Save site</button><button type="button" onclick={resetSite} disabled={busy}>Reset</button>
           </form>
         </details>
       {/if}
     </section>
     <section class="panel"><div class="resource-heading"><h2>Global settings</h2></div><p>Shared listeners, client allowlists and defaults inherited by managed sites.</p>
-      {#if settings}<dl class="shared-stats"><div><dt>Listener profiles</dt><dd>{settings.listener_profiles}</dd></div><div><dt>Access policies</dt><dd>{settings.access_policies}</dd></div><div><dt>Limit policies</dt><dd>{settings.limit_policies}</dd></div><div><dt>Allowed IP entries</dt><dd>{settings.allowed_ips}</dd></div></dl>{/if}
+      {#if settings}
+        <dl class="shared-stats"><div><dt>Listener profiles</dt><dd>{Object.keys(settings.listener_profiles).length}</dd></div><div><dt>Access policies</dt><dd>{Object.keys(settings.access_policies).length}</dd></div><div><dt>Limit policies</dt><dd>{Object.keys(settings.limit_policies).length}</dd></div><div><dt>Allowed IP entries</dt><dd>{settings.allowed_ips.length}</dd></div></dl>
+        {#if globalDraft}<NginxGlobalEditor initial={globalDraft} {usage} disabled={busy || !allowWrites} onSave={saveGlobal} onCancel={()=>globalDraft=null}/>
+        {:else}<button disabled={!allowWrites || busy} onclick={()=>{if(settings)globalDraft=clone(settings)}}>Configure global settings</button>{/if}
+      {/if}
     </section>
     <section class="panel"><div class="resource-heading"><h2>Nginx logs</h2></div>
       <p class="resource-hint">Log content is requested only when you select Read log.</p>

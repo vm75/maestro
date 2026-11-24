@@ -784,6 +784,13 @@ pub async fn put_settings(
         ));
     }
     let settings = nginx_render::with_path_defaults(settings, &state.config);
+    if state.config.platform == crate::config::Platform::Linux
+        && settings.http_access.as_ref().is_some_and(|access| access.wan.is_some())
+    {
+        return Err(ApiError::bad_request(
+            "Firmware-managed WAN access is router-only; configure Linux ingress externally",
+        ));
+    }
     settings.validate().map_err(ApiError::bad_request)?;
     if state.certificate_busy()
         && (previous.http_access != settings.http_access
