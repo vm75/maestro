@@ -73,7 +73,7 @@ Reference: `internal/modules/shares/module.go; internal/modules/shares/setup.go;
 
 | Reference operation | Input/schema requirements | Behavior and privilege boundary | Current status |
 | --- | --- | --- | --- |
-| `shares_list` | protocol optional | Read managed and existing Samba/NFS definitions, connection/export state without private files. | **modeled**; no acceptance evidence |
+| `shares_list` | protocol optional | Read managed and existing Samba/NFS definitions, connection/export state without private files. | Helper inventory **implemented in source**, daemon integration pending; no acceptance evidence |
 | `shares_samba_password` | password; caller identity fixed by helper | Set password for trusted workload account only; no secret logging or account targeting. | **implemented**; no acceptance evidence |
 | `shares_setup` | protocol and confirm; inspect full Go schema | Review/install/setup share service with bounded native change and rollback. | **not started**; no acceptance evidence |
 
@@ -185,7 +185,7 @@ Reference: `internal/declarative/backup_tools.go`; tests: `internal/declarative/
 
 ### Helper-only Server Man operations (not extra public MCP tools)
 
-- `shares_definitions_inspect`, `shares_definitions_validate`, `shares_definitions_apply`: `internal/modules/shares/definitions.go`, referenced from `internal/admin/helper.go`. Accept typed protocol/definitions, require candidate validation and owned-fragment transaction safety. **Not started** in Maestro helper; protected share publishing must stay denied until completed and validated.
+- `shares_definitions_inspect`, `shares_definitions_validate`, `shares_definitions_apply`: `internal/modules/shares/definitions.go`, referenced from `internal/admin/helper.go`. Accept typed protocol/definitions, require candidate validation and owned-fragment transaction safety. **Source implementation in progress:** helper inspection and native candidate validation are implemented; publication remains gated pending activation/rollback and cancellation handling. No compile or native evidence.
 - The root helper also allows `shares_setup`, `shares_samba_password`, native package/dependency operations and systemd actions. Merely exposing the equivalent REST tool does not imply helper coverage or permission.
 
 ## Non-registry capability and native acceptance ledger
@@ -237,6 +237,9 @@ Reference: `internal/declarative/backup_tools.go`; tests: `internal/declarative/
 6. **Evidence closure:** capture per-row Go baseline fixture, Rust unit/API/MCP/UI logs, no-helper and with-helper guest runs, router build graph/IPK/hardware and signoff. Do not mark M2 complete or claim full restorable backup (not implemented in Server Man reference).
 
 ## Current increment evidence (2026-11-23)
+
+**Corrective share port, source-only checkpoint `6883737`:** Directly translated Server Man `internal/modules/shares/{validate,definitions,files,backend,samba,nfs}.go` into `src/core/declarative/share_definitions.rs` and `src/platforms/admin_reference_shares.rs`, reusing typed definitions and native parsers in `native_shares.rs`. The helper now dispatches `shares_list`, `shares_definitions_inspect` and `shares_definitions_validate` to source implementations for owned metadata, normalization, exact rendered-fragment and revision comparison, native inventory, runtime/connection matching, candidate shadow validation and unmanaged conflict detection. Added source tests for exact fragment format, normalization, drift, include and NFS conflict handling. The helper-only native apply/setup operations still fail closed; native activation, file/runtime rollback and cancellation handling are outstanding. The unprivileged daemon's inventory/managed coordinator still needs integration with the port. The earlier private capability probe remains transitional. No compiler or Rust test tools are available in this session; no fixture, build or native verification is asserted. Preserve existing router and shared-module behavior.
+
 
 - Repository reviewed at plan baseline `e4a78158f40e2eee83a2b4ded75f941536d75ef5`. Existing WIP was preserved.
 - Commits: `584ccc22ad89a7b5145c876ed67467d509c06d73` (Linux-only helper and non-root guard), `70b9a8cffc58366e30e4f762d1c3c4f7f8d92ef4` (systemd delegation/package fail-closed), `acf9a6ff774bdd47184fa7ea8a3d141a8770866e` (HTTP/MCP capability response and UI reasons).
