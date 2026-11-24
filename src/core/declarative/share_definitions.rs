@@ -5,7 +5,7 @@ use std::{
     fs,
     io::{ErrorKind, Read},
     net::IpAddr,
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::Path,
 };
 
@@ -139,6 +139,7 @@ pub(crate) fn render(protocol: &str, definitions: &[Definition]) -> Result<Vec<u
 pub(crate) struct Snapshot {
     pub data: Vec<u8>,
     pub exists: bool,
+    pub mode: u32,
 }
 
 impl Snapshot {
@@ -163,7 +164,7 @@ pub(crate) fn read_file(path: &Path, no_symlink: bool) -> Result<Snapshot> {
     file.take(MAX_FILE as u64 + 1).read_to_end(&mut data)
         .map_err(|_| anyhow::anyhow!("configuration could not be read within 1 MiB"))?;
     ensure!(data.len() <= MAX_FILE, "configuration could not be read within 1 MiB");
-    Ok(Snapshot { data, exists: true })
+    Ok(Snapshot { data, exists: true, mode: info.mode() & 0o777 })
 }
 
 pub(crate) fn load(protocol: &str, snapshot: &Snapshot) -> Result<Vec<Definition>> {
@@ -190,6 +191,37 @@ pub(crate) fn load(protocol: &str, snapshot: &Snapshot) -> Result<Vec<Definition
     Ok(definitions)
 }
 
+/// Temporary native configuration in its destination directory. Create without
+/// following links, and clean up on every return, including cancelled futures.
+pub(crate) struct Candidate(std::path::PathBuf);
+
+impl Candidate {
+    pub(crate) fn new(directory: &Path, data: &[u8], mode: u32) -> Result<Self> {
+        use std::io::Write;
+        let metadata = fs::symlink_metadata(directory)?;
+        ensure!(metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0,
+            "native share configuration directory is not trusted");
+        let path = directory.join(format!(".server-man-{}", uuid::Uuid::new_v4()));
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC).open(&path)?;
+        let candidate = Self(path);
+        file.set_permissions(fs::Permissions::from_mode(mode))?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        Ok(candidate)
+    }
+
+    pub(crate) fn path(&self) -> &Path { &self.0 }
+
+    pub(crate) fn text(&self) -> &str {
+        self.0.to_str().expect("fixed native configuration directory and ASCII candidate name")
+    }
+}
+
+impl Drop for Candidate {
+    fn drop(&mut self) { let _ = fs::remove_file(&self.0); }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,7 +234,7 @@ mod tests {
             "# Managed by server-man. Do not edit.\n# server-man-format: 1\n",
             "# server-man-share: {\"name\":\"docs\",\"path\":\"/srv/docs\",\"readOnly\":true,\"browseable\":true,\"users\":[\"alice\",\"bob\"]}\n",
             "[docs]\n\tpath = /srv/docs\n\tread only = yes\n\tguest ok = no\n\tbrowseable = yes\n\tvalid users = alice bob\n\n"));
-        let mut snapshot = Snapshot { data, exists: true };
+        let mut snapshot = Snapshot { data, exists: true, mode: 0o644 };
         assert_eq!(load("samba", &snapshot).unwrap().len(), 1);
         snapshot.data.extend(b"# external edit\n");
         assert!(load("samba", &snapshot).is_err());
@@ -219,6 +251,6 @@ mod tests {
         }
         assert!(client("example.com").is_err());
         assert!(client("192.0.2.1/").is_err());
-        assert_ne!(Snapshot::default().revision(), Snapshot { data: vec![], exists: true }.revision());
+        assert_ne!(Snapshot::default().revision(), Snapshot { data: vec![], exists: true, mode: 0o644 }.revision());
     }
 }
