@@ -337,8 +337,15 @@ async fn service_state(provider:&CompositeProvider,c:&Config,id:&str)->Result<&'
     let state=match service.backend.as_str(){
         "libvirt"=>provider.libvirt.status_details(c,id).await?.state,
         "incus"=>provider.incus.status_details(c,id).await?.state,
-        "compose"=>if service.engine=="docker"{provider.docker_compose.status_details(c,id).await?.state}
-            else{provider.podman_compose.status_details(c,id).await?.state},
+        "compose"=>{
+            let status=if service.engine=="docker"{provider.docker_compose.status_details(c,id).await?}
+                else{provider.podman_compose.status_details(c,id).await?};
+            if status.state=="stopped"{
+                ensure!(status.members.iter().all(|m|matches!(m.state.as_str(),"missing"|"exited"|"stopped"|"created"|"configured"|"dead")),
+                    "Compose members are not all stopped");
+            }
+            status.state
+        },
         "quadlet"=>provider.quadlet.as_ref().context("Quadlet provider unavailable")?.status_details(c,id).await?.state,
         _=>return Err(anyhow!("unsupported backup workload provider")),
     };
@@ -348,7 +355,7 @@ async fn service_state(provider:&CompositeProvider,c:&Config,id:&str)->Result<&'
 fn check_revision(store:&Store,dir:&File,revision:&str)->Result<()>{
     ensure!(store::current(dir,&store.filename)?.is_some_and(|s|s.revision==revision),"configuration revision changed during backup");Ok(())
 }
-async fn resume(store:&Store,dir:&File,provider:&CompositeProvider,c:&Config,j:&mut Recovery)->Result<(Vec<String>,Vec<String>)>{
+async fn resume(store:&Store,dir:&File,storage_root:&Path,provider:&CompositeProvider,c:&Config,j:&mut Recovery)->Result<(Vec<String>,Vec<String>)>{
     j.stage="recovering".into();persist(store,dir,j)?;
     let end=Instant::now()+Duration::from_secs(120);
     let mut resumed=Vec::new();let mut failed=Vec::new();
@@ -365,7 +372,15 @@ async fn resume(store:&Store,dir:&File,provider:&CompositeProvider,c:&Config,j:&
                     for dep in &c.services[id].depends_on{
                         ensure!(service_state(provider,c,dep).await?=="running","backup dependency is not running");
                     }
-                    provider.action(c,id,"start").await?;
+                    let source_path=store.path();
+                    let root=source_path.parent().context("configuration root unavailable")?;
+                    let inventory=backup_inventory::inventory(store,root,storage_root)?;
+                    ensure!(inventory.issues.iter().all(|issue|issue.severity=="warning"||issue.code=="backup_native_dependencies"),
+                        "required source files need attention before workload recovery");
+                    if c.services[id].backend=="compose"{
+                        let adapter=if c.services[id].engine=="docker"{&provider.docker_compose}else{&provider.podman_compose};
+                        adapter.resume_backup_workload(c,id).await?;
+                    }else{provider.action(c,id,"start").await?;}
                     ensure!(service_state(provider,c,id).await?=="running","workload did not resume");Ok(())
                 },
                 _=>Err(anyhow!("unknown workload state")),
@@ -378,7 +393,7 @@ async fn resume(store:&Store,dir:&File,provider:&CompositeProvider,c:&Config,j:&
     if failed.is_empty(){j.stage="complete".into();persist(store,dir,j)?;}
     Ok((resumed,failed))
 }
-pub async fn recover(store:&Store,provider:&CompositeProvider,revision:&str,token:&str)->Result<RecoveryStatus>{
+pub async fn recover(store:&Store,storage_root:&Path,provider:&CompositeProvider,revision:&str,token:&str)->Result<RecoveryStatus>{
     let dir=store::LockedDirectory::try_acquire(store.directory()?)?;
     let mut j=reviewed(store,&dir,revision,token)?;
     ensure!(j.revision==revision,"backup recovery requires the original configuration revision");
@@ -386,7 +401,7 @@ pub async fn recover(store:&Store,provider:&CompositeProvider,revision:&str,toke
     journal::ensure_idle(&dir)?;
     let config=store::current(&dir,&store.filename)?.context("configuration unavailable")?.config()?;
     ensure!(j.services.keys().all(|id|config.services.contains_key(id)),"backup recovery references an unknown workload");
-    let (_,failed)=resume(store,&dir,provider,&config,&mut j).await?;
+    let (_,failed)=resume(store,&dir,storage_root,provider,&config,&mut j).await?;
     ensure!(failed.is_empty(),"previously running workloads need explicit recovery");
     status(store)
 }
@@ -539,9 +554,10 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
         if tokio::time::timeout(end.saturating_duration_since(Instant::now()),service_state(provider,&config,id)).await??=="running"{running.push(id.to_owned());}
     }
     ensure!(opts.quiesce||running.is_empty(),"running workloads must be quiesced");
-    let publication=Publication::new(&opts.destination,source_root)?;
     let required=inv.inputs.iter().filter_map(|i|i.allocated_bytes.or(i.logical_bytes)).try_fold(METADATA_RESERVE,|a,b|a.checked_add(b).context("capture capacity estimate overflow"))?;
-    ensure!(available_bytes(&publication.root)? >= required,"insufficient disk space at destination");
+    let parent=Path::new(&opts.destination).parent().context("destination parent unavailable")?;
+    ensure!(available_bytes(&open_absolute(parent,true)?)? >= required,"insufficient disk space at destination");
+    let publication=Publication::new(&opts.destination,source_root)?;
     let mut j=Recovery{version:1,revision:snapshot.revision.clone(),destination:opts.destination.clone(),stage:"capturing".into(),updated_at:Utc::now(),
         services:running.iter().map(|id|(id.clone(),"untouched".into())).collect(),artifact:publication.artifact.clone()};
     persist(store,&dir,&mut j)?;
@@ -584,7 +600,7 @@ pub async fn prepare(store:&Store,storage_root:&Path,provider:&CompositeProvider
         // Timeout never drops the outer cleanup/recovery step. Persisted
         // stop intent handles commands which may have changed native state.
         let capture=tokio::time::timeout(end.saturating_duration_since(Instant::now()),capture).await;
-        let recovery=resume(store,&dir,provider,&config,&mut j).await;
+        let recovery=resume(store,&dir,storage_root,provider,&config,&mut j).await;
         let (files,exports)=capture.context("backup capture deadline exceeded")??;
         let (resumed,failed)=recovery?;
         let manifest=Manifest{source_root:source_root.to_string_lossy().into_owned(),principal:principal()?,
