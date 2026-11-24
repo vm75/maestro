@@ -1,6 +1,7 @@
 mod apply;
 mod artifacts;
 pub mod backup_inventory;
+pub mod backup_capture;
 pub mod browse;
 mod container_health;
 mod revert;
