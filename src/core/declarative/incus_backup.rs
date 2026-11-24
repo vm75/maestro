@@ -113,3 +113,61 @@ pub(crate) fn verify_archive(c:&Config,id:&str,object:&NativeObject,file:File,en
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    use std::io::{Seek,SeekFrom};
+    #[test]
+    fn portable_archive_must_contain_reviewed_guest_and_root_disk(){
+        let config=super::super::super::parse(br#"version: 1
+bindings:
+  lan: {kind: network, name: default}
+  pool: {kind: pool, name: default}
+  project: {kind: project, name: managed}
+services:
+  guest:
+    kind: vm
+    backend: incus
+    vm:
+      image: ubuntu-24.04
+      uuid: "c3d699a2-921d-4009-8b63-1d0144fbb7dc"
+      mac: "52:54:00:12:34:56"
+      cpus: 2
+      memory_mib: 1024
+      network: lan
+      pool: pool
+      project: project
+"#).unwrap();
+        let object=NativeObject{backend:"incus".into(),name:"sm-guest".into(),project:"managed".into(),pool:"default".into(),content_type:"block".into()};
+        let want=render(&config,"guest").unwrap();
+        let index=serde_json::json!({
+            "name":"sm-guest","pool":"default","backend":"dir","type":"virtual-machine",
+            "optimized":false,"optimized_header":false,"snapshots":[],
+            "config":{
+                "container":{"name":"sm-guest","type":"virtual-machine","config":want.config,"devices":want.devices,"profiles":[],"stateful":false},
+                "volume":{"name":"sm-guest","type":"virtual-machine","content_type":"block","project":"managed"},
+                "pool":{"name":"default","driver":"dir"},"dependent_volumes":[]
+            }
+        });
+        let make=|include_disk:bool,index:&Value|{
+            let file=tempfile::tempfile().unwrap();
+            let mut archive=tar::Builder::new(file);
+            let yaml=serde_yaml::to_string(index).unwrap();
+            let mut h=tar::Header::new_gnu();h.set_size(yaml.len() as u64);h.set_mode(0o600);h.set_cksum();
+            archive.append_data(&mut h,"backup/index.yaml",yaml.as_bytes()).unwrap();
+            let mut h=tar::Header::new_gnu();h.set_entry_type(tar::EntryType::Directory);h.set_size(0);h.set_mode(0o700);h.set_cksum();
+            archive.append_data(&mut h,"backup/virtual-machine/",std::io::empty()).unwrap();
+            if include_disk{
+                let mut h=tar::Header::new_gnu();h.set_size(4);h.set_mode(0o600);h.set_cksum();
+                archive.append_data(&mut h,"backup/virtual-machine.img",&b"disk"[..]).unwrap();
+            }
+            let mut file=archive.into_inner().unwrap();file.seek(SeekFrom::Start(0)).unwrap();file
+        };
+        let end=Instant::now()+Duration::from_secs(10);
+        assert!(verify_archive(&config,"guest",&object,make(true,&index),end).is_ok());
+        assert!(verify_archive(&config,"guest",&object,make(false,&index),end).is_err());
+        let mut wrong=index;wrong["config"]["container"]["config"][IDENTITY]=serde_json::json!("foreign");
+        assert!(verify_archive(&config,"guest",&object,make(true,&wrong),end).is_err());
+    }
+}
