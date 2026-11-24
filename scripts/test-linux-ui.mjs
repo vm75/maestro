@@ -13,7 +13,9 @@ const root=resolve('linux-web/dist'), lab=await mkdtemp(join(tmpdir(),'maestro-l
 const chrome=process.argv[2] || process.env.CHROMIUM || '/usr/bin/chromium';
 const calls=[];
 let allowWrites=true, reach='down', adStatus={enabled:true, protection_enabled:true, filtering_enabled:true};
-let rewrites=[{domain:'old.test',answer:'192.0.2.5'}];
+let rewrites=[{domain:'old.test',answer:'192.0.2.5'},{domain:'another.test',answer:'192.0.2.7'}];
+let certs=[], certLock={locked:false,status:'idle'}, httpAccess={state:'closed',names:[],wan_control:'external'};
+let wgAuthorized=false,wgRunning=false,wgPeers=[],wgRevision='1';
 const modules=['nginx','certificates','ban_shield','wol','adguard','wireguard'].map(id=>({id,availability:'ready',dependencies:[]}));
 const site={kind:'domain',domain:'example.test',name:'example.test',display_name:'example.test',managed:true,enabled:true,state:'live',port:8443,effective_access:{listener_profile:'legacy',access_policy:'legacy',https:[{address:'127.0.0.1',port:8443}],http:[],allowed_sources:['127.0.0.1/32'],routes:[]}};
 let global={shared:{},site_defaults:{disable_root:false,routes:[{path:'/admin',match:'exact',access_policy:'deny'}]},listener_profiles:{},access_policies:{},limit_policies:{},allowed_ips:[],free_subdomains:[]};
@@ -50,9 +52,28 @@ const server=createServer(async(req,res)=>{
       if(access==='public')await sleep(700);
       return json(res,{...site.effective_access,access_policy:access,allowed_sources:access==='deny'?[]:access==='public'?null:['127.0.0.1/32'],routes:[]});
     }
-    if(key==='certificates')return json(res,[]);
-    if(key==='certificates/http-access')return json(res,{state:'closed',names:[],wan_control:'external'});
-    if(key==='certificates/lock')return json(res,{locked:false,status:'idle'});
+    if(key==='certificates'){
+      if(method==='POST'){certs.push({...body,id:'cert-1',exists:false,renewal_due:true});return json(res,{message:'Certificate definition created'});}
+      return json(res,certs);
+    }
+    if(key==='certificates/http-access'){if(method==='DELETE')httpAccess={state:'closed',names:[],wan_control:'external'};return json(res,httpAccess);}
+    if(key==='certificates/lock')return json(res,certLock);
+    if(key==='certificates/lock/clear'){certLock={locked:false,status:'idle'};return json(res,certLock);}
+    if(key==='certificates/cert-1'){
+      if(method==='PUT'){certs[0]={...certs[0],...body};return json(res,{message:'Certificate definition updated'});}
+      if(method==='DELETE'){certs=[];return json(res,{message:'Certificate definition removed'});}
+    }
+    if(key==='certificates/cert-1/issue'||key==='certificates/cert-1/renew'){
+      const action=key.split('/').at(-1);
+      if(certLock.locked||certLock.status==='running')return json(res,{error:'Certificate operation locked'},409);
+      certLock={locked:true,status:'running',operation:{certificate:certs[0].name,action,status:'running'}};
+      httpAccess={state:'active',names:certs[0].domains,wan_control:'external',expires_at:'2030-01-01T00:00:00Z'};
+      await sleep(250);
+      certs[0]={...certs[0],exists:true,renewal_due:false,days_remaining:90,expires_at:'2030-01-01T00:00:00Z'};
+      certLock={locked:false,status:'completed',operation:{certificate:certs[0].name,action,status:'completed'}};
+      httpAccess={state:'closed',names:[],wan_control:'external'};
+      return json(res,{message:action==='issue'?'Certificate issued':'Certificate renewed'});
+    }
     if(key==='wol')return json(res,[{id:'machine-1',name:'Test machine',mac:'02:00:00:00:00:01',broadcast:'255.255.255.255',port:9,notes:'Test note'}]);
     if(key==='wol/status')return json(res,[{id:'machine-1',ip:'192.0.2.3',status:reach}]);
     if(key==='wol/machine-1/wake'){reach='up';return json(res,{machine:'Test machine',packets_sent:3,simulated:true});}
@@ -62,7 +83,19 @@ const server=createServer(async(req,res)=>{
       const kind=key.split('/')[1];adStatus={...adStatus,[kind+'_enabled']:body.enabled,[kind+'_remaining_seconds']:body.enabled?null:body.duration_minutes*60};return json(res,{message:'Updated'});
     }
     if(key==='adguard/rewrites'){if(method==='PUT')rewrites=body;return json(res,rewrites);}
-    if(key==='wireguard/status')return json(res,{interface:'wg0',is_running:false,writable:false,peers_writable:false,reason:'Helper unavailable'});
+    if(key==='wireguard/status')return json(res,{interface:'wg0',is_running:wgRunning,writable:wgAuthorized,peers_writable:wgAuthorized,reason:wgAuthorized?'Authorized system service':'Helper unavailable'});
+    if(key==='wireguard/peers'){
+      if(!wgAuthorized)return json(res,{error:'Helper unavailable'},400);
+      if(method==='PUT'){
+        if(wgRunning||body.revision!==wgRevision)return json(res,{error:'Configuration changed or running'},409);
+        wgPeers=body.peers;wgRevision=String(Number(wgRevision)+1);
+      }
+      return json(res,{revision:wgRevision,peers:wgPeers,address:'10.0.0.1/24',listen_port:51820,is_running:wgRunning});
+    }
+    if(key==='wireguard/toggle'){
+      if(!wgAuthorized)return json(res,{error:'Helper unavailable'},400);
+      wgRunning=body.enable;return json(res,{message:wgRunning?'Started':'Stopped'});
+    }
     if(key==='firewall/capability')return json(res,{enforcement:false,reason:'Helper unavailable'});
     if(key==='firewall/rules' && method==='POST'){const rule={...body,id:'new-rule'};policy={...policy,rules:[...policy.rules,rule]};return json(res,rule);}
     if(key==='firewall'){if(method==='PUT')policy=body;return json(res,{policy,snapshot:{active_ban_count:bans.length,banned_ips:[],banned_subnets:[],rule_stats:[['Test rule',{match_count:7,ban_count:2}]]},bans,health,settings:{global_threshold:5},tuning:policy.tuning||tuning});}
@@ -97,7 +130,9 @@ try{
   await click('AdGuard Home');await wait('document.body.innerText.includes("Protection and filtering")');await click('10 min');
   await waitFor(()=>calls.some(c=>c.path.endsWith('/adguard/protection')&&c.body.duration_minutes===10),'timed pause payload');
   await wait('document.body.innerText.includes("Paused · 10m")');await click('Resume');await waitFor(()=>calls.some(c=>c.path.endsWith('/adguard/protection')&&c.body.enabled===true),'resume payload');
-  await click('Answer ↕');await click('Manage DNS rewrites');await field('Domain','edited.test');await click('Save rewrites');await waitFor(()=>rewrites[0].domain==='edited.test','edited rewrite');
+  await click('Answer ↕');assert.equal(await ev('document.querySelector("tbody tr td").textContent'),'old.test');await click('Answer ↑');assert.equal(await ev('document.querySelector("tbody tr td").textContent'),'another.test');await click('Manage DNS rewrites');await field('Domain','edited.test');await click('Save rewrites');await waitFor(()=>rewrites[0].domain==='edited.test','edited rewrite');
+  await click('WireGuard');await wait('document.body.innerText.includes("Helper unavailable")');assert.ok(await ev('[...document.querySelectorAll("button")].find(b=>b.textContent.trim()==="Start").disabled'));assert.ok(!calls.some(c=>c.path.endsWith('/wireguard/peers')),'do not read private configuration without grant');
+  wgAuthorized=true;await click('Refresh');await wait('document.body.innerText.includes("WireGuard peers")');await field('Public key','AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=');await field('Allowed IP networks','10.0.0.2/32');await click('Save peer');await waitFor(()=>wgPeers.length===1,'authorized peer save');await click('Start');await waitFor(()=>wgRunning,'authorized start');await wait('[...document.querySelectorAll("button")].find(b=>b.textContent.trim()==="Save peer").closest("fieldset").disabled');await ev('window.confirm=()=>true');await click('Stop');await waitFor(()=>!wgRunning,'authorized stop');
   await click('Ban Shield');await wait('document.body.innerText.includes("7 / 2")');await click('Add rule');await field('Name','New detection');await field('Log paths','/tmp/new.log');await click('Save rule');await waitFor(()=>policy.rules.some(r=>r.name==='New detection'),'structured rule save');
   await click('Edit security tuning');await click('Load strict preset');await click('Save security tuning');await waitFor(()=>policy.tuning?.ip_failures===3,'strict preset payload');
   await ev('window.confirm=(message)=>{window.lastConfirm=message;return true}');assert.equal(calls.some(c=>c.path==='/api/shared/firewall/bans'&&c.method==='GET'),false,'ban details must load on demand');await click('Show active bans');await click('Expires ↕');await click('Unban + allow');await wait('window.lastConfirm.includes("allowlist")');
@@ -108,6 +143,11 @@ try{
   await click('Setup guide');await wait('!!document.querySelector("dialog[open]")');await click('Close guide');
   await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await click('Open guide');await wait('!!document.querySelector("dialog[open]")');assert.ok(await ev('document.querySelector("dialog[open]").getBoundingClientRect().width<=window.innerWidth'),'guide fits mobile viewport');await click('Close guide');await call('Emulation.clearDeviceMetricsOverride');
   await click('Certificates');await click('Add certificate');assert.equal(await ev('Array.from(document.querySelectorAll("label")).find(l=>l.textContent.trim()==="Auto renew").querySelector("input").checked'),true);
+  await field('Name','Lab certificate');await field('Domains','example.test');await click('Save certificate');await waitFor(()=>certs.length===1,'certificate definition saved');await wait('document.body.innerText.includes("Lab certificate")');
+  certLock={locked:true,status:'locked',path:'/tmp/lab.lock'};await click('Refresh');await wait('document.body.innerText.includes("/tmp/lab.lock")');assert.ok(await ev('[...document.querySelectorAll("button")].find(b=>b.textContent.trim()==="Issue").disabled'));await click('Clear stale lock');await waitFor(()=>!certLock.locked,'stale lock cleared');
+  await click('Issue');await waitFor(()=>certs[0].exists,'fixture issuance');await wait('document.body.innerText.includes("90 days remaining")');await click('Renew');await wait('document.body.innerText.includes("Certificate renew: Lab certificate")');
+  httpAccess={state:'active',names:['example.test'],wan_control:'external',expires_at:'2030-01-01T00:00:00Z'};await click('Refresh');await wait('document.body.innerText.includes("example.test")');await click('Close validation window');await waitFor(()=>httpAccess.state==='closed','HTTP validation closed');
+  await click('Edit');await field('Name','Renamed certificate');await click('Save certificate');await waitFor(()=>certs[0].name==='Renamed certificate','certificate edited');await click('Delete');await waitFor(()=>certs.length===0,'certificate deleted');
   allowWrites=false;await call('Page.navigate',{url:base+'/#web'});await call('Page.reload');await wait('document.body.innerText.includes("Read only")');await click('Inspect');await wait('document.body.innerText.includes("Inspect site")');assert.equal(await ev('!!document.querySelector("fieldset[disabled]")'),true);
   assert.deepEqual(errors,[],'browser exceptions');console.log('PASS: shared Linux UI workflows (fixture API, no host mutations)');
 }catch(e){console.error(e);if(diagnostic){try{console.error(JSON.stringify(await diagnostic(),null,2))}catch{}}throw e}finally{

@@ -230,7 +230,6 @@
   table { width: 100%; border-collapse: collapse; text-align: left; }
   th, td { padding: .7rem; border-bottom: 1px solid var(--border); }
   th { color: var(--muted); font-size: .78rem; }
-  td small { display: block; color: var(--muted); }
   form, fieldset { display: grid; gap: .75rem; }
   fieldset { border: 0; padding: 0; }
 </style>
