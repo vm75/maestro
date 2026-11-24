@@ -2047,6 +2047,7 @@ pub async fn execute_tool(
                         json!({"name":name,"state":state,"ports":container.ports})
                     }).collect();
                     json!({"id":app.id,"name":app.name,"kind":app.kind,
+                        "instanceType":service.vm.as_ref().filter(|_|service.backend=="incus").map(|v|if v.is_system_container(){"container"}else{"virtual-machine"}),
                         "backend":crate::core::declarative::preflight::service_backend(service),
                         "enabled":app.enabled,"state":app.state,"registered":registered,
                         "configuration":configuration,"issues":issues,"members":members})

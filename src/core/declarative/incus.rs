@@ -57,6 +57,15 @@ fn vm<'a>(config:&'a Config,id:&str)->Result<&'a super::VM>{
     ensure!(s.kind=="vm"&&s.backend=="incus","resource is not an Incus VM");
     s.vm.as_ref().ok_or_else(||anyhow!("missing Incus VM definition"))
 }
+fn instance_kind(config: &Config, id: &str) -> Result<&'static str> {
+    Ok(if vm(config,id)?.is_system_container() { "container" } else { "virtual-machine" })
+}
+fn init_args<'a>(image: &'a str, target: &'a str, system_container: bool) -> Vec<&'a str> {
+    let mut args = vec!["init",image,target];
+    if !system_container { args.push("--vm"); }
+    args.push("--no-profiles");
+    args
+}
 fn project<'a>(config:&'a Config,id:&str)->Result<&'a str>{
     let v=vm(config,id)?;
     let binding=config.bindings.get(&v.project).filter(|b|b.kind=="project"&&binding_name(&b.name))
@@ -85,12 +94,17 @@ fn render(config:&Config,id:&str)->Result<Definition>{
     ensure!(v.firmware.is_empty()||v.firmware=="uefi","initial Incus VM profile requires UEFI");
     ensure!(matches!(v.architecture.as_str(),""|"x86_64"|"aarch64"),"unsupported Incus architecture");
     let size=if v.root_size_gib==0{20}else{v.root_size_gib};
-    let settings=BTreeMap::from([
+    let mut settings=BTreeMap::from([
         ("limits.cpu".into(),v.cpus.to_string()),("limits.memory".into(),format!("{}MiB",v.memory_mib)),
-        ("boot.autostart".into(),s.enabled.to_string()),("security.secureboot".into(),"true".into()),
+        ("boot.autostart".into(),s.enabled.to_string()),
         (ID.into(),id.into()),(IDENTITY.into(),v.uuid.clone()),(FINGERPRINT.into(),service_fingerprint(&config,id)?),
         (RUNTIME.into(),runtime_fingerprint(&config,id)?),
     ]);
+    if v.is_system_container() {
+        settings.insert("security.privileged".into(), "false".into());
+    } else {
+        settings.insert("security.secureboot".into(), "true".into());
+    }
     let root=BTreeMap::from([("type".into(),"disk".into()),("path".into(),"/".into()),
         ("pool".into(),pool.name.clone()),("size".into(),format!("{size}GiB"))]);
     let mut nic=BTreeMap::from([("type".into(),"nic".into()),("name".into(),"eth0".into()),("hwaddr".into(),v.mac.clone())]);
@@ -115,7 +129,7 @@ fn running_update_needs_stop(want:&Definition,actual:&Instance)->bool{
     let d=&actual.definition;
     d.ephemeral||!d.profiles.is_empty()||want.description!=d.description
         ||(!want.architecture.is_empty()&&want.architecture!=d.architecture)||want.devices!=d.devices
-        ||["limits.cpu","limits.memory","security.secureboot",RUNTIME].iter().any(|key|config_value(want,key)!=config_value(d,key))
+        ||["limits.cpu","limits.memory","security.secureboot","security.privileged",RUNTIME].iter().any(|key|config_value(want,key)!=config_value(d,key))
 }
 fn active_matches(want:&Definition,actual:&Instance)->bool{
     actual.status_code==102||config_value(&actual.definition,ACTIVE_RUNTIME)==config_value(want,RUNTIME)
@@ -140,7 +154,8 @@ fn image_valid(image:&str)->bool{
 fn check_transition(previous:&Config,desired:&Config,id:&str)->Result<()>{
     if !previous.services.contains_key(id)||!desired.services.contains_key(id){return Ok(())}
     let a=vm(previous,id)?;let b=vm(desired,id)?;
-    ensure!(a.uuid==b.uuid&&a.mac==b.mac,"existing VM identity cannot be changed");
+    ensure!(a.uuid==b.uuid&&a.mac==b.mac,"existing guest identity cannot be changed");
+    ensure!(a.instance_type==b.instance_type,"changing an existing Incus instance type is unsupported");
     ensure!(a.image==b.image,"changing an existing Incus image requires explicit reprovisioning");
     let size=|s:i64|if s==0{20}else{s};
     ensure!(size(b.root_size_gib)>=size(a.root_size_gib),"shrinking Incus root storage is unsupported");
@@ -249,8 +264,15 @@ impl IncusProvider{
         ensure!(output.status.success(),"Incus native operation failed");
         Ok(())
     }
-    pub async fn check_prerequisites(&self)->Result<()>{
+    pub async fn check_daemon(&self)->Result<()>{
         let _:BTreeMap<String,Value>=self.get(None,"/1.0").await.map_err(|_|anyhow!("The local Incus daemon is unavailable"))?;
+        Ok(())
+    }
+    pub async fn check_prerequisites(&self)->Result<()>{
+        self.check_daemon().await?;
+        self.check_vm_prerequisites().await
+    }
+    async fn check_vm_prerequisites(&self)->Result<()>{
         ensure!(self.qemu.is_absolute()&&self.qemu.is_file(),"The native QEMU executable required for Incus VMs is missing");
         let output=self.runner.capture_scoped(&self.qemu,&["-spice","help"],Duration::from_secs(3),64*1024,false,ENV,None,&[]).await
             .map_err(|_|anyhow!("QEMU SPICE support required for Incus VMs is unavailable"))?;
@@ -262,6 +284,7 @@ impl IncusProvider{
     }
     pub async fn check_resource(&self,config:&Config,id:&str)->Result<()>{
         let want=render(config,id)?;let project=project(config,id)?;
+        if instance_kind(config,id)? == "virtual-machine" { self.check_vm_prerequisites().await?; }
         let _:BTreeMap<String,Value>=self.get(None,&format!("/1.0/projects/{project}")).await
             .map_err(|_|anyhow!("Incus project binding is unavailable"))?;
         let pool=&want.devices["root"]["pool"];
@@ -282,7 +305,7 @@ impl IncusProvider{
         ensure!(count<=1,"ambiguous Incus instance identity");
         if count==0{return Ok(None)}
         let actual:Instance=self.get(Some(project),&path).await?;
-        ensure!(actual.name==instance_name(id)&&actual.kind=="virtual-machine"
+        ensure!(actual.name==instance_name(id)&&actual.kind==instance_kind(config,id)?
             &&config_value(&actual.definition,ID)==id&&config_value(&actual.definition,IDENTITY)==vm(config,id)?.uuid,
             "Incus instance ownership does not match the desired definition");
         ensure!(actual.status_code>0,"Incus instance state is unavailable");
@@ -329,7 +352,7 @@ impl IncusProvider{
             ensure!(mode==ApplyMode::Now,"removal requires immediate apply");
             ensure!(actual.is_none(),"Incus definition removal requires an explicit data-preserving export workflow");
         }else{
-            self.check_prerequisites().await?;
+            self.check_daemon().await?;
             self.check_resource(desired,id).await?;
             let want=render(desired,id)?;
             if let Some(a)=&actual{
@@ -377,7 +400,8 @@ impl IncusProvider{
             }else{
                 let payload=merge_volatile(want,&Instance::default());
                 let image=format!("local:{}",vm(desired,id)?.image);
-                self.run(project,Some(&payload),&["init",&image,&target,"--vm","--no-profiles"],1200).await?;
+                let args = init_args(&image,&target,vm(desired,id)?.is_system_container());
+                self.run(project,Some(&payload),&args,1200).await?;
             }
             publish_artifact(&self.directory(id),"instance.yaml",before.as_deref(),after.as_deref())?;
         }
@@ -540,6 +564,23 @@ services:
         assert_ne!(instance_name("a_b"),instance_name("a-b"));
         assert!(instance_name(&"a".repeat(63)).len()<=63);
         assert!(!image_valid("images:ubuntu/24.04"));
+    }
+    #[test]
+    fn system_container_uses_unprivileged_lxc_settings_and_type_is_immutable(){
+        let original = fixture();
+        let mut config = original.clone();
+        let guest = config.services.get_mut("guest").unwrap().vm.as_mut().unwrap();
+        guest.instance_type = "container".into();
+        guest.firmware.clear();
+        assert_eq!(instance_kind(&config,"guest").unwrap(),"container");
+        let want=render(&config,"guest").unwrap();
+        assert_eq!(want.config["security.privileged"],"false");
+        assert!(!want.config.contains_key("security.secureboot"));
+        assert_eq!(init_args("local:ubuntu","local:maestro-guest",true),vec!["init","local:ubuntu","local:maestro-guest","--no-profiles"]);
+        assert_eq!(init_args("local:ubuntu","local:maestro-guest",false),vec!["init","local:ubuntu","local:maestro-guest","--vm","--no-profiles"]);
+        assert!(check_transition(&original,&config,"guest").is_err());
+        config.services.get_mut("guest").unwrap().vm.as_mut().unwrap().firmware = "uefi".into();
+        assert!(render(&config,"guest").is_err());
     }
     #[tokio::test]
     async fn reference_native_scoping_stopped_edits_and_non_destructive_removal(){

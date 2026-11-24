@@ -67,7 +67,7 @@ fn orchestrated(labels: &BTreeMap<String, String>) -> bool {
     labels.keys().any(|key| {
         let key = key.to_ascii_lowercase();
         ["com.docker.compose.", "io.podman.compose.", "com.docker.swarm.", "io.kubernetes.",
-         "io.openshift.", "io.podman.", "io.containers.", "podman_systemd_unit", "org.systemd."].iter().any(|prefix| key.starts_with(prefix))
+         "io.openshift.", "io.podman.", "io.containers.", "podman_systemd_unit", "org.systemd."].iter().any(|prefix| key.starts_with(*prefix))
     })
 }
 

@@ -323,6 +323,12 @@ impl Config {
                         "invalid VM resources or backend"
                     );
                     ensure!(
+                        vm.instance_type.is_empty()
+                            || (vm.is_system_container() && service.backend == "incus"
+                                && vm.firmware.is_empty() && vm.machine.is_empty() && vm.disks.is_empty()),
+                        "system-container type requires Incus without VM-only hardware or disks"
+                    );
+                    ensure!(
                         self.bindings
                             .get(&vm.network)
                             .is_some_and(|binding| matches!(

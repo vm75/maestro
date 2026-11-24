@@ -9,6 +9,7 @@
     initialKind,
     initialEngine,
     initialBackend,
+    initialInstanceType,
     initialContainer,
     initialRemoval = false,
     singleContainer = false,
@@ -23,6 +24,7 @@
     initialKind?: 'container' | 'vm'
     initialEngine?: 'podman' | 'docker'
     initialBackend?: 'quadlet' | 'compose' | 'libvirt' | 'incus'
+    initialInstanceType?: '' | 'container'
     onClose: () => void
     onSaved: (job: string) => void
   } = $props()
@@ -36,7 +38,7 @@
     const b = initialBackend ?? (k === 'vm' ? 'libvirt' : 'quadlet')
     const e = initialEngine ?? (k === 'container' ? 'podman' : undefined)
     if (k === 'vm') {
-      return { kind: 'vm', backend: b, enabled: false, name: '', description: '', vm: { cpus: 2, memoryMiB: 2048, network: '', disks: [] } }
+      return { kind: 'vm', backend: b, enabled: false, name: '', description: '', vm: { cpus: 2, memoryMiB: 2048, network: '', disks: [], ...(initialInstanceType === 'container' ? { instanceType: 'container' as const } : {}) } }
     }
     return { kind: 'container', engine: e, backend: b, enabled: false, name: '', description: '', containers: { app: { image: '', mounts: [] } } }
   }
@@ -62,7 +64,7 @@
   let blockedResources = $state<string[]>([])
   let operation = $state('save')
   let mode = $state('now')
-  const incusEditNotice = 'Incus v1: Stop the VM before changing CPU, memory, storage, network, firmware or native description. Save for next start does not defer running hardware edits. Start at boot can be changed without stopping the VM.'
+  const incusEditNotice = 'Stop the Incus guest before changing CPU, memory, storage, network, firmware or native description. Save for next start does not defer running hardware edits. Start at boot can be changed without stopping the guest.'
   const storageChoices = $derived(Object.entries(snapshot?.config.storage ?? {}))
   const directoryStorageChoices = $derived(storageChoices.filter(([, s]) => s.kind !== 'file'))
   let folderSource = $state<'storage' | 'manual'>('storage')
@@ -331,7 +333,7 @@
   const serviceTypeTitle = $derived.by(() => {
     if (kind !== 'service') return kind === 'secret' ? 'private file reference' : kind
     if (service.kind === 'vm') {
-      return service.backend === 'incus' ? 'Incus virtual machine' : 'KVM/libvirt virtual machine'
+      return service.backend === 'incus' ? (service.vm?.instanceType === 'container' ? 'Incus system container' : 'Incus virtual machine') : 'KVM/libvirt virtual machine'
     }
     if (service.engine === 'docker') return 'Docker Compose application'
     if (service.backend === 'compose') return 'Podman Compose application'
@@ -413,7 +415,7 @@
       <label>Resource ID <input required maxlength="63" bind:value={id} disabled={!!resourceID} /></label>
       {#if kind === 'service'}
         <label>Display name <input bind:value={service.name} maxlength="128" /></label><label>Description <textarea bind:value={service.description}></textarea></label>
-        <label>Application type <select aria-label="Application type" value={service.kind} disabled={!!resourceID || singleContainer} onchange={(e) => setKind(e.currentTarget.value)}><option value="container">Container application</option><option value="vm">Virtual machine</option></select></label>
+        <label>Application type <select aria-label="Application type" value={service.kind} disabled={!!resourceID || singleContainer} onchange={(e) => setKind(e.currentTarget.value)}><option value="container">Container application</option><option value="vm">Virtual machine / system container</option></select></label>
         <label><input type="checkbox" bind:checked={service.enabled} /> Start at boot (does not start now)</label>
         <label>Required application IDs <input bind:value={dependencyText} placeholder="database, cache" /></label>
         {#if service.kind === 'container'}
@@ -534,9 +536,9 @@
             {/if}
           </fieldset>
         {:else if service.vm}
-          <label>VM backend <select aria-label="VM backend" bind:value={service.backend} disabled={!!resourceID}><option value="libvirt">KVM/libvirt</option><option value="incus">Incus</option></select></label>
-          {#if service.backend === 'incus'}<p>{incusEditNotice}</p>{/if}
-          <p class="field-hint">Persistent VM UUID and MAC address are generated automatically and retained on edits.</p>
+          <label>Guest backend <select aria-label="VM backend" bind:value={service.backend} disabled={!!resourceID} onchange={(e) => { if (e.currentTarget.value !== 'incus' && service.vm) delete service.vm.instanceType }}><option value="libvirt">KVM/libvirt</option><option value="incus">Incus</option></select></label>
+          {#if service.backend === 'incus'}<label>Incus instance type <select aria-label="Incus instance type" value={service.vm.instanceType ?? ''} disabled={!!resourceID} onchange={(e) => { if (service.vm) service.vm.instanceType = e.currentTarget.value === 'container' ? 'container' : '' }}><option value="">Virtual machine</option><option value="container">Unprivileged system container</option></select></label><p>{incusEditNotice}</p>{#if service.vm.instanceType === 'container'}<p role="status">System-container backup/export is not yet supported; full backup capture will be blocked.</p>{/if}{/if}
+          <p class="field-hint">Persistent guest UUID and MAC address are generated automatically and retained on edits.</p>
           <label>Virtual CPUs <input required type="number" min="1" max="1024" bind:value={service.vm.cpus} /></label><label>Memory in MiB <input required type="number" min="128" bind:value={service.vm.memoryMiB} /></label>
           <label>Network binding <select aria-label="Network binding" required bind:value={service.vm.network}><option value="">Choose network</option>{#each bindingChoices.filter(([,b]) => b.kind === 'network' || b.kind === 'bridge') as [bindingID,b]}<option value={bindingID}>{bindingID} ({b.name})</option>{/each}</select></label>
           {#if service.backend === 'incus'}<label>Local image alias or fingerprint <input bind:value={service.vm.image} disabled={!!resourceID} /></label><label>Root disk GiB <input type="number" min="1" bind:value={service.vm.rootSizeGiB} placeholder="20" /></label>

@@ -13,7 +13,7 @@ const fields: Record<string, Record<string, string>> = {
   },
   health: { start_period: 'startPeriod' },
   mount: { read_only: 'readOnly' },
-  vm: { root_size_gib: 'rootSizeGiB', memory_mib: 'memoryMiB' },
+  vm: { root_size_gib: 'rootSizeGiB', memory_mib: 'memoryMiB', instance_type: 'instanceType' },
   share: { read_only: 'readOnly', root_squash: 'rootSquash' },
 }
 function isRecord(value: unknown): value is Record<string, unknown> {

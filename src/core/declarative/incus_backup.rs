@@ -114,6 +114,7 @@ impl IncusProvider {
     // Backup observes native ownership rather than reconciling hardware. A native
     // disk attachment must not be silently removed when a quiesced VM is resumed.
     async fn backup_local(&self, c: &Config, id: &str) -> Result<Instance> {
+        ensure!(!vm(c,id)?.is_system_container(), "Incus system-container filesystem export is not yet verified; capture blocked");
         let server: Value = self.get(None, "/1.0").await?;
         let env = &server["environment"];
         let server_name = env["server_name"].as_str().filter(|s| !s.is_empty())

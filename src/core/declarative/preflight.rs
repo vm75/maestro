@@ -588,9 +588,9 @@ async fn backend_prerequisites(
         "incus" => {
             let provider = super::incus::IncusProvider::new(commands.incus.clone(),state.runner.clone())
                 .native_paths(state.config.paths.applications_dir.clone());
-            if let Err(error) = provider.check_prerequisites().await {
+            if let Err(error) = provider.check_daemon().await {
                 issues.push(issue("error","backend/incus","runtime","incus_unavailable",
-                    error.to_string(),"Check local daemon, QEMU SPICE support and workload account permissions."));
+                    error.to_string(),"Check local daemon and workload account permissions."));
             } else {
                 use futures_util::{StreamExt,stream};
                 // Own each ID so the concurrent futures do not retain service
@@ -606,7 +606,7 @@ async fn backend_prerequisites(
                 while let Some((id,result))=checks.next().await {
                     if let Err(error)=result {
                         issues.push(issue("error",&format!("service/{id}"),"bindings","incus_prerequisite",
-                            error.to_string(),"Check the explicit Incus project, pool, network and supported VM settings."));
+                            error.to_string(),"Check the explicit Incus project, pool, network, guest type and QEMU SPICE support for VMs."));
                     }
                 }
             }

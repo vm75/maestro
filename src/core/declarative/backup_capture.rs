@@ -954,6 +954,7 @@ fn verify_bundle(root:&File,checksum:&str,revision:&str,source_root:&Path,storag
     let mut yaml=Vec::new();(&config_file).take(super::MAX_CONFIG_BYTES as u64+1).read_to_end(&mut yaml)?;
     ensure!(yaml.len()<=super::MAX_CONFIG_BYTES&&same(&config_meta,&config_file.metadata()?),"capture configuration changed or exceeds limit");
     let config=super::parse(&yaml)?;
+    ensure!(!config.services.values().any(|s|s.vm.as_ref().is_some_and(|v|v.is_system_container())), "system-container capture verification is not implemented");
     ensure!(super::revision(&yaml)==revision,"captured configuration revision differs");
     // Validate coverage against the captured authoritative definition, not
     // against paths supplied by a manifest author.

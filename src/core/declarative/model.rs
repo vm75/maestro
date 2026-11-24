@@ -119,6 +119,9 @@ pub struct Mount {
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct VM {
+    /// Optional Incus guest subtype; omitted for existing VM fingerprints.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub instance_type: String,
     pub root_size_gib: i64,
     pub architecture: String,
     pub machine: String,
@@ -132,6 +135,12 @@ pub struct VM {
     pub network: String,
     pub pool: String,
     pub project: String,
+}
+
+impl VM {
+    pub fn is_system_container(&self) -> bool {
+        self.instance_type == "container"
+    }
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]

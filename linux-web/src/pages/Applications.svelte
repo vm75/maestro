@@ -8,7 +8,7 @@
   import { invokeTool, startJob, type Job } from '../lib/api'
   let { allowWrites }: { allowWrites: boolean } = $props()
   type Issue = ConfigurationIssue
-  interface Service { id: string; name: string; kind: string; backend: string; enabled: boolean; state: string; registered: boolean; configuration: string; issues: Issue[]; members?: { name: string; state: string; ports?: string[] }[] }
+  interface Service { id: string; name: string; kind: string; instanceType?: string; backend: string; enabled: boolean; state: string; registered: boolean; configuration: string; issues: Issue[]; members?: { name: string; state: string; ports?: string[] }[] }
   interface Inventory { configured: boolean; valid?: boolean; error?: string; services: Service[]; health?: ConfigurationHealth }
   let inventory = $state<Inventory | null>(null)
   let error = $state('')
@@ -22,6 +22,7 @@
     initialKind?: 'container' | 'vm'
     initialEngine?: 'podman' | 'docker'
     initialBackend?: 'quadlet' | 'compose' | 'libvirt' | 'incus'
+    initialInstanceType?: '' | 'container'
   }
   let editor = $state<EditorState | null>(null)
   let editorDialog = $state<HTMLDialogElement>()
@@ -46,14 +47,16 @@
     kind: 'container' | 'vm',
     engine?: 'podman' | 'docker',
     backend?: 'quadlet' | 'compose' | 'libvirt' | 'incus',
-    singleContainer = false
+    singleContainer = false,
+    initialInstanceType?: '' | 'container'
   ) {
     editor = {
       id: '',
       initialKind: kind,
       initialEngine: engine,
       initialBackend: backend,
-      singleContainer
+      singleContainer,
+      initialInstanceType
     }
   }
 
@@ -127,6 +130,7 @@
     <button class="small-button primary" disabled={!allowWrites || activeJob !== null} onclick={() => openEditor('container', 'podman', 'quadlet')}>Podman Quadlet</button>
     <button class="small-button primary" disabled={!allowWrites || activeJob !== null} onclick={() => openEditor('container', 'docker', 'compose')}>Docker Compose</button>
     <button class="small-button primary" disabled={!allowWrites || activeJob !== null} onclick={() => openEditor('vm', undefined, 'incus')}>Incus VM</button>
+    <button class="small-button primary" disabled={!allowWrites || activeJob !== null} onclick={() => openEditor('vm', undefined, 'incus', false, 'container')}>Incus system container</button>
     <button class="small-button primary" disabled={!allowWrites || activeJob !== null} onclick={() => openEditor('vm', undefined, 'libvirt')}>KVM/Libvirt VM</button>
   </div>
   <div class="search-wrap">
@@ -150,6 +154,7 @@
         initialKind={editor.initialKind}
         initialEngine={editor.initialEngine}
         initialBackend={editor.initialBackend}
+        initialInstanceType={editor.initialInstanceType}
         onClose={() => editorDialog?.close()}
         onSaved={(id) => {
           feedback = editor?.initialRemoval ? 'Deletion started. Follow its progress in Activity.' : 'Definition save started. Follow its validation and apply progress in Activity.'
@@ -176,6 +181,7 @@
       <button class="primary" disabled={!allowWrites} onclick={() => openEditor('container', 'podman', 'quadlet')}>Podman Quadlet</button>
       <button class="primary" disabled={!allowWrites} onclick={() => openEditor('container', 'docker', 'compose')}>Docker Compose</button>
       <button class="primary" disabled={!allowWrites} onclick={() => openEditor('vm', undefined, 'incus')}>Incus VM</button>
+      <button class="primary" disabled={!allowWrites} onclick={() => openEditor('vm', undefined, 'incus', false, 'container')}>Incus system container</button>
       <button class="primary" disabled={!allowWrites} onclick={() => openEditor('vm', undefined, 'libvirt')}>KVM/Libvirt VM</button>
     </div>
   </section>
@@ -201,7 +207,7 @@
   <ul aria-label="Managed applications">
     {#each filtered as service (service.id)}
       {@const name = service.name || service.id}
-      {@const kind = service.backend.endsWith('/compose') ? 'Compose project' : service.kind === 'vm' ? 'VM' : 'Quadlet group'}
+      {@const kind = service.backend.endsWith('/compose') ? 'Compose project' : service.instanceType === 'container' ? 'System container' : service.kind === 'vm' ? 'VM' : 'Quadlet group'}
       {@const label = `${name} (${kind})`}
       {@const canEdit = allowWrites && activeJob === null && !submitting}
       {@const canReadLogs = service.kind === 'container' || service.backend === 'incus'}

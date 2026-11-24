@@ -459,6 +459,16 @@ fn inventory_inputs(
             )?;
         }
         if service.vm.is_some() {
+            if service.vm.as_ref().is_some_and(|guest| guest.is_system_container()) {
+                inventory.issues.push(Issue {
+                    severity: "error",
+                    resource: resource.clone(),
+                    field: "native_state",
+                    code: "backup_system_container_unsupported",
+                    message: "Incus system-container filesystem export is not yet verified.",
+                    remedy: "Capture remains blocked until the system-container export and verifier are implemented.",
+                });
+            }
             inventory.input(BackupInput {
                 id: format!("native/{id}"),
                 kind: if service.backend == "incus" {
