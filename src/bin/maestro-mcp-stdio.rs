@@ -96,9 +96,8 @@ async fn main() -> Result<()> {
         "usage: maestro-mcp-stdio --config /path/to/maestro.yaml"
     );
     let config_path = PathBuf::from(&args[1]);
-    let mut config = AppConfig::load(&config_path)?;
-    config.platform = Platform::Linux;
-    config.test_mode = false;
+    let config = AppConfig::load(&config_path)?;
+    ensure!(config.platform == Platform::Linux, "MCP requires native Linux YAML");
     config.validate()?;
     ensure!(
         unsafe { libc::geteuid() } != 0,

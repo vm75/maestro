@@ -75,7 +75,7 @@ home=$(getent passwd "$account" | cut -d: -f6)
    "$home" =~ ^/[A-Za-z0-9_./+-]+$ ]] ||
   { echo "Invalid account identity or home directory" >&2; exit 1; }
 [[ "$config" == *.yaml || "$config" == *.yml ]] ||
-  { echo "Linux installation requires the unified YAML authority; migrate legacy TOML explicitly" >&2; exit 1; }
+  { echo "Linux installation requires the native YAML authority" >&2; exit 1; }
 
 as_workload() {
   if ((EUID == uid)); then

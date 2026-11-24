@@ -6,7 +6,6 @@ pub mod ban_attack;
 pub mod certificate_http;
 pub mod command;
 pub mod config;
-pub mod config_migration;
 pub mod config_yaml;
 pub mod core;
 pub mod models;

@@ -17,7 +17,7 @@ with config.open('rb') as stream:
     cfg = yaml.safe_load(stream)
 service = 'nginx' if Path(sys.argv[0]).name.endswith('nginx') else 'maestro'
 action = sys.argv[1] if len(sys.argv) > 1 else 'check'
-if 'version' in cfg and 'platform' not in cfg:
+if cfg.get('version') == 1:
     # Unified Linux YAML derives runtime paths from server.state_dir.
     root = Path(cfg['server']['state_dir'])
     nginx = {'prefix_path': str(root / 'nginx'), 'config_path': str(root / 'nginx/nginx.conf'),
@@ -28,10 +28,7 @@ if 'version' in cfg and 'platform' not in cfg:
     log_file = root / 'logs/maestro.log'
     runtime = root / 'run'
 else:
-    nginx = cfg['nginx']
-    nginx_command = cfg['commands']['nginx']
-    runtime = Path(cfg['paths']['runtime_dir'])
-    log_file = Path(cfg['paths']['log_file'])
+    raise RuntimeError('Native Linux version: 1 YAML required')
 pidfile = Path(nginx['pid_path']) if service == 'nginx' else runtime / 'maestro-init.pid'
 
 

@@ -7,7 +7,6 @@ mod ban_attack;
 mod certificate_http;
 mod command;
 mod config;
-mod config_migration;
 mod config_yaml;
 pub mod core;
 mod models;
@@ -68,8 +67,6 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Convert legacy TOML once, retaining private .toml.bak originals.
-    MigrateConfig,
     /// Read one runtime configuration scalar for local diagnostic scripts.
     ConfigValue {
         key: String,
@@ -84,8 +81,6 @@ enum Command {
     /// Download or update the official dehydrated executable.
     #[command(alias = "init-dehydrated")]
     UpdateDehydrated,
-    /// Move current-format nginx inputs into inputs_dir; run while the service is stopped.
-    MigrateNginxInputs,
     RenderUi,
     MountUi,
     UnmountUi,
@@ -164,15 +159,11 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
-    if matches!(cli.command, Some(Command::MigrateConfig)) {
-        let path = crate::config_migration::migrate(&cli.config)?;
-        println!("YAML configuration ready: {}", path.display());
-        return Ok(());
-    }
     let mut config = AppConfig::load(&cli.config)?;
-    if cli.linux_mode {
-        config.platform = Platform::Linux;
-    }
+    anyhow::ensure!(
+        !cli.linux_mode || config.platform == Platform::Linux,
+        "--linux-mode requires a native Linux YAML authority"
+    );
     if cli.test_mode {
         config.apply_test_mode(&cli.config)?;
     }
@@ -191,7 +182,6 @@ fn main() -> Result<()> {
     }
 
     match cli.command.unwrap_or(Command::Serve) {
-        Command::MigrateConfig => unreachable!("migration precedes configuration loading"),
         #[cfg(feature = "linux")]
         Command::InitLinuxConfig => unreachable!("initialization precedes configuration loading"),
         Command::Restore { .. } => unreachable!("restore is handled before configuration loading"),
@@ -255,12 +245,8 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::CheckConfig => {
+            validate_nginx_inputs(&config)?;
             println!("configuration is valid: {}", cli.config.display());
-            Ok(())
-        }
-        Command::MigrateNginxInputs => {
-            let count = nginx_render::migrate_inputs(&config)?;
-            println!("migrated {count} nginx input files; runtime configuration preserved");
             Ok(())
         }
         Command::InitNginx => {
@@ -348,9 +334,14 @@ fn main() -> Result<()> {
     }
 }
 
+fn validate_nginx_inputs(config: &AppConfig) -> Result<()> {
+    nginx_render::load_global(config)?;
+    nginx_sites::load(config)?;
+    Ok(())
+}
+
 async fn serve(config: AppConfig) -> Result<()> {
-    nginx_render::require_migrated_input(&config, "nginx.yaml")?;
-    nginx_render::require_migrated_input(&config, "sites.yaml")?;
+    validate_nginx_inputs(&config)?;
     config.ensure_directories()?;
     let stores = Stores::load(&config).await?;
     let firewall = FirewallManager::new(config.clone(), stores.clone()).await?;

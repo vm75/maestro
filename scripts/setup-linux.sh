@@ -30,7 +30,7 @@ mkdir -p "$lab/tmp" "$lab/nginx/logs"
 nginx_bin=$(command -v nginx)
 dehydrated_bin=$(command -v dehydrated || true)
 if [[ -z "$dehydrated_bin" ]]; then
-    dehydrated_bin="$lab/certs/dehydrated"
+    dehydrated_bin="$lab/certificates/dehydrated"
     if curl -fsSL "https://raw.githubusercontent.com/dehydrated-io/dehydrated/master/dehydrated" -o "$dehydrated_bin" 2>/dev/null; then
         chmod 0700 "$dehydrated_bin"
         echo "Downloaded latest dehydrated to $dehydrated_bin."
@@ -38,8 +38,8 @@ if [[ -z "$dehydrated_bin" ]]; then
         echo "Dehydrated is not installed. Use Certificates > Update dehydrated after setup."
     fi
 fi
-if [[ ! -e "$lab/certs/dehydrated-dns01-hook.sh" && -f "$repo_root/scripts/dehydrated-dns01-hook.sh" ]]; then
-    install -m 0755 "$repo_root/scripts/dehydrated-dns01-hook.sh" "$lab/certs/dehydrated-dns01-hook.sh"
+if [[ ! -e "$lab/dehydrated-dns01-hook.sh" && -f "$repo_root/scripts/dehydrated-dns01-hook.sh" ]]; then
+    install -m 0755 "$repo_root/scripts/dehydrated-dns01-hook.sh" "$lab/dehydrated-dns01-hook.sh"
 fi
 if [[ ! -e "$lab/firewall-policy.json" && ! -L "$lab/firewall-policy.json" ]]; then
     printf '%s\n' '{"enabled":false,"observe_only":false,"rules":[],"allowlist":[]}' > "$lab/firewall-policy.json"
@@ -51,7 +51,7 @@ if [[ ! -e "$lab/nginx/nginx.conf" && ! -L "$lab/nginx/nginx.conf" ]]; then
         --inputs-dir "$lab/nginx-inputs" \
         --var-dir "$lab/var" --pid-path "$lab/run/nginx.pid" \
         --error-log-path "$lab/var/log/nginx/error.log" \
-        --acme-directory "$lab/certs/acme-challenge" \
+        --acme-directory "$lab/certificates/acme-challenge" \
         --http-port "$nginx_port" --https-port "$nginx_tls_port"
     openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=localhost \
         -keyout "$lab/nginx/certs/default/privkey.pem" \
@@ -61,7 +61,7 @@ server {
     server_name 127.0.0.1;
     listen $nginx_port;
     location ^~ /.well-known/acme-challenge/ {
-        alias $lab/certs/acme-challenge/;
+        alias $lab/certificates/acme-challenge/;
         default_type text/plain;
     }
     location / { return 200 'maestro linux nginx'; }

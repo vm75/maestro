@@ -84,8 +84,7 @@ pub fn path(config: &AppConfig) -> PathBuf {
 
 pub fn load(config: &AppConfig) -> Result<Sites> {
     let path = path(config);
-    nginx_render::require_migrated_input(config, "sites.yaml")?;
-    crate::config_migration::require_yaml(&path)?;
+    nginx_render::ensure_managed_path(config, &path)?;
     let mut sites: Sites = match fs::read_to_string(&path) {
         Ok(content) => {
             crate::config_yaml::decode(&content).context("invalid managed nginx sites.yaml")?

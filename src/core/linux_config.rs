@@ -148,7 +148,7 @@ fn read_token(path: &Path) -> Result<String> {
 }
 
 pub fn load(path: &Path) -> Result<AppConfig> {
-    Store::at_path(path)?;
+    Store::at_path(path)?.ensure_directory()?;
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| anyhow::anyhow!("HOME is required for Linux defaults"))?;
@@ -171,6 +171,10 @@ pub fn load(path: &Path) -> Result<AppConfig> {
     config.server.port = listen.port();
     config.server.auth_token = token;
     config.server.daemonize = false;
+    config.commands.nginx = "/usr/sbin/nginx".into();
+    config.commands.openssl = "/usr/bin/openssl".into();
+    config.commands.ip = "/usr/sbin/ip".into();
+    config.commands.dehydrated = root.join("dehydrated");
     config.server.allowed_origins = vec![if settings.public_origin.is_empty() {
         format!("http://{}", settings.listen)
     } else {
@@ -417,7 +421,7 @@ mod tests {
         std::fs::write(&token, "private-linux-token-with-more-than-24-characters").unwrap();
         std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
         let yaml = format!(
-            "version: 1\nserver:\n  listen: '127.0.0.1:8181'\n  token_file: '{}'\n  state_dir: '{}'\n  sample_interval_seconds: 2\n  allow_writes: true\n",
+            "version: 1\nserver:\n  listen: '127.0.0.1:8181'\n  token_file: '{}'\n  state_dir: '{}'\n  sample_interval_seconds: 2\n",
             token.display(),
             root.path().join("state").display()
         );
@@ -578,7 +582,7 @@ mod tests {
         std::fs::write(&token, "private-linux-token-with-more-than-24-characters\n").unwrap();
         std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o600)).unwrap();
         let yaml = format!(
-            "version: 1\nserver:\n  listen: '127.0.0.1:8181'\n  token_file: '{}'\n  state_dir: '{}'\n  allow_writes: true\n",
+            "version: 1\nserver:\n  listen: '127.0.0.1:8181'\n  token_file: '{}'\n  state_dir: '{}'\n",
             token.display(),
             state.display()
         );

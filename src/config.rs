@@ -17,7 +17,7 @@ pub enum Platform {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
     #[cfg(feature = "linux")]
     #[serde(skip)]
@@ -61,38 +61,26 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn load(path: &Path) -> Result<Self> {
         anyhow::ensure!(
-            path.extension()
-                .is_some_and(|extension| extension == "yaml" || extension == "yml"),
-            "configuration must be YAML; run --config <legacy.toml> migrate-config once"
+            path.extension().is_some_and(|ext| ext == "yaml" || ext == "yml"),
+            "configuration must be YAML"
         );
-        crate::config_migration::require_yaml(path)?;
-        if path.exists() {
-            let raw = crate::config_yaml::read(path)
-                .with_context(|| format!("failed to read {}", path.display()))?;
-            let document: serde_yaml::Value = crate::config_yaml::decode(&raw)?;
-            if document.get("version").is_some()
-                && document.get("platform").is_none()
-                && document.get("paths").is_none()
-                && document
-                    .get("server")
-                    .is_none_or(|server| server.get("bind").is_none())
-            {
-                #[cfg(feature = "linux")]
-                return crate::core::linux_config::load(path);
-                #[cfg(not(feature = "linux"))]
-                anyhow::bail!("native Linux YAML requires a Linux-feature build");
-            }
-            let mut config: Self = crate::config_yaml::decode(&raw)
-                .with_context(|| format!("failed to parse {}", path.display()))?;
-            config.resolve_relative_paths(path);
-            Ok(config)
-        } else {
-            let mut config = Self::default();
-            if path.to_string_lossy().contains("test") || !Path::new("/opt").exists() {
-                config.apply_test_mode(path)?;
-            }
-            Ok(config)
+        let raw = crate::config_yaml::read(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        let document: serde_yaml::Value = crate::config_yaml::decode(&raw)?;
+        if document.get("version").is_some() {
+            #[cfg(feature = "linux")]
+            return crate::core::linux_config::load(path);
+            #[cfg(not(feature = "linux"))]
+            anyhow::bail!("native Linux YAML requires a Linux-feature build");
         }
+        let mut config: Self = crate::config_yaml::decode(&raw)
+            .with_context(|| format!("failed to parse {}", path.display()))?;
+        anyhow::ensure!(
+            config.platform == Platform::Asuswrt,
+            "Linux requires the native version: 1 YAML authority"
+        );
+        config.resolve_relative_paths(path);
+        Ok(config)
     }
 
     pub fn apply_test_mode(&mut self, config_path: &Path) -> Result<()> {
@@ -363,6 +351,20 @@ impl AppConfig {
         {
             bail!("firewall ban durations must be monotonically increasing");
         }
+        if self.firewall.poll_interval_ms == 0
+            || self.firewall.cleanup_interval_seconds == 0
+            || self.firewall.reverify_interval_seconds == 0
+            || self.services.status_timeout_seconds == 0
+            || self.services.action_timeout_seconds == 0
+            || self.services.log_tail_lines == 0
+            || self.nginx.reload_timeout_seconds == 0
+        {
+            bail!("polling intervals, service timeouts and log limits must be positive");
+        }
+        if self.firewall.set_name_v4 == self.firewall.set_name_v6 {
+            bail!("IPv4 and IPv6 firewall set names must differ");
+        }
+        self.server.allowed_origin_values()?;
         if self.firewall.log_dirs.is_empty() {
             bail!("firewall.log_dirs must contain at least one allowed root");
         }
@@ -415,7 +417,7 @@ pub(crate) fn days_to_seconds(days: u64) -> Result<u64> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ServerConfig {
     pub bind: String,
     pub port: u16,
@@ -451,7 +453,7 @@ impl ServerConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct PathsConfig {
     pub data_dir: PathBuf,
     pub runtime_dir: PathBuf,
@@ -507,7 +509,7 @@ impl Default for PathsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CommandsConfig {
     pub tar: PathBuf,
     pub mount: PathBuf,
@@ -566,7 +568,7 @@ impl Default for CommandsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AsusUiConfig {
     pub enabled: bool,
     pub rendered_page: PathBuf,
@@ -588,7 +590,7 @@ impl Default for AsusUiConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ServicesConfig {
     pub systemd_system_write_units: Vec<String>,
     pub systemd_user_write_units: Vec<String>,
@@ -662,7 +664,7 @@ impl Default for NginxConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CertificatesConfig {
     /// Directory containing one `<name>.cfg` and `<name>.txt` per certificate.
     /// Dehydrated places generated material below its `certs/` child.
@@ -695,7 +697,7 @@ impl Default for CertificatesConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct FirewallRuntimeConfig {
     pub poll_interval_ms: u64,
     pub cleanup_interval_seconds: u64,
@@ -775,7 +777,7 @@ impl Default for FirewallRuntimeConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AdGuardConfig {
     pub enabled: bool,
     pub api_endpoint: String,
@@ -799,7 +801,7 @@ impl Default for AdGuardConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SystemConfig {
     pub allow_package_writes: bool,
     pub allow_share_writes: bool,
@@ -856,6 +858,21 @@ mod tests {
                 .to_string()
                 .contains("Linux-feature")
         );
+    }
+
+    #[test]
+    fn rejects_missing_unknown_and_generic_linux_configuration() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("maestro.yaml");
+        assert!(AppConfig::load(&path).is_err());
+        for body in [
+            "platform: linux\n",
+            "firewall: {protect_foward: false}\n",
+            "unknown: true\n",
+        ] {
+            fs::write(&path, body).unwrap();
+            assert!(AppConfig::load(&path).is_err());
+        }
     }
 
     #[test]

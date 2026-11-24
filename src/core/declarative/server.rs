@@ -249,11 +249,6 @@ pub fn read(input: &[u8], defaults: &Settings) -> Result<Option<Settings>> {
         .ok_or_else(|| anyhow::anyhow!("server settings must be a mapping"))?;
     let mut settings = serde_yaml::to_value(defaults)?;
     for (key, value) in server {
-        // Retired gates remain readable in existing authorities, but have no effect.
-        if matches!(key.as_str(), Some("allow_writes" | "privileged_operations")) {
-            ensure!(value.is_bool(), "retired server flags must be booleans");
-            continue;
-        }
         settings
             .as_mapping_mut()
             .unwrap()
@@ -316,8 +311,8 @@ mod tests {
     fn pinned_server_validation_cases() {
         for (server, valid) in [
             ("{}", true),
-            ("{privileged_operations: true}", true),
-            ("{privileged_operations: true, package_manager: apt}", true),
+            ("{privileged_operations: true}", false),
+            ("{privileged_operations: true, package_manager: apt}", false),
             ("{listen: '[::1]:8081'}", true),
             ("{listen: ':8080'}", false),
             ("{listen: '127.0.0.1:70000'}", false),
@@ -373,12 +368,11 @@ mod tests {
     }
 
     #[test]
-    fn retired_write_gates_are_ignored_and_not_serialized() {
-        let settings = read(b"version: 1\nserver: {allow_writes: false, privileged_operations: false}\n", &defaults()).unwrap().unwrap();
-        assert!(settings == defaults());
-        let yaml = serde_yaml::to_string(&settings).unwrap();
-        assert!(!yaml.contains("allow_writes"));
-        assert!(!yaml.contains("privileged_operations"));
+    fn retired_write_gates_are_rejected() {
+        for flag in ["allow_writes", "privileged_operations"] {
+            let body = format!("version: 1\nserver: {{{flag}: false}}\n");
+            assert!(read(body.as_bytes(), &defaults()).is_err());
+        }
     }
 
     #[test]

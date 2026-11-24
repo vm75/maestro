@@ -709,26 +709,6 @@ pub(crate) fn ensure_managed_path(
     nginx::ensure_no_symlink_ancestors(base, path)
 }
 
-/// Refuse to silently replace legacy persisted inputs with empty defaults.
-pub(crate) fn require_migrated_input(config: &crate::config::AppConfig, name: &str) -> Result<()> {
-    let path = config.nginx.inputs_dir.join(name);
-    ensure_managed_path(config, &path)?;
-    crate::config_migration::require_yaml(&path)?;
-    if name.ends_with(".yaml") {
-        crate::config_migration::require_yaml(&config.nginx.root_dir.join("settings").join(name))?;
-    }
-    if !path.try_exists()? {
-        let legacy = config.nginx.root_dir.join("settings").join(name);
-        ensure_managed_path(config, &legacy)?;
-        if legacy.try_exists()? {
-            bail!(
-                "legacy nginx inputs found; stop Maestro and run migrate-nginx-inputs before starting this version"
-            );
-        }
-    }
-    Ok(())
-}
-
 /// Keep render-time filesystem defaults tied to configurable application paths,
 /// including fixture paths in test mode.
 pub fn with_path_defaults(
@@ -796,8 +776,7 @@ pub fn with_path_defaults(
 
 pub fn load_global(config: &crate::config::AppConfig) -> Result<GlobalSettings> {
     let path = global_path(config);
-    crate::config_migration::require_yaml(&path)?;
-    require_migrated_input(config, "nginx.yaml")?;
+    ensure_managed_path(config, &path)?;
     let stored: NginxSettings = match std::fs::read_to_string(&path) {
         Ok(content) => crate::config_yaml::decode(&content)?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => NginxSettings {
@@ -1159,70 +1138,6 @@ impl Drop for FileTransaction {
     }
 }
 
-/// Move current-format legacy inputs without altering active nginx configuration.
-/// Run while Maestro is stopped. Conflicting destinations are never overwritten.
-pub fn migrate_inputs(config: &crate::config::AppConfig) -> Result<usize> {
-    use std::fs;
-    let mut names = BUNDLE
-        .iter()
-        .filter_map(|(name, _)| {
-            name.strip_prefix("settings/")
-                .filter(|name| !name.ends_with(".jinja"))
-        })
-        .collect::<Vec<_>>();
-    names.extend(["nginx.yaml", "sites.yaml"]);
-    let mut files = BTreeMap::new();
-    let mut removals = Vec::new();
-    for name in names {
-        let source = config.nginx.root_dir.join("settings").join(name);
-        let target = config.nginx.inputs_dir.join(name);
-        if source == target {
-            bail!("inputs_dir must be separate from legacy nginx settings");
-        }
-        ensure_managed_path(config, &source)?;
-        ensure_managed_path(config, &target)?;
-        let content = match fs::read_to_string(&source) {
-            Ok(content) => content,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e.into()),
-        };
-        match fs::read_to_string(&target) {
-            Ok(existing) if existing != content => {
-                bail!("conflicting nginx input: {}", target.display())
-            }
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
-        }
-        files.insert(target, content);
-        // Keep .conf files as live runtime includes, but retire non-runtime inputs.
-        if !name.ends_with(".conf") {
-            removals.push(source);
-        }
-    }
-    let count = files.len();
-    let transaction = FileTransaction::apply_with_removals(config, files, &removals)?;
-    let global = load_global(config)?;
-    for (key, site) in crate::nginx_sites::load(config)?.sites {
-        let name = site.object_name(&key)?;
-        let names = site
-            .server_name
-            .split_whitespace()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        render_site(
-            &global,
-            &site.settings,
-            site.kind,
-            &site.domain,
-            &name,
-            &names,
-        )?;
-    }
-    transaction.commit();
-    Ok(count)
-}
-
 /// Install the bundled main configuration, backing up an existing different file.
 /// Saved inputs and other existing shared files are preserved.
 pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
@@ -1450,7 +1365,7 @@ mod tests {
         );
     }
 
-    fn migration_config(root: &std::path::Path) -> crate::config::AppConfig {
+    fn transaction_config(root: &std::path::Path) -> crate::config::AppConfig {
         let mut config = crate::config::AppConfig::default();
         config.nginx.root_dir = root.join("nginx");
         config.nginx.inputs_dir = root.join("maestro/nginx");
@@ -1459,137 +1374,10 @@ mod tests {
     }
 
     #[test]
-    fn migration_preserves_policies_and_active_runtime_files() {
-        use std::fs;
-        let temp = tempfile::tempdir().unwrap();
-        let config = migration_config(temp.path());
-        let legacy = config.nginx.root_dir.join("settings");
-        let globals = encode_global(&limits()).unwrap();
-        let sites = r#"{
-  "sites": {
-    "app": {
-      "kind": "subdomain",
-      "domain": "example.test",
-      "name": "app",
-      "enabled": true,
-      "upstream": "http://127.0.0.1:8080",
-      "limit_policy": "api",
-      "routes": [
-        {
-          "path": "/static/",
-          "limit_policy": "assets"
-        }
-      ]
-    }
-  }
-}
-"#;
-        for (name, content) in [
-            ("nginx.yaml", globals.as_str()),
-            ("sites.yaml", sites),
-            ("allowed_ips.txt", "192.0.2.0/24"),
-            ("domains.conf", "custom.test http://127.0.0.1:8000;"),
-            ("security_trap_allow.conf", "# custom guard exceptions"),
-            ("proxy.jinja", "ignored template"),
-        ] {
-            fs::write(legacy.join(name), content).unwrap();
-        }
-        fs::write(
-            config.nginx.root_dir.join("custom.conf"),
-            "administrator config",
-        )
-        .unwrap();
-        assert!(load_global(&config).is_err());
-        assert!(crate::nginx_sites::load(&config).is_err());
-        assert_eq!(migrate_inputs(&config).unwrap(), 5);
-        assert_eq!(fs::read_to_string(global_path(&config)).unwrap(), globals);
-        assert_eq!(
-            fs::read_to_string(crate::nginx_sites::path(&config)).unwrap(),
-            sites
-        );
-        assert!(!legacy.join("nginx.yaml").exists());
-        assert!(!legacy.join("sites.yaml").exists());
-        assert!(!legacy.join("allowed_ips.txt").exists());
-        assert!(legacy.join("domains.conf").exists());
-        assert!(!config.nginx.inputs_dir.join("proxy.jinja").exists());
-        assert_eq!(
-            fs::read_to_string(config.nginx.root_dir.join("custom.conf")).unwrap(),
-            "administrator config"
-        );
-        let global = load_global(&config).unwrap();
-        let sites = crate::nginx_sites::load(&config).unwrap();
-        let site = &sites.sites["app"];
-        let output =
-            render_site(&global, &site.settings, site.kind, &site.domain, "app", &[]).unwrap();
-        assert!(output.contains("limit_req zone=rh_req_assets burst=500 nodelay;"));
-        assert!(output.contains("limit_req zone=rh_req_api;"));
-        let before = fs::read(global_path(&config)).unwrap();
-        migrate_inputs(&config).unwrap();
-        assert_eq!(fs::read(global_path(&config)).unwrap(), before);
-    }
-
-    #[test]
-    fn migration_rejects_conflicts_before_changing_any_files() {
-        use std::fs;
-        let temp = tempfile::tempdir().unwrap();
-        let config = migration_config(temp.path());
-        let legacy = config.nginx.root_dir.join("settings");
-        fs::write(
-            legacy.join("nginx.yaml"),
-            "{\n  \"global\": {\n    \"http_port\": 8080\n  }\n}\n",
-        )
-        .unwrap();
-        fs::write(legacy.join("allowed_ips.txt"), "192.0.2.0/24").unwrap();
-        fs::create_dir_all(&config.nginx.inputs_dir).unwrap();
-        fs::write(
-            global_path(&config),
-            "{\n  \"global\": {\n    \"http_port\": 9090\n  }\n}\n",
-        )
-        .unwrap();
-        assert!(migrate_inputs(&config).is_err());
-        assert!(!config.nginx.inputs_dir.join("allowed_ips.txt").exists());
-        assert!(legacy.join("allowed_ips.txt").exists());
-        assert_eq!(
-            fs::read_to_string(global_path(&config)).unwrap(),
-            "{\n  \"global\": {\n    \"http_port\": 9090\n  }\n}\n"
-        );
-    }
-
-    #[test]
-    fn migration_validation_failure_restores_both_directories() {
-        use std::fs;
-        for invalid in [
-            "invalid TOML [",
-            "{\n  \"sites\": {\n    \"bad\": {\n      \"kind\": \"subdomain\",\n      \"domain\": \"example.test\",\n      \"name\": \"bad\",\n      \"limit_policy\": \"missing\"\n    }\n  }\n}\n",
-        ] {
-            let temp = tempfile::tempdir().unwrap();
-            let config = migration_config(temp.path());
-            let legacy = config.nginx.root_dir.join("settings");
-            fs::write(
-                legacy.join("nginx.yaml"),
-                "{\n  \"global\": {\n    \"http_port\": 8080\n  }\n}\n",
-            )
-            .unwrap();
-            fs::write(legacy.join("sites.yaml"), invalid).unwrap();
-            fs::write(legacy.join("allowed_ips.txt"), "192.0.2.0/24").unwrap();
-            assert!(migrate_inputs(&config).is_err());
-            assert_eq!(
-                fs::read_to_string(legacy.join("sites.yaml")).unwrap(),
-                invalid
-            );
-            assert!(legacy.join("nginx.yaml").exists());
-            assert!(legacy.join("allowed_ips.txt").exists());
-            assert!(!global_path(&config).exists());
-            assert!(!crate::nginx_sites::path(&config).exists());
-            assert!(!config.nginx.inputs_dir.join("allowed_ips.txt").exists());
-        }
-    }
-
-    #[test]
     fn transaction_spans_inputs_and_runtime_and_rejects_symlinks() {
         use std::{fs, os::unix::fs::symlink};
         let temp = tempfile::tempdir().unwrap();
-        let config = migration_config(temp.path());
+        let config = transaction_config(temp.path());
         fs::create_dir_all(&config.nginx.inputs_dir).unwrap();
         let input = config.nginx.inputs_dir.join("domains.conf");
         let runtime = config.nginx.root_dir.join("settings/domains.conf");
@@ -1614,7 +1402,6 @@ mod tests {
         let link = config.nginx.inputs_dir.join("nginx.yaml");
         symlink(&outside, &link).unwrap();
         assert!(load_global(&config).is_err());
-        assert!(migrate_inputs(&config).is_err());
         assert_eq!(fs::read_to_string(&outside).unwrap(), "outside");
         assert!(
             FileTransaction::apply(

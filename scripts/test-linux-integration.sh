@@ -56,14 +56,14 @@ mkdir -p "$lab"/{data,run,logs/nginx,nginx/conf.d,nginx/domains-available,nginx/
 mkdir -p "$lab/tmp" "$lab/nginx/logs"
 
 # No automatic bans or external firewall writes in this unprivileged suite.
-printf '%s\n' '{"enabled":false,"observe_only":false,"rules":[],"allowlist":[]}' > "$lab/data/firewall-policy.json"
+printf '%s\n' '{"enabled":false,"observe_only":false,"rules":[],"allowlist":[]}' > "$lab/firewall-policy.json"
 
 python3 "$repo_root/scripts/render-nginx-config.py" \
     "$repo_root/config/nginx" "$lab/nginx" \
-    --inputs-dir "$lab/maestro/nginx" \
+    --inputs-dir "$lab/nginx-inputs" \
     --var-dir "$lab/var" --pid-path "$lab/run/nginx.pid" \
     --error-log-path "$lab/var/log/nginx/error.log" \
-    --acme-directory "$lab/certs/acme-challenge" \
+    --acme-directory "$lab/certificates/acme-challenge" \
     --http-port "$nginx_port" --https-port "$nginx_tls_port"
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=localhost \
     -keyout "$lab/nginx/certs/default/privkey.pem" \
@@ -77,80 +77,16 @@ server {
 }
 EOF
 
+printf '%s\n' "$token" > "$lab/token"
+chmod 0600 "$lab/token"
 cat > "$lab/maestro.yaml" <<EOF
-{
-  "platform": "linux",
-  "test_mode": false,
-  "server": {
-    "bind": "127.0.0.1",
-    "port": $api_port,
-    "auth_token": "$token",
-    "allowed_origins": [
-      "http://127.0.0.1:$api_port"
-    ],
-    "daemonize": false
-  },
-  "paths": {
-    "data_dir": "$lab/data",
-    "runtime_dir": "$lab/run",
-    "log_file": "$lab/logs/maestro.log",
-    "hosts_add": "$lab/hosts.add",
-    "dnsmasq_conf_add": "$lab/dnsmasq.conf.add",
-    "wireguard_conf": "$lab/wireguard/wglab.conf",
-    "proc_stat": "/proc/stat",
-    "proc_meminfo": "/proc/meminfo",
-    "proc_net_dev": "/proc/net/dev",
-    "proc_uptime": "/proc/uptime",
-    "proc_loadavg": "/proc/loadavg"
-  },
-  "commands": {
-    "nginx": "$nginx_bin",
-    "openssl": "$(command -v openssl)",
-    "ip": "/usr/sbin/ip",
-    "ping": "/bin/ping"
-  },
-  "asus_ui": {
-    "enabled": false,
-    "rendered_page": "$lab/maestro.asp"
-  },
-  "services": {
-    "init_dir": "$lab/init.d",
-    "log_dirs": [
-      "$lab/logs"
-    ]
-  },
-  "nginx": {
-    "inputs_dir": "$lab/maestro/nginx",
-    "root_dir": "$lab/nginx",
-    "config_path": "$lab/nginx/nginx.conf",
-    "prefix_path": "$lab/nginx",
-    "pid_path": "$lab/run/nginx.pid",
-    "domains_available_dir": "$lab/nginx/domains-available",
-    "domains_enabled_dir": "$lab/nginx/domains-enabled",
-    "domain_upstream_map_path": "$lab/nginx/conf.d/02_domain_upstream_map.conf",
-    "subdomain_upstream_map_path": "$lab/nginx/conf.d/03_subdomain_upstream_map.conf",
-    "subfolder_upstream_map_path": "$lab/nginx/conf.d/04_subfolder_upstream_map.conf",
-    "http_forwarder_path": "$lab/nginx/conf.d/05-http-to-https.conf",
-    "log_dir": "$lab/var/log/nginx"
-  },
-  "certificates": {
-    "certs_dir": "$lab/certs"
-  },
-  "firewall": {
-    "log_dirs": [
-      "$lab/var/log/nginx"
-    ]
-  },
-  "adguard": {
-    "enabled": false,
-    "lan_ip": "127.0.0.1"
-  },
-  "system": {
-    "wan_interface": "lo"
-  }
-}
-
+version: 1
+server:
+  listen: "127.0.0.1:$api_port"
+  token_file: "$lab/token"
+  state_dir: "$lab"
 EOF
+chmod 0600 "$lab/maestro.yaml"
 
 bin=${MAESTRO_LINUX_SMOKE_BIN:-}
 if [[ -z "$bin" ]]; then
@@ -241,7 +177,7 @@ curl --silent --show-error --fail-with-body -X POST \
     "$api/api/nginx/objects/domain" >/dev/null
 [[ -f "$lab/nginx/domains-available/linux.test/root.conf" ]]
 get /api/nginx/objects/domain/linux.test/linux.test | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["settings"]["client_max_body_size"] == "2M", x'
-python3 - "$lab/maestro/nginx/sites.yaml" <<'PYSITES'
+python3 - "$lab/nginx-inputs/sites.yaml" <<'PYSITES'
 import sys, yaml
 with open(sys.argv[1], 'rb') as stream:
     sites = yaml.safe_load(stream)['sites']
