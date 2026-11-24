@@ -15,6 +15,8 @@ use serde_json::{Map, Value, json};
 use tokio::{io::{AsyncRead, AsyncReadExt}, process::Command, time::timeout};
 
 use super::{Policy, admin_packages, admin_shares, safe_system_unit};
+#[path = "admin_reference_shares.rs"]
+mod shares;
 
 pub(super) const MAX_REQUEST: usize = 1 << 20;
 const MAX_CAPTURE: usize = 1 << 20;
@@ -242,8 +244,12 @@ pub(super) struct Captured {
 }
 
 pub(super) async fn capture(program: &Path, args: &[&str], environment: &[(&str,&str)], seconds: u64) -> Result<Captured> {
+    capture_in(program, args, environment, seconds, Path::new("/")).await
+}
+
+pub(super) async fn capture_in(program: &Path, args: &[&str], environment: &[(&str,&str)], seconds: u64, directory: &Path) -> Result<Captured> {
     let mut command = command(program, args, environment);
-    let mut child = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let mut child = command.current_dir(directory).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
     let mut group = Group(child.id());
     let stdout = child.stdout.take().context("missing stdout")?;
     let stderr = child.stderr.take().context("missing stderr")?;
@@ -637,7 +643,8 @@ pub(super) async fn execute(request: Request, policy: &Policy, uid: u32) -> Resp
             operation if operation.starts_with("services_") => service(operation,input,policy,&mut output).await,
             "shares_samba_password" => password(input,policy,uid).await,
             "updates_status" | "updates_refresh" | "updates_install" | "packages_install" | "dependencies_install" => packages(&request.operation,input,policy,&mut output).await,
-            _ => Err(Failure::unavailable("Native reference operation has not yet been ported")),
+            "shares_list" | "shares_setup" | "shares_definitions_inspect" | "shares_definitions_validate" | "shares_definitions_apply" => shares::execute(&request.operation,input,policy,&mut output).await,
+            _ => Err(Failure::invalid("unknown operation")),
         },
     };
     let mut response = Response { output:output.text(),truncated:output.truncated,..Default::default() };
