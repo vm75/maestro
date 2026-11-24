@@ -198,8 +198,18 @@ impl CommandRunner {
         directory: Option<&Path>,
         remove_environment: &[&str],
     ) -> Result<CapturedOutput> {
+        self.capture_scoped_input(program,args,deadline,limit,tail,environment,directory,remove_environment,None).await
+    }
+
+    /// Native definition payloads are sent on stdin, never in argv or logs.
+    #[cfg(feature = "linux")]
+    pub(crate) async fn capture_scoped_input(
+        &self, program: &Path, args: &[&str], deadline: Duration, limit: usize,
+        tail: bool, environment: &[(&str, &str)], directory: Option<&Path>,
+        remove_environment: &[&str], input: Option<&[u8]>,
+    ) -> Result<CapturedOutput> {
         use std::collections::VecDeque;
-        use tokio::io::AsyncReadExt;
+        use tokio::io::{AsyncReadExt,AsyncWriteExt};
 
         if self.test_mode {
             bail!("command capture is unavailable in simulation");
@@ -211,23 +221,24 @@ impl CommandRunner {
             .args(args)
             .env("LC_ALL", "C")
             .envs(environment.iter().copied())
-            .stdin(Stdio::null())
+            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         #[cfg(unix)]
-        if !environment.is_empty() || directory.is_some() || !remove_environment.is_empty() {
+        if !environment.is_empty() || directory.is_some() || !remove_environment.is_empty() || input.is_some() {
             command.process_group(0);
         }
         let mut child = command
             .spawn()
             .with_context(|| format!("failed to start {}", program.display()))?;
         #[cfg(unix)]
-        let mut group_guard = ProcessGroupGuard(if environment.is_empty() && directory.is_none() && remove_environment.is_empty() {
+        let mut group_guard = ProcessGroupGuard(if environment.is_empty() && directory.is_none() && remove_environment.is_empty() && input.is_none() {
             None
         } else {
             child.id()
         });
+        let stdin = child.stdin.take();
         let mut stdout = child.stdout.take().context("missing command stdout")?;
         let mut stderr = child.stderr.take().context("missing command stderr")?;
         let result = timeout(deadline, async {
@@ -261,7 +272,15 @@ impl CommandRunner {
                 }
                 Ok::<_, anyhow::Error>((bytes.into(), truncated))
             };
-            let ((stdout, truncated), had_stderr) = tokio::try_join!(read_stdout, read_stderr)?;
+            let write_stdin = async {
+                if let Some(data) = input {
+                    let mut pipe = stdin.context("missing command stdin")?;
+                    pipe.write_all(data).await?;
+                    pipe.shutdown().await?;
+                }
+                Ok::<(), anyhow::Error>(())
+            };
+            let ((stdout, truncated), had_stderr, ()) = tokio::try_join!(read_stdout, read_stderr, write_stdin)?;
             Ok(CapturedOutput {
                 stdout,
                 truncated,
