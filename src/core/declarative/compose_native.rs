@@ -232,6 +232,33 @@ impl ComposeProvider {
         ensure!(!output.truncated, "native container inventory truncated");
         super::super::native_inventory::oci_rows(&output.stdout, &self.engine, config)
     }
+    async fn external_verified(&self, config: &Config, id: &str, action: Option<&str>) -> Result<super::super::native_inventory::NativeWorkload> {
+        use super::super::native_inventory::{full_oci_id, verify_oci};
+        ensure!(!self.runner.is_test_mode() && full_oci_id(id), "full native container ID required");
+        let rows = self.external_inventory(config).await?;
+        let mut matching = rows.into_iter().filter(|row| row.id == id);
+        let row = matching.next().ok_or_else(|| anyhow!("external container unavailable"))?;
+        ensure!(matching.next().is_none(), "ambiguous external container");
+        if let Some(action) = action {
+            ensure!(row.actions.contains(&action), "action unavailable for native state or orchestration");
+        }
+        let inspected = self.engine_command(&["inspect", "--type", "container", id], None, 5, 1024 * 1024, false).await?;
+        ensure!(!inspected.truncated, "container inspection truncated");
+        verify_oci(&inspected.stdout, &self.engine, config, id, action.is_some())?;
+        Ok(row)
+    }
+    pub async fn external_action(&self, config: &Config, id: &str, action: &str) -> Result<String> {
+        ensure!(matches!(action,"start"|"stop"|"restart"), "unsupported external action");
+        self.external_verified(config,id,Some(action)).await?;
+        self.engine_command(&[action,id],None,120,4096,false).await?;
+        Ok(format!("{} {action} completed",self.engine))
+    }
+    pub async fn external_logs(&self, config: &Config, id: &str, tail: usize) -> Result<ManagedLogs> {
+        ensure!((1..=2000).contains(&tail),"invalid log line limit");
+        self.external_verified(config,id,None).await?;
+        let result = self.engine_command(&["logs","--tail",&tail.to_string(),id],None,15,128*1024,true).await?;
+        Ok(ManagedLogs { text: String::from_utf8_lossy(&result.stdout).into_owned(), truncated:result.truncated, source:"native-container" })
+    }
     async fn compose_command(&self,id:&str,file:&Path,action:&[&str],seconds:u64,limit:usize,tail:bool)->Result<crate::command::CapturedOutput>{
         let argv=args(file,id,action)?;
         let argv=argv.iter().map(String::as_str).collect::<Vec<_>>();

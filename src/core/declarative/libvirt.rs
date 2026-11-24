@@ -118,15 +118,40 @@ impl LibvirtProvider{
                 if !valid_text(name) || reserved(name) { return Ok(None); }
                 let xml = self.command(&["dumpxml", "--domain", id], 5, super::MAX_CONFIG_BYTES, false).await?;
                 if std::str::from_utf8(&xml)?.contains(xml::NS) { return Ok(None); }
+                let state = self.state(id).await?;
+                let actions = match state.as_str() {
+                    "running" => vec!["stop","restart"],
+                    "shut off" => vec!["start"],
+                    _ => vec![],
+                };
                 Ok(Some(NativeWorkload {
                     provider: "libvirt".into(), scope, id: id.into(), name: name.into(),
-                    kind: "virtual-machine".into(), state: self.state(id).await?,
-                    image: String::new(), addresses: vec![],
+                    kind: "virtual-machine".into(), state,
+                    image: String::new(), addresses: vec![], actions, logs: false, identity: id.into(),
                 }))
             }
         })).buffer_unordered(8).try_collect::<Vec<_>>();
         let result = tokio::time::timeout(std::time::Duration::from_secs(12), workloads).await??;
         Ok(result.into_iter().flatten().collect())
+    }
+    pub async fn external_action(&self, config: &Config, id: &str, scope: &str, action: &str) -> Result<String> {
+        ensure!(!self.runner.is_test_mode() && self.connection()? == scope && uuid::Uuid::parse_str(id).is_ok(), "invalid local Libvirt identity");
+        ensure!(matches!(action,"start"|"stop"|"restart"), "unsupported external action");
+        ensure!(!config.services.values().any(|s| s.backend == "libvirt" && s.vm.as_ref().is_some_and(|v| v.uuid == id)), "managed domain");
+        let name = self.command(&["domname",id],5,4096,false).await?;
+        let name = std::str::from_utf8(&name)?.trim();
+        ensure!(super::native_inventory::valid_text(name) && !super::native_inventory::reserved(name), "reserved native domain");
+        let data = self.command(&["dumpxml","--domain",id],5,super::MAX_CONFIG_BYTES,false).await?;
+        ensure!(!std::str::from_utf8(&data)?.contains(xml::NS), "managed domain metadata");
+        let state = self.state(id).await?;
+        let command = match (action,state.as_str()) {
+            ("start","shut off") => "start",
+            ("stop","running") => "shutdown",
+            ("restart","running") => "reboot",
+            _ => return Err(anyhow!("action unavailable for native domain state")),
+        };
+        self.command(&[command,"--domain",id],120,4096,false).await?;
+        Ok(format!("Libvirt {command} requested; refresh to confirm guest state"))
     }
     async fn exists(&self,id:&str,uuid:&str)->Result<bool>{
         let uuids=self.command(&["list","--all","--uuid"],5,256*1024,false).await.map_err(|_|anyhow!("Libvirt inventory is unavailable"))?;

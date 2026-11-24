@@ -136,7 +136,7 @@
   <button disabled={loading} onclick={() => load(true)}>{loading ? 'Checking…' : 'Check configuration'}</button>
 </div>
 
-<NativeWorkloads {query} />
+<NativeWorkloads {query} {allowWrites} />
 
 {#if editor}
   <dialog class="modal-card" aria-label="Application definition" bind:this={editorDialog} use:showModal onclose={() => { editor = null }}>

@@ -192,13 +192,18 @@ impl IncusProvider{
         serde_json::from_value(response.metadata).map_err(|_|anyhow!("unsupported Incus response metadata"))
     }
     pub async fn external_inventory(&self, config: &Config) -> super::native_inventory::NativeInventory {
+        self.external_inventory_named(config, "incus").await
+    }
+    pub async fn external_inventory_named(&self, config: &Config, provider: &str) -> super::native_inventory::NativeInventory {
         use super::native_inventory::{NativeInventory, NativeWorkload, reserved, valid_text};
         let mut result = NativeInventory::default();
         let mut projects = std::collections::BTreeSet::from(["default".to_owned()]);
-        projects.extend(config.bindings.values().filter(|b| b.kind == "project" && binding_name(&b.name)).map(|b| b.name.clone()));
+        if provider == "incus" {
+            projects.extend(config.bindings.values().filter(|b| b.kind == "project" && binding_name(&b.name)).map(|b| b.name.clone()));
+        }
         // Explicitly scoped projects only; never follow a remote or discover other accounts.
         if projects.len() > 16 {
-            result.warnings.push("Incus project inventory is limited to 16 configured projects.".into());
+            result.warnings.push(format!("{provider} project inventory is limited to 16 configured projects."));
             return result;
         }
         for project in projects {
@@ -222,14 +227,14 @@ impl IncusProvider{
                             .filter(|address| address.parse::<std::net::IpAddr>().is_ok())
                             .take(32).map(str::to_owned).collect();
                         result.workloads.push(NativeWorkload {
-                            provider: "incus".into(), scope: project.clone(), id: name.into(), name: name.into(),
+                            provider: provider.into(), scope: project.clone(), id: name.into(), name: name.into(),
                             kind: if kind == "container" { "system-container".into() } else { "virtual-machine".into() },
                             state: if valid_text(state) { state.to_owned() } else { "unknown".into() },
-                            image: String::new(), addresses,
+                            image: String::new(), addresses, actions: vec![], logs: false, identity: String::new(),
                         });
                     }
                 }
-                _ => result.warnings.push(format!("Incus project {project}: inventory unavailable or exceeds limit.")),
+                _ => result.warnings.push(format!("{provider} project {project}: inventory unavailable or exceeds limit.")),
             }
         }
         result

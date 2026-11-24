@@ -34,7 +34,7 @@ User direction (2026-11-24): incorporate the useful earlier Maestro archive (`ma
 - Offer simple single-container creation through the existing typed Compose/Quadlet editor and apply pipeline. Do not introduce a second direct-run orchestration engine.
 - Evaluate LXD compatibility via a separate provider adapter sharing Incus logic only where the native API and safety semantics are verified; no silent assumption of interchangeability.
 - Provide a Linux-only optional browser terminal using the existing authenticated session and explicit local non-root PTY; disabled by default, bounded resources, strict origin validation, no credentials in URLs and no privileged helper shell. Do not port the archive's bespoke WebSocket or root service.
-- All additions require source tests, Linux UI/API and native acceptance; no extra router runtime dependencies. The first source increment is native read-only inventory and a single-container editor shortcut; mutation, managed Incus system containers, LXD and terminal remain open until implemented and verified.
+- All additions require source tests, Linux UI/API and native acceptance; no extra router runtime dependencies. Source increments: native inventory and single-container editor shortcuts; stable full-ID standalone OCI and Libvirt start/stop/restart operations, bounded OCI stdout logs, and LXD local default-project discovery. Incus/LXD lifecycle, managed Incus system containers, safe deletion and terminal remain open until implemented and verified. External Compose/pod/systemd labels block direct OCI writes; no force or storage deletion. Libvirt shutdown/reboot are asynchronous native requests, not proof of guest completion.
 
 ## Scope, boundaries, and non-goals
 

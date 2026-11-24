@@ -823,7 +823,11 @@ pub fn discover_tools(_state: &AppState) -> Vec<Value> {
         json!({"name":"managed_storage_plan","module":"managed_storage","title":"Review new storage","description":"Inspect an absent owned path and stopped consumers without creating data. Existing parents must be owned real directories. Private paths require management writes.","readOnly":true,"destructive":false,"inputSchema":{"additionalProperties":false,"properties":{"revision":{"type":"string","description":"Current configuration revision","minLength":1,"maxLength":64},"sizeGiB":{"type":"integer","description":"New disk capacity in GiB; omit or use zero for a directory","minimum":0,"maximum":4096},"storage":{"type":"string","description":"Existing storage reference ID","minLength":1,"maxLength":63}},"required":["revision","storage"],"type":"object"}}),
     ]);
 
-    tools.push(json!({"name":"native_workloads_list","module":"workloads","title":"External workload inventory","description":"Read local Docker, Podman, configured Incus project and Libvirt inventory. Excludes known and reserved Maestro-managed identities. No mutation or adoption.","readOnly":true,"destructive":false,"inputSchema":{"type":"object","additionalProperties":false,"properties":{}}}));
+    tools.push(json!({"name":"native_workloads_list","module":"workloads","title":"External workload inventory","description":"Read local Docker, Podman, configured Incus project, LXD default project and Libvirt inventory. Excludes known and reserved Maestro-managed identities. Separate explicitly authorized lifecycle tools.","readOnly":true,"destructive":false,"inputSchema":{"type":"object","additionalProperties":false,"properties":{}}}));
+    tools.extend([
+        json!({"name":"native_workload_action","module":"workloads","title":"External workload lifecycle","description":"Start, stop or restart an explicitly selected standalone OCI container or Libvirt guest using a full native ID and local connection. Refuses managed, reserved or orchestrated OCI identities. Does not delete data or change boot policy.","readOnly":false,"destructive":true,"inputSchema":{"type":"object","additionalProperties":false,"properties":{"provider":{"enum":["docker","podman","libvirt"]},"scope":{"type":"string","maxLength":128},"id":{"type":"string","maxLength":128},"action":{"enum":["start","stop","restart"]},"confirm":{"const":true}},"required":["provider","scope","id","action","confirm"]}}),
+        json!({"name":"native_workload_logs","module":"workloads","title":"Read external container logs","description":"Read bounded recent native OCI container stdout logs for an explicitly selected full native ID. Logs may contain private application data.","readOnly":true,"destructive":false,"inputSchema":{"type":"object","additionalProperties":false,"properties":{"provider":{"enum":["docker","podman"]},"scope":{"const":"local"},"id":{"type":"string","minLength":64,"maxLength":64},"tail":{"type":"integer","minimum":1,"maximum":2000}},"required":["provider","scope","id","tail"]}})
+    ]);
     // Keep the reference's individual lifecycle contracts on the existing provider path.
     tools.extend([
         json!({"name":"managed_container_action","module":"managed_lifecycle","title":"Manage a container","description":"Start, stop, restart or pull the configured image for one managed container.","readOnly":false,"destructive":true,"inputSchema":{"additionalProperties":false,"properties":{"service":{"type":"string","minLength":1,"maxLength":63},"container":{"type":"string","minLength":1,"maxLength":63},"action":{"enum":["start","stop","restart","pull"]},"confirm":{"type":"boolean"}},"required":["service","container","action","confirm"],"type":"object"}}),
@@ -2858,6 +2862,55 @@ pub async fn execute_tool(
                 Err(_) => return (StatusCode::CONFLICT, json_err("invalid_config", "Cannot read the authoritative configuration.")),
             };
             (StatusCode::OK, json!(provider.external_inventory(&config).await))
+        }
+
+        "native_workload_action" => {
+            if !writes_allowed(state) {
+                return (StatusCode::FORBIDDEN,json_err("writes_disabled","External lifecycle requires management writes."));
+            }
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Input { provider: String, scope: String, id: String, action: String, confirm: bool }
+            let Ok(input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
+                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected provider, scope, native ID, action and confirmation."));
+            };
+            if !input.confirm || !matches!(input.provider.as_str(),"docker"|"podman"|"libvirt")
+                || !matches!(input.action.as_str(),"start"|"stop"|"restart") || input.scope.len()>128 || input.id.len()>128 {
+                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Invalid external lifecycle target or confirmation."));
+            }
+            let store=store.clone(); let provider=provider.clone(); let state=state.clone();
+            start_job_value(jobs,"native_workload_action",move |running| async move {
+                let result = async {
+                    crate::core::linux_config::mutation_ready(&state.config,&store)?;
+                    anyhow::ensure!(store.pending_apply()?.is_none(),"Recover the pending workload apply before native actions.");
+                    let config = match store.read()? { Some(snapshot) => snapshot.config()?, None => Default::default() };
+                    provider.external_action(&config,&input.provider,&input.scope,&input.id,&input.action).await
+                }.await;
+                match result {
+                    Ok(output) => running.finish(Outcome::Succeeded(json!({"provider":input.provider,"id":input.id,"action":input.action,"output":output}))),
+                    Err(error) => running.finish(Outcome::Failed(error.to_string())),
+                }
+            }).await
+        }
+        "native_workload_logs" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Input { provider: String, scope: String, id: String, tail: usize }
+            let Ok(input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
+                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected provider, scope, native ID and tail."));
+            };
+            let config = match store.read() {
+                Ok(Some(snapshot)) => match snapshot.config() {
+                    Ok(config) => config,
+                    Err(_) => return (StatusCode::CONFLICT,json_err("invalid_config","Repair the authoritative configuration first.")),
+                },
+                Ok(None) => Default::default(),
+                Err(_) => return (StatusCode::CONFLICT,json_err("invalid_config","Cannot read the authoritative configuration.")),
+            };
+            match provider.external_logs(&config,&input.provider,&input.scope,&input.id,input.tail).await {
+                Ok(logs) => (StatusCode::OK,json!(logs)),
+                Err(error) => (StatusCode::SERVICE_UNAVAILABLE,json_err("unavailable",&error.to_string())),
+            }
         }
 
         "applications_list" => {
