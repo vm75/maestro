@@ -12,23 +12,31 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+fn is_false(value: &bool) -> bool { !*value }
 
 use crate::{command::CommandRunner, state::AppState};
 
 const LIMIT: usize = 1024 * 1024;
 
-#[derive(Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct Definition {
     pub(crate) name: String,
     pub(crate) path: String,
     pub(crate) read_only: bool,
+    #[serde(skip_serializing_if = "is_false")]
     pub(crate) guest: bool,
+    #[serde(skip_serializing_if = "is_false")]
     pub(crate) browseable: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) users: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) clients: Vec<String>,
+    #[serde(skip_serializing_if = "is_false")]
     pub(crate) root_squash: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub(crate) security: String,
 }
 
