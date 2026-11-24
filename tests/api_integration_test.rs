@@ -2590,6 +2590,12 @@ async fn linux_workloads_and_applications_lifecycle() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
+    let (status, readiness) = call("managed_config_readiness", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(readiness, serde_json::json!({"configured":false,"valid":false}));
+    let (status, _) = call("managed_config_readiness", serde_json::json!({"force":true})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
     // 2. Plan a valid workload
     let yaml = r#"version: 1
 storage:
@@ -2640,6 +2646,14 @@ shares:
             break;
         }
     }
+
+    let (status, readiness) = call("managed_config_readiness", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(readiness["configured"], true);
+    assert_eq!(readiness["valid"], true);
+    assert_eq!(readiness["runtimeChecked"], false);
+    assert!(readiness["health"]["issues"].is_array());
+    assert!(readiness["health"]["runtimeCheckedAt"].is_null());
 
     // 4. Check applications_list
     let (status, val) = call("applications_list", serde_json::json!({})).await;
@@ -2797,6 +2811,7 @@ async fn linux_mcp_protocol_flow() {
         "managed_service_stop",
         "managed_service_restart",
         "managed_service_logs",
+        "managed_config_readiness",
     ] {
         let actual = tools.iter().find(|tool| tool["name"] == name).unwrap();
         let expected = reference["tools"]
