@@ -333,6 +333,7 @@
           <li>For a domain that serves an app, set <strong>Return 404 at domain root</strong> to <strong>No</strong>. Enable subfolders only when needed. Enable a child's parent domain before enabling the child, and configure its TLS certificate.</li>
         </ol>
         <h4>Choose a profile</h4>
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard access to horizontally scrollable table.) -->
         <div class="shared-table" tabindex="0" role="region" aria-label="Site profiles; scroll horizontally on small screens">
           <table class="table">
             <thead><tr><th scope="col">Use case</th><th scope="col">Cache policy</th><th scope="col">Stream responses</th><th scope="col">Byte ranges</th><th scope="col">Long-lived connections</th></tr></thead>

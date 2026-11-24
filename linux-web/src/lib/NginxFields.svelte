@@ -11,7 +11,7 @@
         {#if field.type === 'bool' || field.type === 'select'}
           <select disabled={disabled} value={value[field.key] === undefined ? '' : String(value[field.key])} onchange={event => value = setField(value, field.key, event.currentTarget.value === '' ? undefined : settingValue(field,event.currentTarget.value))}>
             <option value="">Inherit ({String(inherited[field.key] ?? field.fallback ?? 'default')})</option>
-            {#each field.type === 'bool' ? ['true','false'] : (field.options || []) as choice}
+            {#each (field.type === 'bool' ? ['true','false'] : field.options || []) as choice}
               <option value={choice}>{field.type === 'bool' ? choice === 'true' ? 'Yes' : 'No' : choice}</option>
             {/each}
           </select>
