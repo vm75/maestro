@@ -87,10 +87,21 @@ fn expected(config: &Config, id: &str) -> Result<BTreeMap<String, String>> {
         .collect()
 }
 
+#[cfg(test)]
 fn parse(
     bytes: &[u8],
     id: &str,
     fingerprint: &str,
+    expected: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, (String, bool)>> {
+    parse_with_boot_equivalent(bytes, id, fingerprint, None, expected)
+}
+
+fn parse_with_boot_equivalent(
+    bytes: &[u8],
+    id: &str,
+    fingerprint: &str,
+    boot_equivalent: Option<&str>,
     expected: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, (String, bool)>> {
     ensure!(
@@ -130,7 +141,8 @@ fn parse(
             | "restarting" | "dead" => row.state,
             _ => "unknown".into(),
         };
-        members.insert(member.clone(), (state, native_fingerprint == fingerprint));
+        let current = native_fingerprint == fingerprint || boot_equivalent == Some(native_fingerprint.as_str());
+        members.insert(member.clone(), (state, current));
     }
     Ok(members)
 }
@@ -169,7 +181,21 @@ pub(super) async fn inspect(
         output.status.success() && !output.truncated,
         "Podman metadata is unavailable or exceeds its limit"
     );
-    let rows = parse(&output.stdout, id, fingerprint, &expected)?;
+    // The existing ownership fingerprint includes the boot flag. Accept only
+    // the exact other boot-policy value for the same complete runtime definition.
+    // This also recognizes already-running containers from earlier builds,
+    // without weakening exact generated-file and loaded-unit ownership checks.
+    let boot_equivalent = if super::super::plan::service_fingerprint(config, id)? == fingerprint {
+        let mut other = config.clone();
+        let service = other.services.get_mut(id).expect("verified service ID");
+        service.enabled = !service.enabled;
+        Some(super::super::plan::service_fingerprint(&other, id)?)
+    } else {
+        None
+    };
+    let rows = parse_with_boot_equivalent(
+        &output.stdout, id, fingerprint, boot_equivalent.as_deref(), &expected,
+    )?;
     let mut members = Vec::new();
     let mut running = 0;
     let mut matches = true;
@@ -294,6 +320,29 @@ mod tests {
         assert_eq!(result.state, "stopped");
         assert!(result.matches);
     }
+    #[tokio::test]
+    async fn boot_only_changes_do_not_make_running_runtime_stale() {
+        let root = tempfile::tempdir().unwrap();
+        let old = crate::core::declarative::parse(YAML).unwrap();
+        let previous = super::super::super::plan::service_fingerprint(&old, "demo").unwrap();
+        let mut desired = old.clone();
+        desired.services.get_mut("demo").unwrap().enabled = true;
+        let current = super::super::super::plan::service_fingerprint(&desired, "demo").unwrap();
+        assert_ne!(current, previous);
+        let body = serde_json::to_vec(&vec![
+            row("web", "running", &previous),
+            row("worker", "running", &previous),
+        ]).unwrap();
+        let program = stub(root.path(), &body, 1);
+        let result = inspect(&CommandRunner::new(false), &program, &desired, "demo", &current).await.unwrap();
+        assert_eq!(result.state, "running");
+        assert!(result.matches);
+        desired.services.get_mut("demo").unwrap().containers.get_mut("web").unwrap().image = "busybox".into();
+        let changed = super::super::super::plan::service_fingerprint(&desired, "demo").unwrap();
+        let result = inspect(&CommandRunner::new(false), &program, &desired, "demo", &changed).await.unwrap();
+        assert!(!result.matches);
+    }
+
     #[tokio::test]
     async fn foreign_name_collisions_and_engine_failures_cannot_be_adopted() {
         let root = tempfile::tempdir().unwrap();
