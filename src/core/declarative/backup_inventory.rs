@@ -1,6 +1,6 @@
 //! Read-only, bounded inventory for partial (NON-RESTORABLE) Linux capture.
-//! This is not a backup/capture/verification implementation. It never opens
-//! private file contents, follows links or changes native workloads.
+//! This collector inventories inputs only; backup_capture adds native metadata
+//! discovery and separate confirmed capture. No private contents are returned.
 use std::{
     collections::BTreeSet,
     fs,
