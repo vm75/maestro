@@ -2829,6 +2829,8 @@ async fn linux_mcp_protocol_flow() {
         "managed_config_readiness",
         "managed_config_check",
         "managed_services",
+        "managed_storage_plan",
+        "managed_storage_create",
     ] {
         let actual = tools.iter().find(|tool| tool["name"] == name).unwrap();
         let expected = reference["tools"]
