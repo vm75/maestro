@@ -31,8 +31,13 @@ fn valid_path(path: &str) -> bool {
     path.starts_with('/')
         && path.len() <= 4096
         && path.trim() == path
-        && !path.chars().any(|c| c.is_control() || "\\%\"'[]#;(),".contains(c))
-        && (path == "/" || path[1..].split('/').all(|part| !matches!(part, "" | "." | "..")))
+        && !path
+            .chars()
+            .any(|c| c.is_control() || "\\%\"'[]#;(),".contains(c))
+        && (path == "/"
+            || path[1..]
+                .split('/')
+                .all(|part| !matches!(part, "" | "." | "..")))
 }
 
 fn client(value: &str) -> Result<String> {
@@ -42,58 +47,116 @@ fn client(value: &str) -> Result<String> {
     let valid = match value.split_once('/') {
         None => value.parse::<IpAddr>().is_ok(),
         Some((addr, bits)) => addr.parse::<IpAddr>().is_ok_and(|addr| {
-            !bits.is_empty() && bits.bytes().all(|c| c.is_ascii_digit())
-                && bits.parse::<u32>().is_ok_and(|bits| bits <= if addr.is_ipv4() { 32 } else { 128 })
+            !bits.is_empty()
+                && bits.bytes().all(|c| c.is_ascii_digit())
+                && bits
+                    .parse::<u32>()
+                    .is_ok_and(|bits| bits <= if addr.is_ipv4() { 32 } else { 128 })
         }),
     };
-    ensure!(valid, "NFS clients must be IP addresses, CIDR networks or an explicit *");
+    ensure!(
+        valid,
+        "NFS clients must be IP addresses, CIDR networks or an explicit *"
+    );
     Ok(canonical_client(value))
 }
 
 fn normalize_one(protocol: &str, mut d: Definition, check_path: bool) -> Result<Definition> {
     let name = regex::Regex::new(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$").unwrap();
-    ensure!(name.is_match(&d.name) && !matches!(d.name.to_ascii_lowercase().as_str(), "global" | "homes" | "printers" | "ipc$"),
-        "Share name must be a portable identifier; reserved Samba sections are unsupported");
+    ensure!(
+        name.is_match(&d.name)
+            && !matches!(
+                d.name.to_ascii_lowercase().as_str(),
+                "global" | "homes" | "printers" | "ipc$"
+            ),
+        "Share name must be a portable identifier; reserved Samba sections are unsupported"
+    );
     d.name.make_ascii_lowercase();
-    ensure!(valid_path(&d.path), "Share path must be a clean absolute literal directory path without configuration metacharacters");
+    ensure!(
+        valid_path(&d.path),
+        "Share path must be a clean absolute literal directory path without configuration metacharacters"
+    );
     if check_path {
-        let real = fs::canonicalize(&d.path)
-            .map_err(|_| anyhow::anyhow!("Share directory is inaccessible or resolves to an unsupported path"))?;
-        let real = real.to_str().filter(|path| valid_path(path))
-            .ok_or_else(|| anyhow::anyhow!("Share directory is inaccessible or resolves to an unsupported path"))?;
-        ensure!(Path::new(real).is_dir(), "Share path must be an existing directory");
+        let real = fs::canonicalize(&d.path).map_err(|_| {
+            anyhow::anyhow!("Share directory is inaccessible or resolves to an unsupported path")
+        })?;
+        let real = real
+            .to_str()
+            .filter(|path| valid_path(path))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Share directory is inaccessible or resolves to an unsupported path"
+                )
+            })?;
+        ensure!(
+            Path::new(real).is_dir(),
+            "Share path must be an existing directory"
+        );
         d.path = real.into();
     }
     if protocol == "samba" {
-        ensure!(d.clients.is_empty() && d.security.is_empty() && !d.root_squash, "NFS settings cannot be used in a Samba share");
-        ensure!(d.users.len() <= 32 && (d.guest || !d.users.is_empty()),
-            "Samba requires explicit users/groups unless guest access is enabled; limit 32");
-        ensure!(!d.guest || d.users.is_empty(), "Guest shares must not also specify a valid-users restriction");
+        ensure!(
+            d.clients.is_empty() && d.security.is_empty() && !d.root_squash,
+            "NFS settings cannot be used in a Samba share"
+        );
+        ensure!(
+            d.users.len() <= 32 && (d.guest || !d.users.is_empty()),
+            "Samba requires explicit users/groups unless guest access is enabled; limit 32"
+        );
+        ensure!(
+            !d.guest || d.users.is_empty(),
+            "Guest shares must not also specify a valid-users restriction"
+        );
         let user = regex::Regex::new(r"^@?[a-zA-Z_][a-zA-Z0-9_.-]{0,63}\$?$").unwrap();
-        ensure!(d.users.iter().all(|name| user.is_match(name)), "Samba users must be simple account names or @group names");
+        ensure!(
+            d.users.iter().all(|name| user.is_match(name)),
+            "Samba users must be simple account names or @group names"
+        );
         d.users.sort();
         d.users.dedup();
     } else {
-        ensure!(!d.guest && !d.browseable && d.users.is_empty(), "Samba settings cannot be used in an NFS export");
-        ensure!(matches!(d.security.as_str(), "sys" | "krb5" | "krb5i" | "krb5p"), "Unsupported NFS security flavor");
-        ensure!((1..=16).contains(&d.clients.len()), "NFS requires 1 to 16 explicit clients/networks");
-        d.clients = d.clients.iter().map(|value| client(value)).collect::<Result<_>>()?;
+        ensure!(
+            !d.guest && !d.browseable && d.users.is_empty(),
+            "Samba settings cannot be used in an NFS export"
+        );
+        ensure!(
+            matches!(d.security.as_str(), "sys" | "krb5" | "krb5i" | "krb5p"),
+            "Unsupported NFS security flavor"
+        );
+        ensure!(
+            (1..=16).contains(&d.clients.len()),
+            "NFS requires 1 to 16 explicit clients/networks"
+        );
+        d.clients = d
+            .clients
+            .iter()
+            .map(|value| client(value))
+            .collect::<Result<_>>()?;
         d.clients.sort();
         d.clients.dedup();
     }
     Ok(d)
 }
 
-pub(crate) fn normalize(protocol: &str, definitions: Vec<Definition>, check_paths: bool) -> Result<Vec<Definition>> {
-    ensure!(matches!(protocol, "samba" | "nfs"), "unsupported share protocol");
+pub(crate) fn normalize(
+    protocol: &str,
+    definitions: Vec<Definition>,
+    check_paths: bool,
+) -> Result<Vec<Definition>> {
+    ensure!(
+        matches!(protocol, "samba" | "nfs"),
+        "unsupported share protocol"
+    );
     ensure!(definitions.len() <= 64, "share limit exceeded");
     let mut names = BTreeSet::new();
     let mut paths = BTreeSet::new();
     let mut result = Vec::new();
     for definition in definitions {
         let d = normalize_one(protocol, definition, check_paths)?;
-        ensure!(names.insert(d.name.clone()) && (protocol != "nfs" || paths.insert(d.path.clone())),
-            "duplicate share name or NFS export path");
+        ensure!(
+            names.insert(d.name.clone()) && (protocol != "nfs" || paths.insert(d.path.clone())),
+            "duplicate share name or NFS export path"
+        );
         result.push(d);
     }
     result.sort_by(|a, b| a.name.cmp(&b.name));
@@ -101,27 +164,48 @@ pub(crate) fn normalize(protocol: &str, definitions: Vec<Definition>, check_path
 }
 
 pub(crate) fn options(d: &Definition) -> String {
-    format!("{},sync,{},no_all_squash,no_subtree_check,secure,sec={}",
+    format!(
+        "{},sync,{},no_all_squash,no_subtree_check,secure,sec={}",
         if d.read_only { "ro" } else { "rw" },
-        if d.root_squash { "root_squash" } else { "no_root_squash" }, d.security)
+        if d.root_squash {
+            "root_squash"
+        } else {
+            "no_root_squash"
+        },
+        d.security
+    )
 }
 
 pub(crate) fn render(protocol: &str, definitions: &[Definition]) -> Result<Vec<u8>> {
     use std::fmt::Write;
-    ensure!(definitions.len() <= 64, "Managed fragments are limited to 64 shares");
+    ensure!(
+        definitions.len() <= 64,
+        "Managed fragments are limited to 64 shares"
+    );
     let mut definitions: Vec<_> = definitions.iter().collect();
     definitions.sort_by(|a, b| a.name.cmp(&b.name));
     let mut text = HEADER.to_owned();
     for d in definitions {
         // Go encoding/json escapes HTML and the two Unicode line separators.
         let data = serde_json::to_string(d)?
-            .replace('&', "\\u0026").replace('<', "\\u003c").replace('>', "\\u003e")
-            .replace('\u{2028}', "\\u2028").replace('\u{2029}', "\\u2029");
+            .replace('&', "\\u0026")
+            .replace('<', "\\u003c")
+            .replace('>', "\\u003e")
+            .replace('\u{2028}', "\\u2028")
+            .replace('\u{2029}', "\\u2029");
         writeln!(text, "{METADATA}{data}")?;
         if protocol == "samba" {
             let yes = |value| if value { "yes" } else { "no" };
-            writeln!(text, "[{}]\n\tpath = {}\n\tread only = {}\n\tguest ok = {}\n\tbrowseable = {}\n\tvalid users = {}",
-                d.name, d.path, yes(d.read_only), yes(d.guest), yes(d.browseable), d.users.join(" "))?;
+            writeln!(
+                text,
+                "[{}]\n\tpath = {}\n\tread only = {}\n\tguest ok = {}\n\tbrowseable = {}\n\tvalid users = {}",
+                d.name,
+                d.path,
+                yes(d.read_only),
+                yes(d.guest),
+                yes(d.browseable),
+                d.users.join(" ")
+            )?;
         } else {
             text.push_str(&d.path.replace(' ', r"\040"));
             for selector in &d.clients {
@@ -153,41 +237,64 @@ impl Snapshot {
 
 pub(crate) fn read_file(path: &Path, no_symlink: bool) -> Result<Snapshot> {
     let flags = libc::O_NONBLOCK | libc::O_CLOEXEC | if no_symlink { libc::O_NOFOLLOW } else { 0 };
-    let file = match fs::OpenOptions::new().read(true).custom_flags(flags).open(path) {
+    let file = match fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(flags)
+        .open(path)
+    {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Snapshot::default()),
         Err(error) => return Err(error.into()),
     };
     let info = file.metadata()?;
-    ensure!(info.is_file() && info.len() <= MAX_FILE as u64, "configuration must be a regular file at most 1 MiB");
+    ensure!(
+        info.is_file() && info.len() <= MAX_FILE as u64,
+        "configuration must be a regular file at most 1 MiB"
+    );
     let mut data = Vec::new();
-    file.take(MAX_FILE as u64 + 1).read_to_end(&mut data)
+    file.take(MAX_FILE as u64 + 1)
+        .read_to_end(&mut data)
         .map_err(|_| anyhow::anyhow!("configuration could not be read within 1 MiB"))?;
-    ensure!(data.len() <= MAX_FILE, "configuration could not be read within 1 MiB");
-    Ok(Snapshot { data, exists: true, mode: info.mode() & 0o777 })
+    ensure!(
+        data.len() <= MAX_FILE,
+        "configuration could not be read within 1 MiB"
+    );
+    Ok(Snapshot {
+        data,
+        exists: true,
+        mode: info.mode() & 0o777,
+    })
 }
 
 pub(crate) fn load(protocol: &str, snapshot: &Snapshot) -> Result<Vec<Definition>> {
     if !snapshot.exists {
         return Ok(Vec::new());
     }
-    ensure!(snapshot.data.starts_with(HEADER.as_bytes()),
-        "managed file is not owned by maestro; preserve it and choose an empty unused location");
+    ensure!(
+        snapshot.data.starts_with(HEADER.as_bytes()),
+        "managed file is not owned by maestro; preserve it and choose an empty unused location"
+    );
     let mut definitions = Vec::new();
     let mut names = BTreeSet::new();
     let mut paths = BTreeSet::new();
     for line in String::from_utf8_lossy(&snapshot.data).split('\n') {
-        let Some(raw) = line.strip_prefix(METADATA) else { continue };
+        let Some(raw) = line.strip_prefix(METADATA) else {
+            continue;
+        };
         let d: Definition = serde_json::from_str(raw)
             .map_err(|_| anyhow::anyhow!("managed share metadata is invalid"))?;
         let d = normalize_one(protocol, d, false)
             .map_err(|_| anyhow::anyhow!("managed share metadata is unsupported"))?;
-        ensure!(names.insert(d.name.clone()) && (protocol != "nfs" || paths.insert(d.path.clone())),
-            "duplicate managed share identity or export path");
+        ensure!(
+            names.insert(d.name.clone()) && (protocol != "nfs" || paths.insert(d.path.clone())),
+            "duplicate managed share identity or export path"
+        );
         definitions.push(d);
     }
-    ensure!(render(protocol, &definitions).is_ok_and(|bytes| bytes == snapshot.data),
-        "managed file was edited outside maestro; changes will not be overwritten");
+    ensure!(
+        render(protocol, &definitions).is_ok_and(|bytes| bytes == snapshot.data),
+        "managed file was edited outside maestro; changes will not be overwritten"
+    );
     Ok(definitions)
 }
 
@@ -197,17 +304,23 @@ pub(crate) struct Candidate(std::path::PathBuf);
 
 impl Candidate {
     pub(crate) fn new(directory: &Path, data: &[u8], mode: u32) -> Result<Self> {
-        Self::new_for_owner(directory,data,mode,0)
+        Self::new_for_owner(directory, data, mode, 0)
     }
 
     fn new_for_owner(directory: &Path, data: &[u8], mode: u32, owner: u32) -> Result<Self> {
         use std::io::Write;
         let metadata = fs::symlink_metadata(directory)?;
-        ensure!(metadata.is_dir() && metadata.uid() == owner && metadata.mode() & 0o022 == 0,
-            "native share configuration directory is not trusted");
+        ensure!(
+            metadata.is_dir() && metadata.uid() == owner && metadata.mode() & 0o022 == 0,
+            "native share configuration directory is not trusted"
+        );
         let path = directory.join(format!(".maestro-{}", uuid::Uuid::new_v4()));
-        let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC).open(&path)?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&path)?;
         let candidate = Self(path);
         file.set_permissions(fs::Permissions::from_mode(mode))?;
         file.write_all(data)?;
@@ -218,22 +331,33 @@ impl Candidate {
     /// Atomic rename followed by directory fsync. Callers must handle the
     /// possibility that the rename succeeded but directory sync failed.
     pub(crate) fn publish(&self, path: &Path) -> Result<()> {
-        ensure!(self.0.parent() == path.parent(), "candidate destination directory changed");
+        ensure!(
+            self.0.parent() == path.parent(),
+            "candidate destination directory changed"
+        );
         fs::rename(&self.0, path)?;
         sync_dir(path)
     }
 
     pub(crate) fn text(&self) -> &str {
-        self.0.to_str().expect("fixed native configuration directory and ASCII candidate name")
+        self.0
+            .to_str()
+            .expect("fixed native configuration directory and ASCII candidate name")
     }
 }
 
 impl Drop for Candidate {
-    fn drop(&mut self) { let _ = fs::remove_file(&self.0); }
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
 }
 
 fn sync_dir(path: &Path) -> Result<()> {
-    fs::File::open(path.parent().ok_or_else(|| anyhow::anyhow!("missing configuration directory"))?)?.sync_all()?;
+    fs::File::open(
+        path.parent()
+            .ok_or_else(|| anyhow::anyhow!("missing configuration directory"))?,
+    )?
+    .sync_all()?;
     Ok(())
 }
 
@@ -242,20 +366,31 @@ pub(crate) fn same_file(path: &Path, want: &Snapshot) -> bool {
 }
 
 pub(crate) fn restore(path: &Path, old: &Snapshot, published: &[u8]) -> Result<()> {
-    restore_for_owner(path,old,published,0)
+    restore_for_owner(path, old, published, 0)
 }
 
 fn restore_for_owner(path: &Path, old: &Snapshot, published: &[u8], owner: u32) -> Result<()> {
     let current = read_file(path, true)?;
-    ensure!(current.exists && current.data == published,
-        "rollback refused because the managed file changed externally");
+    ensure!(
+        current.exists && current.data == published,
+        "rollback refused because the managed file changed externally"
+    );
     if !old.exists {
         fs::remove_file(path)?;
         return sync_dir(path);
     }
-    let candidate = Candidate::new_for_owner(path.parent().ok_or_else(|| anyhow::anyhow!("missing configuration directory"))?, &old.data, old.mode, owner)?;
+    let candidate = Candidate::new_for_owner(
+        path.parent()
+            .ok_or_else(|| anyhow::anyhow!("missing configuration directory"))?,
+        &old.data,
+        old.mode,
+        owner,
+    )?;
     // Do not overwrite an administrator's intervening edit while staging rollback.
-    ensure!(same_file(path, &current), "rollback refused because the managed file changed externally");
+    ensure!(
+        same_file(path, &current),
+        "rollback refused because the managed file changed externally"
+    );
     candidate.publish(path)
 }
 
@@ -266,53 +401,65 @@ mod tests {
     #[test]
     fn atomic_publication_and_rollback_preserve_bytes_and_mode() {
         let directory = tempfile::tempdir().unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let owner = fs::metadata(directory.path()).unwrap().uid();
         let path = directory.path().join("managed.conf");
-        fs::write(&path,b"before").unwrap();
-        fs::set_permissions(&path,fs::Permissions::from_mode(0o640)).unwrap();
-        let old = read_file(&path,true).unwrap();
-        let candidate = Candidate::new_for_owner(directory.path(),b"after",old.mode,owner).unwrap();
-        assert!(same_file(&path,&old));
+        fs::write(&path, b"before").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        let old = read_file(&path, true).unwrap();
+        let candidate =
+            Candidate::new_for_owner(directory.path(), b"after", old.mode, owner).unwrap();
+        assert!(same_file(&path, &old));
         candidate.publish(&path).unwrap();
-        assert_eq!(fs::read(&path).unwrap(),b"after");
-        restore_for_owner(&path,&old,b"after",owner).unwrap();
-        assert_eq!(fs::read(&path).unwrap(),b"before");
-        assert_eq!(read_file(&path,true).unwrap().mode,0o640);
+        assert_eq!(fs::read(&path).unwrap(), b"after");
+        restore_for_owner(&path, &old, b"after", owner).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"before");
+        assert_eq!(read_file(&path, true).unwrap().mode, 0o640);
 
-        let candidate = Candidate::new_for_owner(directory.path(),b"after",old.mode,owner).unwrap();
+        let candidate =
+            Candidate::new_for_owner(directory.path(), b"after", old.mode, owner).unwrap();
         candidate.publish(&path).unwrap();
-        fs::write(&path,b"external edit").unwrap();
-        assert!(restore_for_owner(&path,&old,b"after",owner).is_err());
-        assert_eq!(fs::read(&path).unwrap(),b"external edit");
+        fs::write(&path, b"external edit").unwrap();
+        assert!(restore_for_owner(&path, &old, b"after", owner).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"external edit");
     }
 
     #[test]
     fn rollback_removes_new_fragment_but_refuses_symlink() {
         let directory = tempfile::tempdir().unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let owner = fs::metadata(directory.path()).unwrap().uid();
         let path = directory.path().join("new.exports");
-        let old = read_file(&path,true).unwrap();
+        let old = read_file(&path, true).unwrap();
         assert!(!old.exists);
-        let candidate = Candidate::new_for_owner(directory.path(),b"new",0o644,owner).unwrap();
+        let candidate = Candidate::new_for_owner(directory.path(), b"new", 0o644, owner).unwrap();
         candidate.publish(&path).unwrap();
-        restore_for_owner(&path,&old,b"new",owner).unwrap();
+        restore_for_owner(&path, &old, b"new", owner).unwrap();
         assert!(!path.exists());
         let other = directory.path().join("administrator.exports");
-        fs::write(&other,b"unmanaged").unwrap();
-        std::os::unix::fs::symlink(&other,&path).unwrap();
-        assert!(restore_for_owner(&path,&old,b"unmanaged",owner).is_err());
-        assert_eq!(fs::read(&other).unwrap(),b"unmanaged");
+        fs::write(&other, b"unmanaged").unwrap();
+        std::os::unix::fs::symlink(&other, &path).unwrap();
+        assert!(restore_for_owner(&path, &old, b"unmanaged", owner).is_err());
+        assert_eq!(fs::read(&other).unwrap(), b"unmanaged");
     }
 
     #[test]
     fn reference_samba_fragment_and_ownership() {
         let definitions = normalize("samba", decode(r#"[{"name":"Docs","path":"/srv/docs","readOnly":true,"browseable":true,"users":["bob","alice","bob"]}]"#).unwrap(), false).unwrap();
         let data = render("samba", &definitions).unwrap();
-        assert_eq!(String::from_utf8_lossy(&data), concat!(
-            "# Managed by maestro. Do not edit.\n# maestro-format: 1\n",
-            "# maestro-share: {\"name\":\"docs\",\"path\":\"/srv/docs\",\"readOnly\":true,\"browseable\":true,\"users\":[\"alice\",\"bob\"]}\n",
-            "[docs]\n\tpath = /srv/docs\n\tread only = yes\n\tguest ok = no\n\tbrowseable = yes\n\tvalid users = alice bob\n\n"));
-        let mut snapshot = Snapshot { data, exists: true, mode: 0o644 };
+        assert_eq!(
+            String::from_utf8_lossy(&data),
+            concat!(
+                "# Managed by maestro. Do not edit.\n# maestro-format: 1\n",
+                "# maestro-share: {\"name\":\"docs\",\"path\":\"/srv/docs\",\"readOnly\":true,\"browseable\":true,\"users\":[\"alice\",\"bob\"]}\n",
+                "[docs]\n\tpath = /srv/docs\n\tread only = yes\n\tguest ok = no\n\tbrowseable = yes\n\tvalid users = alice bob\n\n"
+            )
+        );
+        let mut snapshot = Snapshot {
+            data,
+            exists: true,
+            mode: 0o644,
+        };
         assert_eq!(load("samba", &snapshot).unwrap().len(), 1);
         snapshot.data.extend(b"# external edit\n");
         assert!(load("samba", &snapshot).is_err());
@@ -329,6 +476,14 @@ mod tests {
         }
         assert!(client("example.com").is_err());
         assert!(client("192.0.2.1/").is_err());
-        assert_ne!(Snapshot::default().revision(), Snapshot { data: vec![], exists: true, mode: 0o644 }.revision());
+        assert_ne!(
+            Snapshot::default().revision(),
+            Snapshot {
+                data: vec![],
+                exists: true,
+                mode: 0o644
+            }
+            .revision()
+        );
     }
 }

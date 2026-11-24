@@ -52,7 +52,10 @@ Node/npm or downloads an official Node 22 archive with SHA-256 verification into
 `.dev-tools/node`. Toolchains and npm run as your account. Global tool defaults
 and existing Maestro configuration are preserved. Both init and run select the
 same tools without requiring shell activation. Each run rebuilds the Svelte UI
-before compiling and starting Maestro. See the [Linux integration guide](linux.md).
+before compiling and starting Maestro. `make test-nginx` and `make test-linux`
+also reuse `.dev-tools/python` when present; set `PYTHON=/path/to/python3` to
+select another environment with `requirements.txt` installed. See the
+[Linux integration guide](linux.md).
 
 ### Optional privileged helper for development
 
@@ -137,7 +140,67 @@ This uses the same cross-compilation toolchain as `make release`.
 
 ### Cross-compilation for AArch64 musl
 
-When cross-compiling for `aarch64-unknown-linux-musl` without a local `aarch64-linux-musl-gcc` toolchain, build with `cross`:
+`make release` targets `aarch64-unknown-linux-musl` and invokes Cargo directly.
+On an x86_64 Linux development host, set up a local musl cross-compiler first.
+Installing the Rust target alone does not supply the C compiler or linker.
+
+#### Option 1: local `aarch64-linux-musl-gcc` (Arch and Debian/Ubuntu)
+
+Install the download and archive tools for your distribution:
+
+```sh
+# Arch Linux (use the existing package database; do not run pacman -Sy).
+sudo pacman -S --needed ca-certificates curl tar gzip coreutils
+
+# Debian/Ubuntu.
+sudo apt-get update
+sudo apt-get install --no-install-recommends ca-certificates curl tar gzip coreutils
+```
+
+Download the prebuilt [musl.cc toolchain](https://musl.cc/), verify its published
+SHA-512 checksum, and extract it under your account. This is a complete musl
+toolchain; the distribution's `aarch64-linux-gnu-gcc` targets glibc instead.
+
+```sh
+(
+  set -eu
+  stage=$(mktemp -d)
+  trap 'rm -rf -- "$stage"' EXIT
+  cd "$stage"
+  curl --proto '=https' --tlsv1.2 -fsSL https://musl.cc/SHA512SUMS -o SHA512SUMS
+  curl --proto '=https' --tlsv1.2 -fsSL https://musl.cc/aarch64-linux-musl-cross.tgz \
+    -o aarch64-linux-musl-cross.tgz
+  awk '$2 == "aarch64-linux-musl-cross.tgz"' SHA512SUMS | sha512sum --check -
+  mkdir -p "$HOME/.local/share/toolchains"
+  test ! -e "$HOME/.local/share/toolchains/aarch64-linux-musl-cross"
+  tar --no-same-owner -xzf aarch64-linux-musl-cross.tgz -C "$HOME/.local/share/toolchains"
+)
+```
+
+Set the compiler and Cargo linker in your shell. Add these exports to your
+shell startup file if you want them in future sessions:
+
+```sh
+export PATH="$HOME/.local/share/toolchains/aarch64-linux-musl-cross/bin:$PATH"
+export CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc
+export AR_aarch64_unknown_linux_musl=aarch64-linux-musl-ar
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc
+
+aarch64-linux-musl-gcc -dumpmachine  # Expected: aarch64-linux-musl
+rustup target add aarch64-unknown-linux-musl
+make release
+```
+
+If Rust is managed by mise without an active version, run the last two commands
+as `mise exec rust@stable -- rustup target add aarch64-unknown-linux-musl` and
+`mise exec rust@stable -- make release`. The release binary and checksum are
+written to `dist/maestro-aarch64-unknown-linux-musl` and its `.sha256` file.
+
+#### Option 2: container-based build with `cross`
+
+Use `cross` with Docker or Podman when you prefer a container-provided toolchain.
+The container engine must be usable by your account. Installing `cross` does
+not change `make release`; invoke `cross build` explicitly:
 
 1. Install `cross`:
    ```sh

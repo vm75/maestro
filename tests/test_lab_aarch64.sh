@@ -84,7 +84,12 @@ LOGREAD="lab/aarch64/files/logread"
 echo "Mock logread passed."
 
 echo "=== 6. Testing firewall-policy.json fixture ==="
-jq -e '.enabled == false and .rules == []' lab/aarch64/files/firewall-policy.json >/dev/null
+python3 - <<'PYJSON'
+import json
+from pathlib import Path
+policy = json.loads(Path("lab/aarch64/files/firewall-policy.json").read_text())
+assert policy["enabled"] is False and policy["rules"] == []
+PYJSON
 echo "Firewall policy JSON fixture passed."
 
 echo "=== 7. Testing QEMU project share ==="

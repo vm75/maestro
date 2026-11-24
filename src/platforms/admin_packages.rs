@@ -1,8 +1,12 @@
 //! Restricted native package primitives for the Linux root-owned helper.
 //! The request selects *verbs* and validated native repository package names;
 //! distribution, executable, arguments, environment and timeouts are fixed here.
-use std::{fs, os::unix::fs::{MetadataExt, PermissionsExt}, path::{Path, PathBuf}};
 use anyhow::{Context, Result, bail, ensure};
+use std::{
+    fs,
+    os::unix::fs::{MetadataExt, PermissionsExt},
+    path::{Path, PathBuf},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Family {
@@ -77,7 +81,11 @@ pub fn package_names(text: &str) -> Result<Vec<String>> {
     Ok(names)
 }
 
-pub(super) fn dependency_packages(family: Family, distribution: &str, target: &str) -> Result<Vec<String>> {
+pub(super) fn dependency_packages(
+    family: Family,
+    distribution: &str,
+    target: &str,
+) -> Result<Vec<String>> {
     // Pinned mappings from the reference implementation's dependencyPackages reference. Package
     // manager policy and native signature checks are never modified.
     let names = match (target, family) {

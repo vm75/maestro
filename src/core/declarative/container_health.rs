@@ -104,16 +104,12 @@ fn duration_nanos(value: &str) -> Option<u128> {
         }) else {
             return None;
         };
-        let Some(whole) = whole.checked_mul(unit) else {
-            return None;
-        };
+        let whole = whole.checked_mul(unit)?;
         let fraction = &fraction[..fraction.len().min(18)];
         let digits = fraction.parse::<u128>().unwrap_or(0);
-        let Some(next) = total.checked_add(whole).and_then(|value| {
+        let next = total.checked_add(whole).and_then(|value| {
             value.checked_add(digits * unit / 10_u128.pow(fraction.len() as u32))
-        }) else {
-            return None;
-        };
+        })?;
         total = next;
         if total > i64::MAX as u128 {
             return None;
@@ -188,8 +184,12 @@ mod tests {
     #[test]
     fn stop_timeout_rounds_up_compound_and_fractional_durations() {
         for (value, seconds) in [
-            ("", 0), ("20s", 20), ("1500ms", 2), ("1m30.5s", 91),
-            ("1ns", 1), ("1h", 3600),
+            ("", 0),
+            ("20s", 20),
+            ("1500ms", 2),
+            ("1m30.5s", 91),
+            ("1ns", 1),
+            ("1h", 3600),
         ] {
             assert_eq!(stop_seconds(value), Some(seconds), "{value}");
         }

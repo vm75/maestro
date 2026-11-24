@@ -125,7 +125,7 @@ pub struct VM {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mounts: Vec<Mount>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub environment: BTreeMap<String,String>,
+    pub environment: BTreeMap<String, String>,
     pub root_size_gib: i64,
     pub architecture: String,
     pub machine: String,

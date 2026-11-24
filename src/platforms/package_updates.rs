@@ -571,7 +571,10 @@ fn reboot(family: Family, path: &Path) -> Reboot {
     }
 }
 
-pub(super) fn reference_package_rows(manager: admin_packages::Family, text: &str) -> Option<serde_json::Value> {
+pub(super) fn reference_package_rows(
+    manager: admin_packages::Family,
+    text: &str,
+) -> Option<serde_json::Value> {
     let family = match manager {
         admin_packages::Family::Apt => Family::Apt,
         admin_packages::Family::Dnf => Family::Dnf,

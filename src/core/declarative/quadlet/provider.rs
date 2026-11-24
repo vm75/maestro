@@ -27,14 +27,35 @@ pub struct QuadletStatus {
 }
 
 impl QuadletProvider {
-    pub(in crate::core::declarative) fn recovery_targets(&self,previous:&Config,desired:&Config,id:&str)->Result<Vec<crate::core::declarative::artifact_recovery::Target>>{
-        use crate::core::declarative::{artifact_recovery::Target,plan::service_fingerprint};
-        let render=|config:&Config|->Result<std::collections::BTreeMap<String,Vec<u8>>>{
-            if !config.services.contains_key(id){return Ok(Default::default())}
-            let fingerprint=service_fingerprint(config,id)?;
-            Ok(super::render_quadlet_at(config,id,&self.artifacts.storage_base,&self.artifacts.private_base,&fingerprint)?.into_iter().map(|(k,v)|(k,v.into_bytes())).collect())
+    pub(in crate::core::declarative) fn recovery_targets(
+        &self,
+        previous: &Config,
+        desired: &Config,
+        id: &str,
+    ) -> Result<Vec<crate::core::declarative::artifact_recovery::Target>> {
+        use crate::core::declarative::{artifact_recovery::Target, plan::service_fingerprint};
+        let render = |config: &Config| -> Result<std::collections::BTreeMap<String, Vec<u8>>> {
+            if !config.services.contains_key(id) {
+                return Ok(Default::default());
+            }
+            let fingerprint = service_fingerprint(config, id)?;
+            Ok(super::render_quadlet_at(
+                config,
+                id,
+                &self.artifacts.storage_base,
+                &self.artifacts.private_base,
+                &fingerprint,
+            )?
+            .into_iter()
+            .map(|(k, v)| (k, v.into_bytes()))
+            .collect())
         };
-        Ok(vec![Target::quadlet(self.artifacts.directory.clone(),id,render(previous)?,render(desired)?)?])
+        Ok(vec![Target::quadlet(
+            self.artifacts.directory.clone(),
+            id,
+            render(previous)?,
+            render(desired)?,
+        )?])
     }
 
     pub fn new(
@@ -118,7 +139,13 @@ impl QuadletProvider {
         self.action_target(config, id, action, None).await
     }
 
-    pub(in crate::core::declarative) async fn action_target(&self, config: &Config, id: &str, action: &str, member: Option<&str>) -> Result<String> {
+    pub(in crate::core::declarative) async fn action_target(
+        &self,
+        config: &Config,
+        id: &str,
+        action: &str,
+        member: Option<&str>,
+    ) -> Result<String> {
         ensure!(
             matches!(action, "start" | "stop" | "restart" | "pull"),
             "unsupported Quadlet action"
@@ -158,10 +185,17 @@ impl QuadletProvider {
         }
         ensure!(!units.is_empty(), "no generated Quadlet container units");
         if action == "pull" {
-            let member = member.ok_or_else(|| anyhow::anyhow!("select a container image to pull"))?;
+            let member =
+                member.ok_or_else(|| anyhow::anyhow!("select a container image to pull"))?;
             let image = &config.services[id].containers[member].image;
-            self.runner.capture_tail(&self.podman, &["--remote=false", "pull", "--", image],
-                Duration::from_secs(1200), 128 * 1024).await?;
+            self.runner
+                .capture_tail(
+                    &self.podman,
+                    &["--remote=false", "pull", "--", image],
+                    Duration::from_secs(1200),
+                    128 * 1024,
+                )
+                .await?;
             return Ok(format!("Podman image pull completed for {member}"));
         }
         let mut args = vec!["--user", "--no-pager", "--no-ask-password", action, "--"];
@@ -187,7 +221,13 @@ impl QuadletProvider {
             self.artifacts.observe(&change, &empty, config)? == ObservedResource::After,
             "Quadlet files do not match the saved workload revision"
         );
-        let transition = Transition::new(&change, &empty, config, &self.artifacts.storage_base, &self.artifacts.private_base)?;
+        let transition = Transition::new(
+            &change,
+            &empty,
+            config,
+            &self.artifacts.storage_base,
+            &self.artifacts.private_base,
+        )?;
         let mut units = Vec::new();
         for file in transition.after.keys() {
             if let Some(unit) = generated_service(file) {
@@ -293,35 +333,80 @@ impl QuadletProvider {
     /// Verify generated boot links through the loaded user manager, not
     /// systemctl enable/disable (Quadlet units are generator-owned).
     pub async fn verify_boot_policy(&self, config: &Config, id: &str) -> Result<()> {
-        let service = config.services.get(id).ok_or_else(|| anyhow::anyhow!("unknown managed service"))?;
-        let output = self.runner.capture_bounded(&self.systemctl, &[
-            "--user", "--no-pager", "--no-ask-password", "show", "--property=Wants", "default.target",
-        ], Duration::from_secs(12), 64 * 1024).await?;
+        let service = config
+            .services
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("unknown managed service"))?;
+        let output = self
+            .runner
+            .capture_bounded(
+                &self.systemctl,
+                &[
+                    "--user",
+                    "--no-pager",
+                    "--no-ask-password",
+                    "show",
+                    "--property=Wants",
+                    "default.target",
+                ],
+                Duration::from_secs(12),
+                64 * 1024,
+            )
+            .await?;
         let text = std::str::from_utf8(&output)?;
         let mut lines = text.lines().filter_map(|line| line.strip_prefix("Wants="));
-        let wants = lines.next().ok_or_else(|| anyhow::anyhow!("user default target boot dependencies are unavailable"))?;
+        let wants = lines.next().ok_or_else(|| {
+            anyhow::anyhow!("user default target boot dependencies are unavailable")
+        })?;
         ensure!(lines.next().is_none(), "ambiguous boot dependencies");
         for member in service.containers.keys() {
             let unit = format!("{}.service", super::unit_name(id, member));
-            ensure!(wants.split_ascii_whitespace().any(|name| name == unit) == service.enabled,
-                "loaded boot policy does not match the authoritative definition");
+            ensure!(
+                wants.split_ascii_whitespace().any(|name| name == unit) == service.enabled,
+                "loaded boot policy does not match the authoritative definition"
+            );
         }
         Ok(())
     }
 
     async fn verify_enable_prerequisites(&self) -> Result<()> {
         let loginctl = Path::new("/usr/bin/loginctl");
-        ensure!(loginctl.is_file(), "loginctl is unavailable; user boot persistence cannot be verified");
+        ensure!(
+            loginctl.is_file(),
+            "loginctl is unavailable; user boot persistence cannot be verified"
+        );
         let uid = unsafe { libc::geteuid() }.to_string();
-        let result = self.runner.capture_bounded(loginctl,
-            &["show-user", &uid, "--property=Linger", "--value"],
-            Duration::from_secs(5), 4096).await?;
-        ensure!(std::str::from_utf8(&result)?.trim() == "yes",
-            "enable lingering for the workload account explicitly before enabling boot startup");
-        let result = self.runner.capture_bounded(&self.podman,
-            &["--remote=false", "info", "--format", "{{.Host.Security.Rootless}}"],
-            Duration::from_secs(5), 4096).await?;
-        ensure!(std::str::from_utf8(&result)?.trim() == "true", "local rootless Podman could not be verified");
+        let result = self
+            .runner
+            .capture_bounded(
+                loginctl,
+                &["show-user", &uid, "--property=Linger", "--value"],
+                Duration::from_secs(5),
+                4096,
+            )
+            .await?;
+        ensure!(
+            std::str::from_utf8(&result)?.trim() == "yes",
+            "enable lingering for the workload account explicitly before enabling boot startup"
+        );
+        let result = self
+            .runner
+            .capture_bounded(
+                &self.podman,
+                &[
+                    "--remote=false",
+                    "info",
+                    "--format",
+                    "{{.Host.Security.Rootless}}",
+                ],
+                Duration::from_secs(5),
+                4096,
+            )
+            .await?;
+        ensure!(
+            std::str::from_utf8(&result)?.trim() == "true",
+            "local rootless Podman could not be verified"
+        );
         Ok(())
     }
 
@@ -356,7 +441,13 @@ impl QuadletProvider {
                 self.verify_enable_prerequisites().await?;
             }
         }
-        let transition = Transition::new(change, previous, desired, &self.artifacts.storage_base, &self.artifacts.private_base)?;
+        let transition = Transition::new(
+            change,
+            previous,
+            desired,
+            &self.artifacts.storage_base,
+            &self.artifacts.private_base,
+        )?;
         for file in transition.before.keys().chain(
             transition
                 .after
@@ -453,7 +544,13 @@ impl crate::core::declarative::RecoveryProvider for QuadletProvider {
         mode: ApplyMode,
     ) -> Result<ObservedResource> {
         let observed = self.artifacts.observe(change, previous, desired)?;
-        let transition = Transition::new(change, previous, desired, &self.artifacts.storage_base, &self.artifacts.private_base)?;
+        let transition = Transition::new(
+            change,
+            previous,
+            desired,
+            &self.artifacts.storage_base,
+            &self.artifacts.private_base,
+        )?;
         let verified = match observed {
             ObservedResource::Before => {
                 self.verify_loaded_mode(
@@ -476,9 +573,15 @@ impl crate::core::declarative::RecoveryProvider for QuadletProvider {
             ObservedResource::Unknown => return Ok(ObservedResource::Unknown),
         };
         let boot_verified = if let Some(id) = changed_boot_policy(change, previous, desired) {
-            let config = if observed == ObservedResource::Before { previous } else { desired };
+            let config = if observed == ObservedResource::Before {
+                previous
+            } else {
+                desired
+            };
             self.verify_boot_policy(config, id).await.is_ok()
-        } else { true };
+        } else {
+            true
+        };
         Ok(if verified.is_ok() && boot_verified {
             observed
         } else {
@@ -514,7 +617,13 @@ impl ApplyProvider for QuadletProvider {
         mode: ApplyMode,
     ) -> Result<()> {
         self.check_mode(change, previous, desired, mode).await?;
-        let transition = Transition::new(change, previous, desired, &self.artifacts.storage_base, &self.artifacts.private_base)?;
+        let transition = Transition::new(
+            change,
+            previous,
+            desired,
+            &self.artifacts.storage_base,
+            &self.artifacts.private_base,
+        )?;
         self.artifacts.publish(change, previous, desired)?;
         self.runner
             .capture_bounded(
@@ -568,7 +677,11 @@ impl QuadletProvider {
     }
 }
 
-fn changed_boot_policy<'a>(change: &'a Change, previous: &Config, desired: &Config) -> Option<&'a str> {
+fn changed_boot_policy<'a>(
+    change: &'a Change,
+    previous: &Config,
+    desired: &Config,
+) -> Option<&'a str> {
     let id = change.resource.strip_prefix("service/")?;
     let before = previous.services.get(id)?;
     let after = desired.services.get(id)?;

@@ -774,14 +774,17 @@ pub async fn download_latest_dehydrated(config: &AppConfig) -> Result<Dehydrated
         bail!("GitHub dehydrated download is unexpectedly large");
     }
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.context("failed to read dehydrated download")? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .context("failed to read dehydrated download")?
+    {
         if (body.len() as u64).saturating_add(chunk.len() as u64) > MAX_DEHYDRATED_DOWNLOAD_BYTES {
             bail!("GitHub dehydrated download is unexpectedly large");
         }
         body.extend_from_slice(&chunk);
     }
-    let text = String::from_utf8(body)
-        .context("GitHub dehydrated download was not UTF-8 text")?;
+    let text = String::from_utf8(body).context("GitHub dehydrated download was not UTF-8 text")?;
     if !text.starts_with("#!") || !text.contains("dehydrated") {
         bail!("GitHub response does not look like the dehydrated script");
     }
@@ -813,7 +816,8 @@ async fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
         .open(&temp)
         .await?;
     let result = async {
-        file.set_permissions(std::fs::Permissions::from_mode(mode)).await?;
+        file.set_permissions(std::fs::Permissions::from_mode(mode))
+            .await?;
         file.write_all(bytes).await?;
         file.sync_all().await?;
         drop(file);
@@ -821,7 +825,8 @@ async fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
             .await
             .with_context(|| format!("failed to replace {}", path.display()))?;
         Ok(())
-    }.await;
+    }
+    .await;
     if result.is_err() {
         let _ = fs::remove_file(&temp).await;
     }

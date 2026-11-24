@@ -8,7 +8,7 @@
   let input=$state('')
   let cursor=0
   let stopped=false
-  let viewer:HTMLPreElement
+  let viewer:HTMLDivElement
   let decoder=new TextDecoder()
   let controller:AbortController|undefined
   function call<T>(action:Record<string,unknown>,signal?:AbortSignal){return request<T>('/api/terminal',{method:'POST',body:JSON.stringify(action),signal})}
@@ -56,7 +56,7 @@
   </div>
   <p>Local non-root shell, one connection at a time. Disconnects after 45 seconds without browser contact or 30 minutes total. Supports commands and control keys, not full-screen terminal applications.</p>
   {#if error}<p role="alert">{error}</p>{/if}
-  <pre bind:this={viewer} class="transcript" aria-label="Terminal output" tabindex="0">{output}</pre>
+  <div bind:this={viewer} class="transcript" role="textbox" aria-readonly="true" aria-multiline="true" aria-label="Terminal output" tabindex="0">{output}</div>
   <form onsubmit={(e)=>{e.preventDefault();const line=input;input='';void send(line+'\n')}}>
     <label>Terminal input<input bind:value={input} disabled={!id||busy} maxlength="1000" autocomplete="off" spellcheck={false}/></label>
     <button type="submit" disabled={!id||busy}>Send</button>

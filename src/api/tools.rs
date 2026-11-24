@@ -209,13 +209,41 @@ impl Tool {
                 "Review backup inputs",
                 "Read bounded private source metadata and native prerequisites; not a restorable backup.",
             ),
-            Self::BackupPrepare => ("managed_backup_prepare","Capture backup inputs","Capture a reviewed revision into a private checksummed non-restorable bundle; optionally quiesce and resume workloads."),
-            Self::BackupRecoveryStatus => ("managed_backup_recovery_status","Review backup recovery","Inspect durable workload and staged capture progress without activating workloads."),
-            Self::BackupRecover => ("managed_backup_recover","Resume interrupted backup workloads","Recover only previously running workloads whose stop was attempted; never replay capture."),
-            Self::BackupPublish => ("managed_backup_publish","Verify and finish capture publication","Verify a recorded capture against its manifest and publish without replacing data."),
-            Self::ArtifactReview => ("managed_artifact_review","Review generated artifact conflict","Inspect exact generated files and publication metadata without disclosing contents or paths."),
-            Self::ArtifactReconcile => ("managed_artifact_reconcile","Preserve and reconcile generated-artifact metadata","Preserve conflicting private sidecars and repair only canonical metadata after review; never retry apply or change workloads."),
-            Self::BackupRelease => ("managed_backup_release","Leave backup workloads as they are","Release reviewed recovery blocker without starting workloads, publishing or deleting data."),
+            Self::BackupPrepare => (
+                "managed_backup_prepare",
+                "Capture backup inputs",
+                "Capture a reviewed revision into a private checksummed non-restorable bundle; optionally quiesce and resume workloads.",
+            ),
+            Self::BackupRecoveryStatus => (
+                "managed_backup_recovery_status",
+                "Review backup recovery",
+                "Inspect durable workload and staged capture progress without activating workloads.",
+            ),
+            Self::BackupRecover => (
+                "managed_backup_recover",
+                "Resume interrupted backup workloads",
+                "Recover only previously running workloads whose stop was attempted; never replay capture.",
+            ),
+            Self::BackupPublish => (
+                "managed_backup_publish",
+                "Verify and finish capture publication",
+                "Verify a recorded capture against its manifest and publish without replacing data.",
+            ),
+            Self::ArtifactReview => (
+                "managed_artifact_review",
+                "Review generated artifact conflict",
+                "Inspect exact generated files and publication metadata without disclosing contents or paths.",
+            ),
+            Self::ArtifactReconcile => (
+                "managed_artifact_reconcile",
+                "Preserve and reconcile generated-artifact metadata",
+                "Preserve conflicting private sidecars and repair only canonical metadata after review; never retry apply or change workloads.",
+            ),
+            Self::BackupRelease => (
+                "managed_backup_release",
+                "Leave backup workloads as they are",
+                "Release reviewed recovery blocker without starting workloads, publishing or deleting data.",
+            ),
             Self::ManagedConfigRead => (
                 "managed_config_read",
                 "Inspect authoritative configuration",
@@ -401,7 +429,7 @@ pub(super) fn router(state: AppState) -> anyhow::Result<Router<AppState>> {
         .route("/mcp", post(super::mcp::handle_mcp))
         .route("/session", axum::routing::delete(sessions::logout))
         .merge(super::linux_shared::router())
-        .route("/terminal",post(super::terminal::handle))
+        .route("/terminal", post(super::terminal::handle))
         .layer(Extension(super::terminal::Terminals::default()))
         .route_layer(middleware::from_fn_with_state(
             sessions.clone(),
@@ -501,8 +529,7 @@ fn modules(state: &AppState) -> Value {
 }
 
 fn writes_allowed(state: &AppState) -> bool {
-    state.config.test_mode
-        || matches!(state.config.platform, crate::config::Platform::Linux)
+    state.config.test_mode || matches!(state.config.platform, crate::config::Platform::Linux)
 }
 
 pub fn discover_tools(_state: &AppState) -> Vec<Value> {
@@ -1006,7 +1033,11 @@ struct HostServiceActionArgs {
 }
 
 fn host_unit_config(store: &Store) -> Option<crate::core::declarative::Config> {
-    store.read().ok().flatten().and_then(|snapshot| snapshot.config().ok())
+    store
+        .read()
+        .ok()
+        .flatten()
+        .and_then(|snapshot| snapshot.config().ok())
 }
 
 fn annotate_managed_unit(
@@ -1040,12 +1071,12 @@ pub async fn execute_tool(
     // Route application-owned user units through the same reviewed lifecycle
     // and boot-policy dispatcher as the Applications page. Never use direct
     // systemctl writes for a generated unit, including stale definitions.
-    let name = if let Some(action) = name.strip_prefix("services_")
+    let name = if let Some(action) = name
+        .strip_prefix("services_")
         .filter(|action| systemd::ACTIONS.contains(action))
     {
-        let parsed = serde_json::from_value::<HostServiceActionArgs>(
-            Value::Object(arguments.clone()),
-        );
+        let parsed =
+            serde_json::from_value::<HostServiceActionArgs>(Value::Object(arguments.clone()));
         if let Ok(input) = parsed {
             if matches!(input.scope, systemd::Scope::User)
                 && systemd::valid_unit(&input.unit)
@@ -1059,7 +1090,10 @@ pub async fn execute_tool(
                 let Some(owner) = owner else {
                     return (
                         StatusCode::SERVICE_UNAVAILABLE,
-                        json_err("unavailable", "Unknown, stale or ambiguous generated unit; repair its application definition."),
+                        json_err(
+                            "unavailable",
+                            "Unknown, stale or ambiguous generated unit; repair its application definition.",
+                        ),
                     );
                 };
                 let managed_tool = match action {
@@ -1068,10 +1102,15 @@ pub async fn execute_tool(
                     "restart" => "managed_service_restart",
                     "enable" => "managed_service_enable",
                     "disable" => "managed_service_disable",
-                    "reload" => return (
-                        StatusCode::BAD_REQUEST,
-                        json_err("invalid_arguments", "Apply the application definition instead of reloading its generated unit."),
-                    ),
+                    "reload" => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            json_err(
+                                "invalid_arguments",
+                                "Apply the application definition instead of reloading its generated unit.",
+                            ),
+                        );
+                    }
                     _ => unreachable!(),
                 };
                 arguments.clear();
@@ -1106,7 +1145,10 @@ pub async fn execute_tool(
             | "managed_storage_create"
             | "managed_service_enable"
             | "managed_service_disable"
-            | "managed_share_publish" | "shares_setup" | "managed_backup_prepare" | "managed_artifact_reconcile"
+            | "managed_share_publish"
+            | "shares_setup"
+            | "managed_backup_prepare"
+            | "managed_artifact_reconcile"
     ) {
         if let Err(error) = crate::core::linux_config::mutation_ready(&state.config, store) {
             return (
@@ -1262,7 +1304,8 @@ pub async fn execute_tool(
             .into_iter()
             .find(|candidate| *candidate == action)
     }) {
-        let Ok(input) = serde_json::from_value::<HostServiceActionArgs>(Value::Object(arguments)) else {
+        let Ok(input) = serde_json::from_value::<HostServiceActionArgs>(Value::Object(arguments))
+        else {
             return (
                 StatusCode::BAD_REQUEST,
                 json_err("invalid_arguments", "Expected a scope and service unit."),
@@ -1342,7 +1385,8 @@ pub async fn execute_tool(
             | "monitor_snapshot"
             | "updates_status"
             | "workloads_get"
-            | "managed_backup_inventory" | "managed_backup_recovery_status"
+            | "managed_backup_inventory"
+            | "managed_backup_recovery_status"
             | "managed_config_read"
             | "managed_config_health"
             | "managed_config_readiness"
@@ -1365,8 +1409,13 @@ pub async fn execute_tool(
     match name {
         "managed_storage_plan" | "managed_storage_create" => {
             if !writes_allowed(state) {
-                return (StatusCode::FORBIDDEN, json_err("writes_disabled",
-                    "Private storage provisioning requires management writes."));
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err(
+                        "writes_disabled",
+                        "Private storage provisioning requires management writes.",
+                    ),
+                );
             }
             #[derive(serde::Deserialize)]
             #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1381,26 +1430,62 @@ pub async fn execute_tool(
             }
             let create = name == "managed_storage_create";
             let keys_valid = if create {
-                arguments.keys().all(|key| matches!(key.as_str(),
-                    "storage" | "revision" | "sizeGiB" | "reviewToken" | "purpose" | "confirm"))
+                arguments.keys().all(|key| {
+                    matches!(
+                        key.as_str(),
+                        "storage" | "revision" | "sizeGiB" | "reviewToken" | "purpose" | "confirm"
+                    )
+                })
             } else {
-                arguments.keys().all(|key| matches!(key.as_str(), "storage" | "revision" | "sizeGiB"))
+                arguments
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "storage" | "revision" | "sizeGiB"))
             };
             let input = serde_json::from_value::<Input>(Value::Object(arguments));
             let Ok(input) = input else {
-                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Invalid provisioning arguments."));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Invalid provisioning arguments."),
+                );
             };
-            if !keys_valid || !crate::core::declarative::id_valid(&input.storage)
-                || input.revision.len() != 64 || input.size_gib > 4096
-                || (create && (input.confirm != Some(true) || input.purpose.as_deref() != Some("new_data")
-                    || input.review_token.as_ref().is_none_or(|token| token.len() != 64))) {
-                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Provide storage, revision, and an explicit reviewed new-data authorization for creation."));
+            if !keys_valid
+                || !crate::core::declarative::id_valid(&input.storage)
+                || input.revision.len() != 64
+                || input.size_gib > 4096
+                || (create
+                    && (input.confirm != Some(true)
+                        || input.purpose.as_deref() != Some("new_data")
+                        || input
+                            .review_token
+                            .as_ref()
+                            .is_none_or(|token| token.len() != 64)))
+            {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Provide storage, revision, and an explicit reviewed new-data authorization for creation.",
+                    ),
+                );
             }
             if !create {
-                return match provider.storage.provision_plan(state, store, provider,
-                    &input.storage, &input.revision, input.size_gib).await {
+                return match provider
+                    .storage
+                    .provision_plan(
+                        state,
+                        store,
+                        provider,
+                        &input.storage,
+                        &input.revision,
+                        input.size_gib,
+                    )
+                    .await
+                {
                     Ok(plan) => (StatusCode::OK, json!(plan)),
-                    Err(error) => (StatusCode::BAD_REQUEST, json_err("provision_unavailable", &error.to_string())),
+                    Err(error) => (
+                        StatusCode::BAD_REQUEST,
+                        json_err("provision_unavailable", &error.to_string()),
+                    ),
                 };
             }
             let state = state.clone();
@@ -1412,15 +1497,30 @@ pub async fn execute_tool(
                     return;
                 }
                 let cancellation = running.cancellation();
-                let result = provider.storage.provision_create(&state, &store, &provider,
-                    &input.storage, &input.revision, input.size_gib, input.review_token.as_deref().unwrap_or_default(),
-                    &cancellation).await;
+                let result = provider
+                    .storage
+                    .provision_create(
+                        &state,
+                        &store,
+                        &provider,
+                        &input.storage,
+                        &input.revision,
+                        input.size_gib,
+                        input.review_token.as_deref().unwrap_or_default(),
+                        &cancellation,
+                    )
+                    .await;
                 match result {
                     Ok(plan) => running.finish(Outcome::Succeeded(json!(plan))),
-                    Err(error) if error.is::<crate::core::declarative::storage::ProvisionCancelled>() => running.finish(Outcome::Cancelled),
+                    Err(error)
+                        if error.is::<crate::core::declarative::storage::ProvisionCancelled>() =>
+                    {
+                        running.finish(Outcome::Cancelled)
+                    }
                     Err(error) => running.finish(Outcome::Failed(error.to_string())),
                 }
-            }).await
+            })
+            .await
         }
         "managed_directory_browse" => {
             #[derive(serde::Deserialize)]
@@ -1501,10 +1601,24 @@ pub async fn execute_tool(
             };
             if name == "jobs_cancel" {
                 return match jobs.request_cancel(id) {
-                    CancelRequest::Requested => (StatusCode::OK, json!({"status": "cancellation requested"})),
-                    CancelRequest::NotFound => (StatusCode::NOT_FOUND, json_err("not_found", "Job not found.")),
-                    CancelRequest::NotCancellable => (StatusCode::CONFLICT, json_err("not_cancellable", "The native operation is already in progress.")),
-                    CancelRequest::Finished => (StatusCode::CONFLICT, json_err("not_cancellable", "The job has already finished.")),
+                    CancelRequest::Requested => {
+                        (StatusCode::OK, json!({"status": "cancellation requested"}))
+                    }
+                    CancelRequest::NotFound => (
+                        StatusCode::NOT_FOUND,
+                        json_err("not_found", "Job not found."),
+                    ),
+                    CancelRequest::NotCancellable => (
+                        StatusCode::CONFLICT,
+                        json_err(
+                            "not_cancellable",
+                            "The native operation is already in progress.",
+                        ),
+                    ),
+                    CancelRequest::Finished => (
+                        StatusCode::CONFLICT,
+                        json_err("not_cancellable", "The job has already finished."),
+                    ),
                 };
             }
             match jobs.get(id) {
@@ -1537,8 +1651,14 @@ pub async fn execute_tool(
                         if let Some(config) = host_unit_config(store) {
                             if let Some(services) = value["services"].as_array_mut() {
                                 for service in services {
-                                    if let Some(unit) = service["name"].as_str().map(str::to_owned) {
-                                        annotate_managed_unit(service, &config, &unit, writes_allowed(state));
+                                    if let Some(unit) = service["name"].as_str().map(str::to_owned)
+                                    {
+                                        annotate_managed_unit(
+                                            service,
+                                            &config,
+                                            &unit,
+                                            writes_allowed(state),
+                                        );
                                     }
                                 }
                             }
@@ -1581,7 +1701,12 @@ pub async fn execute_tool(
                     let mut value = json!(details);
                     if matches!(input.scope, systemd::Scope::User) {
                         if let Some(config) = host_unit_config(store) {
-                            annotate_managed_unit(&mut value, &config, &input.unit, writes_allowed(state));
+                            annotate_managed_unit(
+                                &mut value,
+                                &config,
+                                &input.unit,
+                                writes_allowed(state),
+                            );
                         }
                     }
                     (StatusCode::OK, value)
@@ -1685,23 +1810,54 @@ pub async fn execute_tool(
         "shares_setup" => {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct SetupArgs { protocol: String, confirm: bool, #[serde(default = "default_change_notify", rename = "changeNotify")] change_notify: bool }
-            fn default_change_notify() -> bool { true }
+            struct SetupArgs {
+                protocol: String,
+                confirm: bool,
+                #[serde(default = "default_change_notify", rename = "changeNotify")]
+                change_notify: bool,
+            }
+            fn default_change_notify() -> bool {
+                true
+            }
             let Ok(input) = serde_json::from_value::<SetupArgs>(Value::Object(arguments)) else {
-                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected a protocol and confirm=true."));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Expected a protocol and confirm=true."),
+                );
             };
-            if !input.confirm || !matches!(input.protocol.as_str(),"samba"|"nfs") {
-                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected samba or nfs and confirm=true."));
+            if !input.confirm || !matches!(input.protocol.as_str(), "samba" | "nfs") {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Expected samba or nfs and confirm=true.",
+                    ),
+                );
             }
             if state.config.platform != crate::config::Platform::Linux {
-                return (StatusCode::FORBIDDEN,json_err("writes_disabled","Share server setup requires Linux mode."));
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err("writes_disabled", "Share server setup requires Linux mode."),
+                );
             }
             if state.config.test_mode || !provider.shares.native_enabled() {
-                return (StatusCode::SERVICE_UNAVAILABLE,json_err("helper_unavailable","Native share setup requires the fixed reference configuration paths."));
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err(
+                        "helper_unavailable",
+                        "Native share setup requires the fixed reference configuration paths.",
+                    ),
+                );
             }
             let helper = admin::probe().await;
             if !helper.permits_shares() || !helper.permits_packages() {
-                return (StatusCode::SERVICE_UNAVAILABLE,json_err("helper_unavailable","Share setup requires authorized share and package grants."));
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err(
+                        "helper_unavailable",
+                        "Share setup requires authorized share and package grants.",
+                    ),
+                );
             }
             start_job_value(jobs,"shares_setup",move |running| async move {
                 match admin::share_operation("shares_setup",json!({"protocol":input.protocol,"confirm":true,"changeNotify":input.change_notify})).await {
@@ -1859,8 +2015,14 @@ pub async fn execute_tool(
                 .map(str::to_owned)
                 .collect();
             if !apply {
-                if let Err(error)=provider.review_incus_changes(store,&candidate,&preview).await {
-                    return (StatusCode::CONFLICT,json_err("incus_transition",&error.to_string()));
+                if let Err(error) = provider
+                    .review_incus_changes(store, &candidate, &preview)
+                    .await
+                {
+                    return (
+                        StatusCode::CONFLICT,
+                        json_err("incus_transition", &error.to_string()),
+                    );
                 }
                 return (
                     StatusCode::OK,
@@ -2000,33 +2162,49 @@ pub async fn execute_tool(
                     };
                     return (StatusCode::OK, result);
                 }
-                _ if refresh => return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    json_err("unavailable", "Configuration is unavailable or invalid."),
-                ),
+                _ if refresh => {
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        json_err("unavailable", "Configuration is unavailable or invalid."),
+                    );
+                }
                 _ => {
                     let mut result = json!({"configured":true,"valid":false,
                         "error":"Configuration is invalid or inaccessible; open Configuration to repair it."});
-                    if services { result["services"] = json!([]); }
+                    if services {
+                        result["services"] = json!([]);
+                    }
                     return (StatusCode::OK, result);
                 }
             };
             let config = match snapshot.config() {
                 Ok(config) => config,
-                Err(_) if refresh => return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    json_err("unavailable", "Configuration is unavailable or invalid."),
-                ),
+                Err(_) if refresh => {
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        json_err("unavailable", "Configuration is unavailable or invalid."),
+                    );
+                }
                 Err(_) => {
                     let mut result = json!({"configured":true,"valid":false,
                         "error":"Configuration is invalid or inaccessible; open Configuration to repair it."});
-                    if services { result["services"] = json!([]); }
+                    if services {
+                        result["services"] = json!([]);
+                    }
                     return (StatusCode::OK, result);
                 }
             };
-            let health = provider.readiness.check(
-                state, store, &snapshot, &config, provider.quadlet.is_some(), refresh,
-            ).await;
+            let health = provider
+                .readiness
+                .check(
+                    state,
+                    store,
+                    &snapshot,
+                    &config,
+                    provider.quadlet.is_some(),
+                    refresh,
+                )
+                .await;
             if refresh {
                 return (StatusCode::OK, json!(health));
             }
@@ -2055,11 +2233,17 @@ pub async fn execute_tool(
                         "enabled":app.enabled,"state":app.state,"registered":registered,
                         "configuration":configuration,"issues":issues,"members":members})
                 }).collect();
-                return (StatusCode::OK, json!({"configured":true,"valid":true,
-                    "revision":snapshot.revision,"health":health,"services":items}));
+                return (
+                    StatusCode::OK,
+                    json!({"configured":true,"valid":true,
+                    "revision":snapshot.revision,"health":health,"services":items}),
+                );
             }
-            (StatusCode::OK, json!({"configured":true,"valid":true,
-                "health":health,"runtimeChecked":false}))
+            (
+                StatusCode::OK,
+                json!({"configured":true,"valid":true,
+                "health":health,"runtimeChecked":false}),
+            )
         }
         "managed_config_health" => match store.read() {
             Ok(Some(raw)) => match crate::core::declarative::parse(&raw.bytes) {
@@ -2188,27 +2372,73 @@ pub async fn execute_tool(
         }
 
         "managed_artifact_review" | "managed_artifact_reconcile" => {
-            if !writes_allowed(state){return (StatusCode::FORBIDDEN,json_err("writes_disabled","Private artifact recovery is disabled with management writes."));}
-            if name=="managed_artifact_review"{
-                let Some(resource)=arguments.get("resource").and_then(Value::as_str).filter(|s|s.len()<=80) else{
-                    return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected a managed service resource."));
+            if !writes_allowed(state) {
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err(
+                        "writes_disabled",
+                        "Private artifact recovery is disabled with management writes.",
+                    ),
+                );
+            }
+            if name == "managed_artifact_review" {
+                let Some(resource) = arguments
+                    .get("resource")
+                    .and_then(Value::as_str)
+                    .filter(|s| s.len() <= 80)
+                else {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        json_err("invalid_arguments", "Expected a managed service resource."),
+                    );
                 };
-                if arguments.len()!=1{return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected only resource."));}
-                return match crate::core::declarative::artifact_recovery::review(store,provider,resource){
-                    Ok(review)=>(StatusCode::OK,json!(review)),
-                    Err(_)=>(StatusCode::CONFLICT,json_err("artifact_review_unavailable","No matching failed generated-artifact publication can be reviewed.")),
+                if arguments.len() != 1 {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        json_err("invalid_arguments", "Expected only resource."),
+                    );
+                }
+                return match crate::core::declarative::artifact_recovery::review(
+                    store, provider, resource,
+                ) {
+                    Ok(review) => (StatusCode::OK, json!(review)),
+                    Err(_) => (
+                        StatusCode::CONFLICT,
+                        json_err(
+                            "artifact_review_unavailable",
+                            "No matching failed generated-artifact publication can be reviewed.",
+                        ),
+                    ),
                 };
             }
             #[derive(serde::Deserialize)]
-            #[serde(rename_all="camelCase",deny_unknown_fields)]
-            struct Input{resource:String,revision:String,review_token:String}
-            let Ok(input)=serde_json::from_value::<Input>(Value::Object(arguments)) else{
-                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected resource, revision and reviewToken."));
-            };
-            if input.resource.len()>80||input.revision.len()!=64||input.review_token.len()!=64{
-                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Invalid artifact recovery review."));
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Input {
+                resource: String,
+                revision: String,
+                review_token: String,
             }
-            let store=store.clone();let provider=provider.clone();let config=state.config.clone();
+            let Ok(input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Expected resource, revision and reviewToken.",
+                    ),
+                );
+            };
+            if input.resource.len() > 80
+                || input.revision.len() != 64
+                || input.review_token.len() != 64
+            {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Invalid artifact recovery review."),
+                );
+            }
+            let store = store.clone();
+            let provider = provider.clone();
+            let config = state.config.clone();
             start_job_value(jobs,"managed_artifact_reconcile",move |running| async move{
                 let result=tokio::task::spawn_blocking(move ||{
                     crate::core::linux_config::mutation_ready(&config,&store)?;
@@ -2233,7 +2463,13 @@ pub async fn execute_tool(
                 );
             }
             // Never perform native mutation or claim the result can be restored.
-            match crate::core::declarative::backup_capture::inventory(store,&state.config.paths.storage_dir,provider).await {
+            match crate::core::declarative::backup_capture::inventory(
+                store,
+                &state.config.paths.storage_dir,
+                provider,
+            )
+            .await
+            {
                 Ok(snapshot) => (StatusCode::OK, json!(snapshot)),
                 Err(_) => (
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -2247,71 +2483,170 @@ pub async fn execute_tool(
 
         "managed_backup_recovery_status" => {
             if !writes_allowed(state) {
-                return (StatusCode::FORBIDDEN,json_err("writes_disabled","Private backup recovery is disabled with management writes."));
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err(
+                        "writes_disabled",
+                        "Private backup recovery is disabled with management writes.",
+                    ),
+                );
             }
             match crate::core::declarative::backup_capture::status(store) {
-                Ok(value)=>(StatusCode::OK,json!(value)),
-                Err(error)=>(StatusCode::CONFLICT,json_err("backup_recovery_unavailable",&error.to_string())),
+                Ok(value) => (StatusCode::OK, json!(value)),
+                Err(error) => (
+                    StatusCode::CONFLICT,
+                    json_err("backup_recovery_unavailable", &error.to_string()),
+                ),
             }
         }
         "managed_backup_prepare" => {
-            if !writes_allowed(state){
-                return (StatusCode::FORBIDDEN,json_err("writes_disabled","Backup preparation is disabled with management writes."));
+            if !writes_allowed(state) {
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err(
+                        "writes_disabled",
+                        "Backup preparation is disabled with management writes.",
+                    ),
+                );
             }
-            let Ok(opts)=serde_json::from_value::<crate::core::declarative::backup_capture::PrepareOptions>(Value::Object(arguments)) else{
-                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected revision, absolute destination and optional quiesce/deadlineSeconds."));
+            let Ok(opts) = serde_json::from_value::<
+                crate::core::declarative::backup_capture::PrepareOptions,
+            >(Value::Object(arguments)) else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Expected revision, absolute destination and optional quiesce/deadlineSeconds.",
+                    ),
+                );
             };
-            if crate::core::declarative::backup_capture::deadline(opts.deadline_seconds).is_err(){
-                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","deadlineSeconds must be between 30 and 86400."));
+            if crate::core::declarative::backup_capture::deadline(opts.deadline_seconds).is_err() {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "deadlineSeconds must be between 30 and 86400.",
+                    ),
+                );
             }
-            let store=store.clone();let provider=provider.clone();let root=state.config.paths.storage_dir.clone();let config=state.config.clone();
-            start_job_value(jobs,"managed_backup_prepare",move |running| async move {
-                let signal=running.cancellation();
-                let runtime=tokio::runtime::Handle::current();
+            let store = store.clone();
+            let provider = provider.clone();
+            let root = state.config.paths.storage_dir.clone();
+            let config = state.config.clone();
+            start_job_value(jobs, "managed_backup_prepare", move |running| async move {
+                let signal = running.cancellation();
+                let runtime = tokio::runtime::Handle::current();
                 // Keep synchronous filesystem traversal off the HTTP runtime.
-                let result=tokio::task::spawn_blocking(move ||runtime.block_on(async{
-                    crate::core::linux_config::mutation_ready(&config,&store)?;
-                    crate::core::declarative::backup_capture::prepare_cancellable(&store,&root,&provider,opts,signal).await
-                })).await.unwrap_or_else(|_|Err(anyhow::anyhow!("backup capture worker failed")));
-                match result{
-                    Ok(value)=>running.finish(Outcome::Succeeded(value)),
-                    Err(error) if error.is::<crate::core::declarative::backup_capture::BackupCancelled>()=>running.finish(Outcome::Cancelled),
-                    Err(error)=>running.finish(Outcome::Failed(error.to_string())),
+                let result = tokio::task::spawn_blocking(move || {
+                    runtime.block_on(async {
+                        crate::core::linux_config::mutation_ready(&config, &store)?;
+                        crate::core::declarative::backup_capture::prepare_cancellable(
+                            &store, &root, &provider, opts, signal,
+                        )
+                        .await
+                    })
+                })
+                .await
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("backup capture worker failed")));
+                match result {
+                    Ok(value) => running.finish(Outcome::Succeeded(value)),
+                    Err(error)
+                        if error
+                            .is::<crate::core::declarative::backup_capture::BackupCancelled>() =>
+                    {
+                        running.finish(Outcome::Cancelled)
+                    }
+                    Err(error) => running.finish(Outcome::Failed(error.to_string())),
                 }
-            }).await
+            })
+            .await
         }
         "managed_backup_recover" | "managed_backup_publish" | "managed_backup_release" => {
-            if !writes_allowed(state){
-                return (StatusCode::FORBIDDEN,json_err("writes_disabled","Private backup recovery is disabled with management writes."));
+            if !writes_allowed(state) {
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err(
+                        "writes_disabled",
+                        "Private backup recovery is disabled with management writes.",
+                    ),
+                );
             }
             #[derive(serde::Deserialize)]
-            #[serde(rename_all="camelCase",deny_unknown_fields)]
-            struct Input{revision:String,review_token:String,deadline_seconds:Option<u64>}
-            let Ok(input)=serde_json::from_value::<Input>(Value::Object(arguments)) else{
-                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected revision and reviewToken."));
-            };
-            if input.revision.is_empty()||input.revision.len()>64||input.review_token.len()!=64||
-                (name!="managed_backup_publish"&&input.deadline_seconds.is_some())||
-                crate::core::declarative::backup_capture::deadline(input.deadline_seconds.unwrap_or(0)).is_err(){
-                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Invalid review or deadline."));
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Input {
+                revision: String,
+                review_token: String,
+                deadline_seconds: Option<u64>,
             }
-            let tool=match name{"managed_backup_recover"=>"managed_backup_recover","managed_backup_publish"=>"managed_backup_publish",_=>"managed_backup_release"};
-            let store=store.clone();let provider=provider.clone();let root=state.config.paths.storage_dir.clone();
-            start_job_value(jobs,tool,move |running| async move{
+            let Ok(input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Expected revision and reviewToken."),
+                );
+            };
+            if input.revision.is_empty()
+                || input.revision.len() > 64
+                || input.review_token.len() != 64
+                || (name != "managed_backup_publish" && input.deadline_seconds.is_some())
+                || crate::core::declarative::backup_capture::deadline(
+                    input.deadline_seconds.unwrap_or(0),
+                )
+                .is_err()
+            {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Invalid review or deadline."),
+                );
+            }
+            let tool = match name {
+                "managed_backup_recover" => "managed_backup_recover",
+                "managed_backup_publish" => "managed_backup_publish",
+                _ => "managed_backup_release",
+            };
+            let store = store.clone();
+            let provider = provider.clone();
+            let root = state.config.paths.storage_dir.clone();
+            start_job_value(jobs, tool, move |running| async move {
                 use crate::core::declarative::backup_capture as backup;
-                let signal=running.cancellation();
-                if *signal.borrow(){running.finish(Outcome::Cancelled);return;}
-                let result=match tool{
-                    "managed_backup_recover"=>backup::recover(&store,&root,&provider,&input.revision,&input.review_token).await,
-                    "managed_backup_publish"=>tokio::task::spawn_blocking(move ||backup::publish_cancellable(&store,&root,&input.revision,&input.review_token,input.deadline_seconds.unwrap_or(0),signal)).await.unwrap_or_else(|_|Err(anyhow::anyhow!("backup publication worker failed"))),
-                    _=>backup::release(&store,&input.revision,&input.review_token),
-                };
-                match result{
-                    Ok(value)=>running.finish(Outcome::Succeeded(json!(value))),
-                    Err(error) if error.is::<backup::BackupCancelled>()=>running.finish(Outcome::Cancelled),
-                    Err(error)=>running.finish(Outcome::Failed(error.to_string())),
+                let signal = running.cancellation();
+                if *signal.borrow() {
+                    running.finish(Outcome::Cancelled);
+                    return;
                 }
-            }).await
+                let result = match tool {
+                    "managed_backup_recover" => {
+                        backup::recover(
+                            &store,
+                            &root,
+                            &provider,
+                            &input.revision,
+                            &input.review_token,
+                        )
+                        .await
+                    }
+                    "managed_backup_publish" => tokio::task::spawn_blocking(move || {
+                        backup::publish_cancellable(
+                            &store,
+                            &root,
+                            &input.revision,
+                            &input.review_token,
+                            input.deadline_seconds.unwrap_or(0),
+                            signal,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("backup publication worker failed"))),
+                    _ => backup::release(&store, &input.revision, &input.review_token),
+                };
+                match result {
+                    Ok(value) => running.finish(Outcome::Succeeded(json!(value))),
+                    Err(error) if error.is::<backup::BackupCancelled>() => {
+                        running.finish(Outcome::Cancelled)
+                    }
+                    Err(error) => running.finish(Outcome::Failed(error.to_string())),
+                }
+            })
+            .await
         }
 
         "managed_config_plan"
@@ -2415,9 +2750,20 @@ pub async fn execute_tool(
                 );
             }
             if !revert {
-                match crate::core::declarative::edit::prepare_yaml_identities(store, input.content.as_bytes(), &input.revision) {
-                    Ok(bytes) => input.content = String::from_utf8(bytes).expect("validated YAML is UTF-8"),
-                    Err(error) => return (StatusCode::CONFLICT, json_err("plan_unavailable", &error.to_string())),
+                match crate::core::declarative::edit::prepare_yaml_identities(
+                    store,
+                    input.content.as_bytes(),
+                    &input.revision,
+                ) {
+                    Ok(bytes) => {
+                        input.content = String::from_utf8(bytes).expect("validated YAML is UTF-8")
+                    }
+                    Err(error) => {
+                        return (
+                            StatusCode::CONFLICT,
+                            json_err("plan_unavailable", &error.to_string()),
+                        );
+                    }
                 }
             }
             if revert {
@@ -2446,8 +2792,14 @@ pub async fn execute_tool(
                 }
             };
             if !save {
-                if let Err(error)=provider.review_incus_changes(store,input.content.as_bytes(),&plan).await {
-                    return (StatusCode::CONFLICT,json_err("incus_transition",&error.to_string()));
+                if let Err(error) = provider
+                    .review_incus_changes(store, input.content.as_bytes(), &plan)
+                    .await
+                {
+                    return (
+                        StatusCode::CONFLICT,
+                        json_err("incus_transition", &error.to_string()),
+                    );
                 }
                 return (
                     StatusCode::OK,
@@ -2525,14 +2877,23 @@ pub async fn execute_tool(
                 expected,
             ) {
                 Ok(plan) => {
-                    if let Err(error)=provider.review_incus_changes(store,candidate.as_bytes(),&plan).await {
-                        return (StatusCode::CONFLICT,json_err("incus_transition",&error.to_string()));
+                    if let Err(error) = provider
+                        .review_incus_changes(store, candidate.as_bytes(), &plan)
+                        .await
+                    {
+                        return (
+                            StatusCode::CONFLICT,
+                            json_err("incus_transition", &error.to_string()),
+                        );
                     }
-                    (StatusCode::OK,json!({
-                        "plan":plan,
-                        "blockedResources":provider.blocked_resources(&plan.changes),
-                    }))
-                },
+                    (
+                        StatusCode::OK,
+                        json!({
+                            "plan":plan,
+                            "blockedResources":provider.blocked_resources(&plan.changes),
+                        }),
+                    )
+                }
                 Err(e) => (
                     StatusCode::BAD_REQUEST,
                     json_err("plan_error", &e.to_string()),
@@ -2855,34 +3216,95 @@ pub async fn execute_tool(
 
         "native_workloads_list" => {
             if !arguments.is_empty() {
-                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "This tool accepts no arguments."));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "This tool accepts no arguments."),
+                );
             }
             let config = match store.read() {
                 Ok(Some(snapshot)) => match snapshot.config() {
                     Ok(config) => config,
-                    Err(_) => return (StatusCode::CONFLICT, json_err("invalid_config", "Repair the authoritative configuration before classifying external workloads.")),
+                    Err(_) => {
+                        return (
+                            StatusCode::CONFLICT,
+                            json_err(
+                                "invalid_config",
+                                "Repair the authoritative configuration before classifying external workloads.",
+                            ),
+                        );
+                    }
                 },
                 Ok(None) => Default::default(),
-                Err(_) => return (StatusCode::CONFLICT, json_err("invalid_config", "Cannot read the authoritative configuration.")),
+                Err(_) => {
+                    return (
+                        StatusCode::CONFLICT,
+                        json_err(
+                            "invalid_config",
+                            "Cannot read the authoritative configuration.",
+                        ),
+                    );
+                }
             };
-            (StatusCode::OK, json!(provider.external_inventory(&config).await))
+            (
+                StatusCode::OK,
+                json!(provider.external_inventory(&config).await),
+            )
         }
 
         "native_workload_action" => {
             if !writes_allowed(state) {
-                return (StatusCode::FORBIDDEN,json_err("writes_disabled","External lifecycle requires management writes."));
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err(
+                        "writes_disabled",
+                        "External lifecycle requires management writes.",
+                    ),
+                );
             }
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct Input { provider: String, scope: String, id: String, #[serde(default)] identity: String, action: String, confirm: bool }
-            let Ok(input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
-                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected provider, scope, native ID, action and confirmation."));
-            };
-            if !input.confirm || !matches!(input.provider.as_str(),"docker"|"podman"|"libvirt"|"incus"|"lxd")
-                || !matches!(input.action.as_str(),"start"|"stop"|"restart"|"delete") || input.scope.len()>128 || input.id.len()>128 || input.identity.len()>64 {
-                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Invalid external lifecycle target or confirmation."));
+            struct Input {
+                provider: String,
+                scope: String,
+                id: String,
+                #[serde(default)]
+                identity: String,
+                action: String,
+                confirm: bool,
             }
-            let store=store.clone(); let provider=provider.clone(); let state=state.clone();
+            let Ok(input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Expected provider, scope, native ID, action and confirmation.",
+                    ),
+                );
+            };
+            if !input.confirm
+                || !matches!(
+                    input.provider.as_str(),
+                    "docker" | "podman" | "libvirt" | "incus" | "lxd"
+                )
+                || !matches!(
+                    input.action.as_str(),
+                    "start" | "stop" | "restart" | "delete"
+                )
+                || input.scope.len() > 128
+                || input.id.len() > 128
+                || input.identity.len() > 64
+            {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Invalid external lifecycle target or confirmation.",
+                    ),
+                );
+            }
+            let store = store.clone();
+            let provider = provider.clone();
+            let state = state.clone();
             start_job_value(jobs,"native_workload_action",move |running| async move {
                 let result = async {
                     crate::core::linux_config::mutation_ready(&state.config,&store)?;
@@ -2899,21 +3321,63 @@ pub async fn execute_tool(
         "native_workload_logs" => {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct Input { provider: String, scope: String, id: String, #[serde(default)] identity: String, tail: usize }
+            struct Input {
+                provider: String,
+                scope: String,
+                id: String,
+                #[serde(default)]
+                identity: String,
+                tail: usize,
+            }
             let Ok(input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
-                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected provider, scope, native ID and tail."));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Expected provider, scope, native ID and tail.",
+                    ),
+                );
             };
             let config = match store.read() {
                 Ok(Some(snapshot)) => match snapshot.config() {
                     Ok(config) => config,
-                    Err(_) => return (StatusCode::CONFLICT,json_err("invalid_config","Repair the authoritative configuration first.")),
+                    Err(_) => {
+                        return (
+                            StatusCode::CONFLICT,
+                            json_err(
+                                "invalid_config",
+                                "Repair the authoritative configuration first.",
+                            ),
+                        );
+                    }
                 },
                 Ok(None) => Default::default(),
-                Err(_) => return (StatusCode::CONFLICT,json_err("invalid_config","Cannot read the authoritative configuration.")),
+                Err(_) => {
+                    return (
+                        StatusCode::CONFLICT,
+                        json_err(
+                            "invalid_config",
+                            "Cannot read the authoritative configuration.",
+                        ),
+                    );
+                }
             };
-            match provider.external_logs(&config,&input.provider,&input.scope,&input.id,&input.identity,input.tail).await {
-                Ok(logs) => (StatusCode::OK,json!(logs)),
-                Err(error) => (StatusCode::SERVICE_UNAVAILABLE,json_err("unavailable",&error.to_string())),
+            match provider
+                .external_logs(
+                    &config,
+                    &input.provider,
+                    &input.scope,
+                    &input.id,
+                    &input.identity,
+                    input.tail,
+                )
+                .await
+            {
+                Ok(logs) => (StatusCode::OK, json!(logs)),
+                Err(error) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err("unavailable", &error.to_string()),
+                ),
             }
         }
 
@@ -2930,17 +3394,36 @@ pub async fn execute_tool(
 
         "managed_service_enable" | "managed_service_disable" => {
             if !writes_allowed(state) {
-                return (StatusCode::FORBIDDEN, json_err("writes_disabled", "Boot policy requires management writes."));
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err("writes_disabled", "Boot policy requires management writes."),
+                );
             }
-            let Some(id) = arguments.get("service").and_then(Value::as_str)
-                .filter(|id| crate::core::declarative::id_valid(id)) else {
-                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Invalid managed service ID."));
+            let Some(id) = arguments
+                .get("service")
+                .and_then(Value::as_str)
+                .filter(|id| crate::core::declarative::id_valid(id))
+            else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err("invalid_arguments", "Invalid managed service ID."),
+                );
             };
             if arguments.len() != 2 || arguments.get("confirm") != Some(&Value::Bool(true)) {
-                return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Changing boot policy requires confirm=true."));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Changing boot policy requires confirm=true.",
+                    ),
+                );
             }
             let enable = name == "managed_service_enable";
-            let tool = if enable { "managed_service_enable" } else { "managed_service_disable" };
+            let tool = if enable {
+                "managed_service_enable"
+            } else {
+                "managed_service_disable"
+            };
             let id = id.to_owned();
             let state = state.clone();
             let store = store.clone();
@@ -2948,48 +3431,96 @@ pub async fn execute_tool(
             start_job_value(jobs, tool, move |running| async move {
                 let result = async {
                     crate::core::linux_config::mutation_ready(&state.config, &store)?;
-                    anyhow::ensure!(store.pending_apply()?.is_none(), "recover the pending apply before changing boot policy");
-                    let snapshot = store.read()?.ok_or_else(|| anyhow::anyhow!("configuration is unavailable"))?;
+                    anyhow::ensure!(
+                        store.pending_apply()?.is_none(),
+                        "recover the pending apply before changing boot policy"
+                    );
+                    let snapshot = store
+                        .read()?
+                        .ok_or_else(|| anyhow::anyhow!("configuration is unavailable"))?;
                     let mut desired = snapshot.config()?;
-                    let service = desired.services.get(&id).ok_or_else(|| anyhow::anyhow!("unknown managed service"))?;
-                    anyhow::ensure!(matches!(service.backend.as_str(),"quadlet"|"compose"|"libvirt"|"incus"), "native boot policy is not verified for this backend");
-                    let compose = if service.engine == "docker" {&provider.docker_compose} else {&provider.podman_compose};
-                    if service.backend == "compose" {
-                        compose.verify_boot_policy(&desired,&id).await?;
-                    } else if service.backend == "libvirt" {
-                        provider.libvirt.verify_boot_policy(&desired,&id).await?;
-                    } else if service.backend == "incus" {
-                        provider.incus.verify_boot_policy(&desired,&id).await?;
+                    let service = desired
+                        .services
+                        .get(&id)
+                        .ok_or_else(|| anyhow::anyhow!("unknown managed service"))?;
+                    anyhow::ensure!(
+                        matches!(
+                            service.backend.as_str(),
+                            "quadlet" | "compose" | "libvirt" | "incus"
+                        ),
+                        "native boot policy is not verified for this backend"
+                    );
+                    let compose = if service.engine == "docker" {
+                        &provider.docker_compose
                     } else {
-                        let native = provider.quadlet.as_ref().ok_or_else(|| anyhow::anyhow!("rootless Quadlet provider is unavailable"))?;
-                        let status = native.status_details(&desired,&id).await?;
-                        anyhow::ensure!(status.state != "unknown","managed runtime identity cannot be verified");
+                        &provider.podman_compose
+                    };
+                    if service.backend == "compose" {
+                        compose.verify_boot_policy(&desired, &id).await?;
+                    } else if service.backend == "libvirt" {
+                        provider.libvirt.verify_boot_policy(&desired, &id).await?;
+                    } else if service.backend == "incus" {
+                        provider.incus.verify_boot_policy(&desired, &id).await?;
+                    } else {
+                        let native = provider.quadlet.as_ref().ok_or_else(|| {
+                            anyhow::anyhow!("rootless Quadlet provider is unavailable")
+                        })?;
+                        let status = native.status_details(&desired, &id).await?;
+                        anyhow::ensure!(
+                            status.state != "unknown",
+                            "managed runtime identity cannot be verified"
+                        );
                     }
                     if enable {
-                        crate::core::declarative::preflight::check_startup_files(&state, &store, &desired, &id)?;
+                        crate::core::declarative::preflight::check_startup_files(
+                            &state, &store, &desired, &id,
+                        )?;
                     }
                     if service.enabled == enable {
-                        return Ok::<_, anyhow::Error>(json!({"service":id,"enabled":enable,"revision":snapshot.revision}));
+                        return Ok::<_, anyhow::Error>(
+                            json!({"service":id,"enabled":enable,"revision":snapshot.revision}),
+                        );
                     }
                     desired.services.get_mut(&id).unwrap().enabled = enable;
                     let bytes = serde_yaml::to_string(&desired)?.into_bytes();
-                    let plan = crate::core::linux_config::preview(&state.config, &store, &bytes, &snapshot.revision)?;
-                    anyhow::ensure!(!plan.restart_required && plan.changes.len() == 1
-                        && plan.changes[0].resource == format!("service/{id}"),
-                        "boot-only update unexpectedly changes other definitions");
+                    let plan = crate::core::linux_config::preview(
+                        &state.config,
+                        &store,
+                        &bytes,
+                        &snapshot.revision,
+                    )?;
+                    anyhow::ensure!(
+                        !plan.restart_required
+                            && plan.changes.len() == 1
+                            && plan.changes[0].resource == format!("service/{id}"),
+                        "boot-only update unexpectedly changes other definitions"
+                    );
                     if !running.begin_mutation() {
                         return Err(crate::core::declarative::storage::ProvisionCancelled.into());
                     }
-                    let saved = store.apply_review_mode(&bytes, &snapshot.revision, &plan.fingerprint,
-                        crate::core::declarative::ApplyMode::NextStart, &*provider).await?;
+                    let saved = store
+                        .apply_review_mode(
+                            &bytes,
+                            &snapshot.revision,
+                            &plan.fingerprint,
+                            crate::core::declarative::ApplyMode::NextStart,
+                            &*provider,
+                        )
+                        .await?;
                     Ok(json!({"service":id,"enabled":enable,"revision":saved.revision}))
-                }.await;
+                }
+                .await;
                 match result {
                     Ok(value) => running.finish(Outcome::Succeeded(value)),
-                    Err(error) if error.is::<crate::core::declarative::storage::ProvisionCancelled>() => running.finish(Outcome::Cancelled),
+                    Err(error)
+                        if error.is::<crate::core::declarative::storage::ProvisionCancelled>() =>
+                    {
+                        running.finish(Outcome::Cancelled)
+                    }
                     Err(error) => running.finish(Outcome::Failed(error.to_string())),
                 }
-            }).await
+            })
+            .await
         }
         "applications_action"
         | "managed_container_action"
@@ -3007,17 +3538,30 @@ pub async fn execute_tool(
             }
             let mut member = None;
             let (tool, id, action) = if name == "managed_container_action" {
-                member = arguments.get("container").and_then(Value::as_str)
+                member = arguments
+                    .get("container")
+                    .and_then(Value::as_str)
                     .filter(|member| crate::core::declarative::id_valid(member))
                     .map(str::to_owned);
                 let action = arguments.get("action").and_then(Value::as_str);
-                if arguments.len() != 4 || member.is_none()
+                if arguments.len() != 4
+                    || member.is_none()
                     || arguments.get("confirm") != Some(&Value::Bool(true))
                     || !matches!(action, Some("start" | "stop" | "restart" | "pull"))
                 {
-                    return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Expected service, container, action and confirm=true."));
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        json_err(
+                            "invalid_arguments",
+                            "Expected service, container, action and confirm=true.",
+                        ),
+                    );
                 }
-                ("managed_container_action", arguments.get("service").and_then(Value::as_str), action.unwrap())
+                (
+                    "managed_container_action",
+                    arguments.get("service").and_then(Value::as_str),
+                    action.unwrap(),
+                )
             } else if name == "applications_action" {
                 let id = arguments.get("id").and_then(Value::as_str);
                 let action = arguments.get("action").and_then(Value::as_str);
@@ -3085,7 +3629,12 @@ pub async fn execute_tool(
                     }
                 };
                 if matches!(action.as_str(), "start" | "restart") && !state_clone.config.test_mode {
-                    if let Err(error) = crate::core::declarative::preflight::check_startup_files(&state_clone, &store, &config, &id) {
+                    if let Err(error) = crate::core::declarative::preflight::check_startup_files(
+                        &state_clone,
+                        &store,
+                        &config,
+                        &id,
+                    ) {
                         running.finish(Outcome::Failed(error.to_string()));
                         return;
                     }
@@ -3095,7 +3644,9 @@ pub async fn execute_tool(
                     return;
                 }
                 let result = if let Some(member) = &member {
-                    provider_clone.container_action(&config, &id, member, &action).await
+                    provider_clone
+                        .container_action(&config, &id, member, &action)
+                        .await
                 } else {
                     provider_clone.action(&config, &id, &action).await
                 };
@@ -3119,10 +3670,9 @@ pub async fn execute_tool(
         "applications_logs" | "managed_service_logs" => {
             let reference = name == "managed_service_logs";
             let key = if reference { "service" } else { "id" };
-            if arguments
-                .keys()
-                .any(|argument| argument != key && argument != "tail" && !(reference && argument == "container"))
-            {
+            if arguments.keys().any(|argument| {
+                argument != key && argument != "tail" && !(reference && argument == "container")
+            }) {
                 return (
                     StatusCode::BAD_REQUEST,
                     json_err("invalid_arguments", "Unexpected managed logs argument."),
@@ -3161,8 +3711,15 @@ pub async fn execute_tool(
                 .unwrap_or_default();
             let member = match arguments.get("container") {
                 None => None,
-                Some(Value::String(member)) if crate::core::declarative::id_valid(member) => Some(member.as_str()),
-                _ => return (StatusCode::BAD_REQUEST, json_err("invalid_arguments", "Invalid managed container ID.")),
+                Some(Value::String(member)) if crate::core::declarative::id_valid(member) => {
+                    Some(member.as_str())
+                }
+                _ => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        json_err("invalid_arguments", "Invalid managed container ID."),
+                    );
+                }
             };
             match provider.managed_logs(&config, id, tail, member).await {
                 Ok(logs) if reference => (StatusCode::OK, json!(logs)),
@@ -3180,18 +3737,48 @@ pub async fn execute_tool(
         "managed_share_publish" => {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct Input { share: String, published: bool, confirm: bool }
+            struct Input {
+                share: String,
+                published: bool,
+                confirm: bool,
+            }
             let Ok(input) = serde_json::from_value::<Input>(Value::Object(arguments)) else {
-                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Expected share, published and confirm=true."));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Expected share, published and confirm=true.",
+                    ),
+                );
             };
             if !input.confirm || !crate::core::declarative::id_valid(&input.share) {
-                return (StatusCode::BAD_REQUEST,json_err("invalid_arguments","Invalid share ID or missing confirmation."));
+                return (
+                    StatusCode::BAD_REQUEST,
+                    json_err(
+                        "invalid_arguments",
+                        "Invalid share ID or missing confirmation.",
+                    ),
+                );
             }
             if !writes_allowed(state) {
-                return (StatusCode::FORBIDDEN,json_err("writes_disabled","Share publication requires management writes."));
+                return (
+                    StatusCode::FORBIDDEN,
+                    json_err(
+                        "writes_disabled",
+                        "Share publication requires management writes.",
+                    ),
+                );
             }
-            if !state.config.test_mode && (!provider.shares.native_enabled() || !admin::probe().await.permits_shares()) {
-                return (StatusCode::SERVICE_UNAVAILABLE,json_err("helper_unavailable","Native share publication requires authorized helper grants and fixed configuration paths."));
+            if !state.config.test_mode
+                && (!provider.shares.native_enabled() || !admin::probe().await.permits_shares())
+            {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json_err(
+                        "helper_unavailable",
+                        "Native share publication requires authorized helper grants and fixed configuration paths.",
+                    ),
+                );
             }
             let state = state.clone();
             let store = store.clone();
@@ -3250,8 +3837,11 @@ pub async fn execute_tool(
                     ),
                 ),
             },
-            Ok(None) => (StatusCode::OK, json!({"configured": false, "shares": [],
-                "sambaUsername": crate::platforms::admin::workload_account().ok()})),
+            Ok(None) => (
+                StatusCode::OK,
+                json!({"configured": false, "shares": [],
+                "sambaUsername": crate::platforms::admin::workload_account().ok()}),
+            ),
             Err(_) => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 json_err(
@@ -3293,16 +3883,18 @@ pub async fn execute_tool(
                         Some(protocol) => json!({"protocol":protocol}),
                         None => json!({}),
                     };
-                    if let Ok((mut result,_)) = admin::share_operation("shares_list",args).await {
+                    if let Ok((mut result, _)) = admin::share_operation("shares_list", args).await {
                         if !provider.shares.native_enabled() || !capability.permits_shares() {
                             if let Some(backends) = result["backends"].as_array_mut() {
                                 for backend in backends {
                                     backend["canManage"] = json!(false);
-                                    backend["reason"] = json!("Native share publication is disabled by root-owned policy.");
+                                    backend["reason"] = json!(
+                                        "Native share publication is disabled by root-owned policy."
+                                    );
                                 }
                             }
                         }
-                        return (StatusCode::OK,result);
+                        return (StatusCode::OK, result);
                     }
                 }
             }
@@ -3365,11 +3957,19 @@ where
     tokio::spawn(async move {
         // These operations already carry cancellation into their bounded work,
         // or explicitly close the window immediately before publication.
-        let cooperative = matches!(tool,
-            "managed_backup_prepare" | "managed_backup_publish" |
-            "managed_storage_create" | "managed_service_enable" | "managed_service_disable" |
-            "applications_action" | "managed_container_action" |
-            "managed_service_start" | "managed_service_stop" | "managed_service_restart");
+        let cooperative = matches!(
+            tool,
+            "managed_backup_prepare"
+                | "managed_backup_publish"
+                | "managed_storage_create"
+                | "managed_service_enable"
+                | "managed_service_disable"
+                | "applications_action"
+                | "managed_container_action"
+                | "managed_service_start"
+                | "managed_service_stop"
+                | "managed_service_restart"
+        );
         if !cooperative && !running.begin_mutation() {
             running.finish(Outcome::Cancelled);
             return;

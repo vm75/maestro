@@ -16,7 +16,8 @@ const PASSWORD_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub fn validate_password(password: &str) -> Result<()> {
     ensure!(
-        (1..=256).contains(&password.chars().count()) && password.len() <= 1024
+        (1..=256).contains(&password.chars().count())
+            && password.len() <= 1024
             && !password.trim().is_empty()
             && password
                 .chars()
@@ -49,7 +50,9 @@ pub(super) fn caller_name(uid: u32) -> Result<String> {
         .context("Invalid trusted workload account name")?
         .to_owned();
     ensure!(
-        regex::Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}\$?$").unwrap().is_match(&name),
+        regex::Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}\$?$")
+            .unwrap()
+            .is_match(&name),
         "Unsupported workload username"
     );
     Ok(name)

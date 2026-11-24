@@ -1,5 +1,8 @@
 .DEFAULT_GOAL := check
 
+# Reuse the Python environment prepared by make init-linux for test targets.
+PYTHON ?= $(if $(wildcard .dev-tools/python/bin/python3),$(CURDIR)/.dev-tools/python/bin/python3,python3)
+
 .PHONY: help check test test-linux test-podman test-quadlet test-nginx test-ipk test-ui test-router test-lab run run-linux run-router run-simulated init-linux init-linux-helper remove-linux-helper init-router fmt clippy release ipk init-lab run-lab
 
 help:
@@ -21,7 +24,7 @@ test:
 	cargo test
 
 test-nginx:
-	python3 -m unittest discover -s config/nginx/tests -p 'test_*.py' -v
+	"$(PYTHON)" -m unittest discover -s config/nginx/tests -p 'test_*.py' -v
 
 test-ipk:
 	bash scripts/test-package-ipk.sh
@@ -31,7 +34,7 @@ test-ui:
 	node scripts/test-web-ui.mjs
 
 test-linux:
-	bash scripts/test-linux-integration.sh
+	PYTHON="$(PYTHON)" bash scripts/test-linux-integration.sh
 
 test-podman:
 	bash scripts/test-podman-offline.sh

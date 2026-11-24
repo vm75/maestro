@@ -141,7 +141,8 @@ fn parse_with_boot_equivalent(
             | "restarting" | "dead" => row.state,
             _ => "unknown".into(),
         };
-        let current = native_fingerprint == fingerprint || boot_equivalent == Some(native_fingerprint.as_str());
+        let current = native_fingerprint == fingerprint
+            || boot_equivalent == Some(native_fingerprint.as_str());
         members.insert(member.clone(), (state, current));
     }
     Ok(members)
@@ -194,7 +195,11 @@ pub(super) async fn inspect(
         None
     };
     let rows = parse_with_boot_equivalent(
-        &output.stdout, id, fingerprint, boot_equivalent.as_deref(), &expected,
+        &output.stdout,
+        id,
+        fingerprint,
+        boot_equivalent.as_deref(),
+        &expected,
     )?;
     let mut members = Vec::new();
     let mut running = 0;
@@ -332,14 +337,38 @@ mod tests {
         let body = serde_json::to_vec(&vec![
             row("web", "running", &previous),
             row("worker", "running", &previous),
-        ]).unwrap();
+        ])
+        .unwrap();
         let program = stub(root.path(), &body, 1);
-        let result = inspect(&CommandRunner::new(false), &program, &desired, "demo", &current).await.unwrap();
+        let result = inspect(
+            &CommandRunner::new(false),
+            &program,
+            &desired,
+            "demo",
+            &current,
+        )
+        .await
+        .unwrap();
         assert_eq!(result.state, "running");
         assert!(result.matches);
-        desired.services.get_mut("demo").unwrap().containers.get_mut("web").unwrap().image = "busybox".into();
+        desired
+            .services
+            .get_mut("demo")
+            .unwrap()
+            .containers
+            .get_mut("web")
+            .unwrap()
+            .image = "busybox".into();
         let changed = super::super::super::plan::service_fingerprint(&desired, "demo").unwrap();
-        let result = inspect(&CommandRunner::new(false), &program, &desired, "demo", &changed).await.unwrap();
+        let result = inspect(
+            &CommandRunner::new(false),
+            &program,
+            &desired,
+            "demo",
+            &changed,
+        )
+        .await
+        .unwrap();
         assert!(!result.matches);
     }
 

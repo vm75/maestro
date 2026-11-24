@@ -112,50 +112,96 @@ impl ShareProvider {
     }
 
     pub fn from_config(config: &crate::config::AppConfig, simulated: bool) -> Self {
-        let mut provider = Self::new(config.paths.samba_conf.clone(),config.paths.exports_file.clone(),config.paths.storage_dir.clone());
+        let mut provider = Self::new(
+            config.paths.samba_conf.clone(),
+            config.paths.exports_file.clone(),
+            config.paths.storage_dir.clone(),
+        );
         provider.simulated = simulated;
-        provider.helper_paths = !simulated && config.platform == crate::config::Platform::Linux
-            && config.linux_authority.as_ref().is_some_and(|authority| authority.settings.samba_config == "/etc/samba/smb.conf")
+        provider.helper_paths = !simulated
+            && config.platform == crate::config::Platform::Linux
+            && config
+                .linux_authority
+                .as_ref()
+                .is_some_and(|authority| authority.settings.samba_config == "/etc/samba/smb.conf")
             && provider.samba_conf == Path::new("/etc/samba/maestro.conf")
             && provider.exports_file == Path::new("/etc/exports.d/maestro.exports");
         provider.native_enabled = provider.helper_paths;
         provider
     }
 
-    pub fn helper_paths(&self) -> bool { self.helper_paths }
-    pub fn native_enabled(&self) -> bool { self.native_enabled }
+    pub fn helper_paths(&self) -> bool {
+        self.helper_paths
+    }
+    pub fn native_enabled(&self) -> bool {
+        self.native_enabled
+    }
 
     pub(crate) async fn check_prerequisites(&self, protocol: &str, config: &Config) -> Result<()> {
-        ensure!(self.native_enabled && admin::probe().await.permits_shares(),
-            "native share publication requires authorized configuration and optional helper grants");
-        let definitions = self.definitions(protocol,config,true)?;
-        let state = self.inspect(protocol,&definitions).await?;
-        ensure!(state.available,"{}", state.unavailable_reason());
-        let (result,_) = admin::share_operation("shares_definitions_validate",definition_args(protocol,&definitions)?).await?;
-        ensure!(result["valid"] == true,"native share validation failed");
+        ensure!(
+            self.native_enabled && admin::probe().await.permits_shares(),
+            "native share publication requires authorized configuration and optional helper grants"
+        );
+        let definitions = self.definitions(protocol, config, true)?;
+        let state = self.inspect(protocol, &definitions).await?;
+        ensure!(state.available, "{}", state.unavailable_reason());
+        let (result, _) = admin::share_operation(
+            "shares_definitions_validate",
+            definition_args(protocol, &definitions)?,
+        )
+        .await?;
+        ensure!(result["valid"] == true, "native share validation failed");
         Ok(())
     }
 
     // Direct translation of the reference implementation internal/declarative/shares.go:
     // a protocol publishes its entire authoritative definition set.
-    fn definitions(&self, protocol: &str, config: &Config, check_paths: bool) -> Result<Vec<Definition>> {
+    fn definitions(
+        &self,
+        protocol: &str,
+        config: &Config,
+        check_paths: bool,
+    ) -> Result<Vec<Definition>> {
         self.definitions_with_account(protocol, config, check_paths, admin::workload_account)
     }
 
-    fn definitions_with_account(&self, protocol: &str, config: &Config, check_paths: bool,
-        account: impl Fn() -> Result<String>) -> Result<Vec<Definition>> {
-        ensure!(matches!(protocol, "samba" | "nfs"), "unsupported share protocol");
+    fn definitions_with_account(
+        &self,
+        protocol: &str,
+        config: &Config,
+        check_paths: bool,
+        account: impl Fn() -> Result<String>,
+    ) -> Result<Vec<Definition>> {
+        ensure!(
+            matches!(protocol, "samba" | "nfs"),
+            "unsupported share protocol"
+        );
         let mut definitions = Vec::new();
         for (id, share) in &config.shares {
-            if share.protocol != protocol || !share.enabled { continue; }
-            let storage = config.storage.get(&share.storage).context("referenced storage not found")?;
+            if share.protocol != protocol || !share.enabled {
+                continue;
+            }
+            let storage = config
+                .storage
+                .get(&share.storage)
+                .context("referenced storage not found")?;
             ensure!(storage.kind != "file", "share requires directory storage");
-            let base = if storage.external { PathBuf::from(&storage.path) } else { self.storage_base.join(&storage.path) };
-            let path = if share.path.is_empty() { base } else { base.join(&share.path) };
+            let base = if storage.external {
+                PathBuf::from(&storage.path)
+            } else {
+                self.storage_base.join(&storage.path)
+            };
+            let path = if share.path.is_empty() {
+                base
+            } else {
+                base.join(&share.path)
+            };
             // Legacy users remain readable, but never select access identities.
             let users = if protocol == "samba" && !share.guest {
                 vec![account()?]
-            } else { Vec::new() };
+            } else {
+                Vec::new()
+            };
             definitions.push(Definition {
                 name: id.clone(),
                 path: path.to_str().context("share path is not UTF-8")?.into(),
@@ -165,7 +211,11 @@ impl ShareProvider {
                 users,
                 clients: share.clients.clone(),
                 root_squash: share.root_squash.unwrap_or(protocol == "nfs"),
-                security: if protocol == "nfs" && share.security.is_empty() { "sys".into() } else { share.security.clone() },
+                security: if protocol == "nfs" && share.security.is_empty() {
+                    "sys".into()
+                } else {
+                    share.security.clone()
+                },
             });
         }
         share_definitions::normalize(protocol, definitions, check_paths)
@@ -173,76 +223,146 @@ impl ShareProvider {
 
     pub(super) async fn verify_unpublished(&self, config: &Config, id: &str) -> Result<()> {
         let share = config.shares.get(id).context("unknown referencing share")?;
-        ensure!(!share.enabled, "unpublish referencing shares before provisioning new data");
-        if self.simulated { return Ok(()); }
-        ensure!(self.native_enabled, "unpublished share state cannot be checked without authorized helper grants");
+        ensure!(
+            !share.enabled,
+            "unpublish referencing shares before provisioning new data"
+        );
+        if self.simulated {
+            return Ok(());
+        }
+        ensure!(
+            self.native_enabled,
+            "unpublished share state cannot be checked without authorized helper grants"
+        );
         let expected = self.definitions(&share.protocol, config, false)?;
         let observed = self.inspect(&share.protocol, &expected).await?;
-        ensure!(observed.exact(), "referencing shares must be verified unpublished before provisioning new data");
+        ensure!(
+            observed.exact(),
+            "referencing shares must be verified unpublished before provisioning new data"
+        );
         // The protocol-wide fragment comparison alone does not detect a
         // lingering unmanaged export or Samba section with this identity.
-        let storage = config.storage.get(&share.storage).context("referenced storage not found")?;
-        let base = if storage.external { PathBuf::from(&storage.path) } else { self.storage_base.join(&storage.path) };
+        let storage = config
+            .storage
+            .get(&share.storage)
+            .context("referenced storage not found")?;
+        let base = if storage.external {
+            PathBuf::from(&storage.path)
+        } else {
+            self.storage_base.join(&storage.path)
+        };
         let path = base.join(&share.path);
-        let path = path.to_str().context("invalid shared directory path")?.trim_end_matches('/');
-        let (inventory, _) = admin::share_operation("shares_list", json!({"protocol":share.protocol})).await?;
-        let rows = inventory["shares"].as_array().context("native share inventory is unavailable")?;
+        let path = path
+            .to_str()
+            .context("invalid shared directory path")?
+            .trim_end_matches('/');
+        let (inventory, _) =
+            admin::share_operation("shares_list", json!({"protocol":share.protocol})).await?;
+        let rows = inventory["shares"]
+            .as_array()
+            .context("native share inventory is unavailable")?;
         let conflict = rows.iter().any(|row| {
             let same = if share.protocol == "samba" {
-                row["name"].as_str().is_some_and(|name| name.eq_ignore_ascii_case(id))
+                row["name"]
+                    .as_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(id))
             } else {
-                row["path"].as_str().is_some_and(|p| p.trim_end_matches('/') == path)
+                row["path"]
+                    .as_str()
+                    .is_some_and(|p| p.trim_end_matches('/') == path)
             };
-            same && (row["configured"] != false || !matches!(row["runtime"].as_str(), Some("not_exported" | "not_observed")))
+            same && (row["configured"] != false
+                || !matches!(
+                    row["runtime"].as_str(),
+                    Some("not_exported" | "not_observed")
+                ))
         });
         ensure!(!conflict, "referencing share remains configured or active");
         Ok(())
     }
 
     async fn inspect(&self, protocol: &str, definitions: &[Definition]) -> Result<DefinitionState> {
-        let (result, _) = admin::share_operation("shares_definitions_inspect", definition_args(protocol,definitions)?).await?;
-        let state: DefinitionState = serde_json::from_value(result).context("invalid privileged share inspection")?;
-        ensure!(state.revision.len() == 64 && state.revision.bytes().all(|b| b.is_ascii_hexdigit()), "invalid native share revision");
+        let (result, _) = admin::share_operation(
+            "shares_definitions_inspect",
+            definition_args(protocol, definitions)?,
+        )
+        .await?;
+        let state: DefinitionState =
+            serde_json::from_value(result).context("invalid privileged share inspection")?;
+        ensure!(
+            state.revision.len() == 64 && state.revision.bytes().all(|b| b.is_ascii_hexdigit()),
+            "invalid native share revision"
+        );
         Ok(state)
     }
 
-    async fn validate_native(&self, protocol: &str, previous: &Config, desired: &Config) -> Result<()> {
-        ensure!(self.native_enabled, "native share publication requires authorized Linux configuration and fixed reference paths");
-        ensure!(admin::probe().await.permits_shares(), "native share publication requires an authorized optional helper");
-        let next = self.definitions(protocol,desired,true)?;
-        let current = self.inspect(protocol,&next).await?;
+    async fn validate_native(
+        &self,
+        protocol: &str,
+        previous: &Config,
+        desired: &Config,
+    ) -> Result<()> {
+        ensure!(
+            self.native_enabled,
+            "native share publication requires authorized Linux configuration and fixed reference paths"
+        );
+        ensure!(
+            admin::probe().await.permits_shares(),
+            "native share publication requires an authorized optional helper"
+        );
+        let next = self.definitions(protocol, desired, true)?;
+        let current = self.inspect(protocol, &next).await?;
         ensure!(current.available, "{}", current.unavailable_reason());
-        if current.exact() { return Ok(()); }
+        if current.exact() {
+            return Ok(());
+        }
         // Refuse unrelated owned-fragment drift before a central YAML commit.
         // A missing or externally changed runtime is not automatically replayed.
-        let before = self.definitions(protocol,previous,false)?;
-        let old = self.inspect(protocol,&before).await?;
-        ensure!(old.exact() && old.revision == current.revision,
-            "native shares do not match the reviewed before or after state");
-        let (result,_) = admin::share_operation("shares_definitions_validate",definition_args(protocol,&next)?).await?;
+        let before = self.definitions(protocol, previous, false)?;
+        let old = self.inspect(protocol, &before).await?;
+        ensure!(
+            old.exact() && old.revision == current.revision,
+            "native shares do not match the reviewed before or after state"
+        );
+        let (result, _) = admin::share_operation(
+            "shares_definitions_validate",
+            definition_args(protocol, &next)?,
+        )
+        .await?;
         ensure!(result["valid"] == true, "native share validation failed");
         Ok(())
     }
 
-    async fn apply_native(&self, protocol: &str, previous: &Config, desired: &Config) -> Result<()> {
+    async fn apply_native(
+        &self,
+        protocol: &str,
+        previous: &Config,
+        desired: &Config,
+    ) -> Result<()> {
         ensure!(self.native_enabled, "native share publication is disabled");
-        let next = self.definitions(protocol,desired,true)?;
-        let state = self.inspect(protocol,&next).await?;
+        let next = self.definitions(protocol, desired, true)?;
+        let state = self.inspect(protocol, &next).await?;
         ensure!(state.available, "{}", state.unavailable_reason());
         // Several share changes can describe one protocol. The first operation
         // publishes the complete set; subsequent journal entries are no-ops.
-        if state.exact() { return Ok(()); }
-        let before = self.definitions(protocol,previous,false)?;
-        let old = self.inspect(protocol,&before).await?;
-        ensure!(old.exact() && old.revision == state.revision,
-            "native shares do not match the reviewed before or after state");
-        let mut args = definition_args(protocol,&next)?;
+        if state.exact() {
+            return Ok(());
+        }
+        let before = self.definitions(protocol, previous, false)?;
+        let old = self.inspect(protocol, &before).await?;
+        ensure!(
+            old.exact() && old.revision == state.revision,
+            "native shares do not match the reviewed before or after state"
+        );
+        let mut args = definition_args(protocol, &next)?;
         args["revision"] = json!(state.revision);
         args["confirm"] = json!(true);
-        let (result,_) = admin::share_operation("shares_definitions_apply",args).await?;
-        let verified = self.inspect(protocol,&next).await?;
-        ensure!(verified.exact() && result["revision"].as_str() == Some(verified.revision.as_str()),
-            "native share publication could not be verified");
+        let (result, _) = admin::share_operation("shares_definitions_apply", args).await?;
+        let verified = self.inspect(protocol, &next).await?;
+        ensure!(
+            verified.exact() && result["revision"].as_str() == Some(verified.revision.as_str()),
+            "native share publication could not be verified"
+        );
         Ok(())
     }
 }
@@ -266,11 +386,16 @@ impl DefinitionState {
         if self.reason.is_empty() {
             "Native share dependencies or permissions are unavailable; check File shares service status.".into()
         } else {
-            format!("{}. Check File shares service status; run Set up server if host setup is required.", self.reason)
+            format!(
+                "{}. Check File shares service status; run Set up server if host setup is required.",
+                self.reason
+            )
         }
     }
 
-    fn exact(&self) -> bool { self.available && self.matches && self.runtime_matches }
+    fn exact(&self) -> bool {
+        self.available && self.matches && self.runtime_matches
+    }
 }
 
 impl ApplyProvider for ShareProvider {
@@ -279,7 +404,9 @@ impl ApplyProvider for ShareProvider {
             return Ok(());
         };
         if !self.simulated {
-            return self.validate_native(&change.backend,previous,desired).await;
+            return self
+                .validate_native(&change.backend, previous, desired)
+                .await;
         }
         if let Some(share) = desired.shares.get(share_id) {
             ensure!(super::id_valid(share_id), "invalid share ID");
@@ -298,7 +425,7 @@ impl ApplyProvider for ShareProvider {
             return Ok(());
         }
         if !self.simulated {
-            return self.apply_native(&change.backend,previous,desired).await;
+            return self.apply_native(&change.backend, previous, desired).await;
         }
         let samba_content = render_samba(&desired.shares, &self.storage_base)?;
         if let Some(parent) = self.samba_conf.parent() {
@@ -326,15 +453,21 @@ impl RecoveryProvider for ShareProvider {
             return Ok(ObservedResource::Unknown);
         }
         if !self.simulated {
-            if !self.native_enabled { return Ok(ObservedResource::Unknown); }
-            let next = self.definitions(&change.backend,desired,false)?;
-            let after = self.inspect(&change.backend,&next).await?;
-            if after.exact() { return Ok(ObservedResource::After); }
-            let before = self.definitions(&change.backend,previous,false)?;
-            let old = self.inspect(&change.backend,&before).await?;
+            if !self.native_enabled {
+                return Ok(ObservedResource::Unknown);
+            }
+            let next = self.definitions(&change.backend, desired, false)?;
+            let after = self.inspect(&change.backend, &next).await?;
+            if after.exact() {
+                return Ok(ObservedResource::After);
+            }
+            let before = self.definitions(&change.backend, previous, false)?;
+            let old = self.inspect(&change.backend, &before).await?;
             return Ok(if old.exact() && old.revision == after.revision {
                 ObservedResource::Before
-            } else { ObservedResource::Unknown });
+            } else {
+                ObservedResource::Unknown
+            });
         }
         if !self.samba_conf.exists() && !self.exports_file.exists() {
             return if change.operation == Operation::Create {
@@ -355,9 +488,13 @@ mod tests {
 
     #[test]
     fn reference_protocol_sets_resolve_storage_and_default_nfs_options() {
-        let provider = ShareProvider::new("/etc/samba/maestro.conf".into(),
-            "/etc/exports.d/maestro.exports".into(),"/srv/workloads".into());
-        let config = super::super::parse(br#"version: 1
+        let provider = ShareProvider::new(
+            "/etc/samba/maestro.conf".into(),
+            "/etc/exports.d/maestro.exports".into(),
+            "/srv/workloads".into(),
+        );
+        let config = super::super::parse(
+            br#"version: 1
 storage:
   files: {kind: directory, path: volumes/files}
   external: {kind: directory, path: /srv/archive, external: true}
@@ -365,34 +502,46 @@ shares:
   archive: {protocol: nfs, storage: external, enabled: true, clients: ["192.0.2.5/24"]}
   disabled: {protocol: nfs, storage: files, enabled: false, clients: ["*"]}
   docs: {protocol: samba, storage: files, enabled: true, users: ["alice"], path: docs}
-"#).unwrap();
-        let nfs = provider.definitions("nfs",&config,false).unwrap();
-        assert_eq!(nfs.len(),1);
-        assert_eq!(nfs[0].name,"archive");
-        assert_eq!(nfs[0].path,"/srv/archive");
-        assert_eq!(nfs[0].clients,["192.0.2.0/24"]);
+"#,
+        )
+        .unwrap();
+        let nfs = provider.definitions("nfs", &config, false).unwrap();
+        assert_eq!(nfs.len(), 1);
+        assert_eq!(nfs[0].name, "archive");
+        assert_eq!(nfs[0].path, "/srv/archive");
+        assert_eq!(nfs[0].clients, ["192.0.2.0/24"]);
         assert!(nfs[0].root_squash);
-        assert_eq!(nfs[0].security,"sys");
-        let samba = provider.definitions_with_account("samba", &config, false, || Ok("workload".into())).unwrap();
-        assert_eq!(samba.len(),1);
-        assert_eq!(samba[0].path,"/srv/workloads/volumes/files/docs");
+        assert_eq!(nfs[0].security, "sys");
+        let samba = provider
+            .definitions_with_account("samba", &config, false, || Ok("workload".into()))
+            .unwrap();
+        assert_eq!(samba.len(), 1);
+        assert_eq!(samba[0].path, "/srv/workloads/volumes/files/docs");
         assert_eq!(samba[0].users, ["workload"]);
         let mut guest = config.clone();
         guest.shares.get_mut("docs").unwrap().guest = true;
-        let samba = provider.definitions_with_account("samba", &guest, false, || anyhow::bail!("guest share must not resolve an account")).unwrap();
+        let samba = provider
+            .definitions_with_account("samba", &guest, false, || {
+                anyhow::bail!("guest share must not resolve an account")
+            })
+            .unwrap();
         assert!(samba[0].users.is_empty());
         assert!(!provider.native_enabled());
     }
 
     #[test]
     fn inspection_requires_both_configured_and_runtime_state() {
-        let make = |matches,runtime_matches,available| DefinitionState {
-            revision:"a".repeat(64),matches,runtime_matches,available,reason:String::new()
+        let make = |matches, runtime_matches, available| DefinitionState {
+            revision: "a".repeat(64),
+            matches,
+            runtime_matches,
+            available,
+            reason: String::new(),
         };
-        assert!(make(true,true,true).exact());
-        assert!(!make(true,false,true).exact());
-        assert!(!make(false,true,true).exact());
-        assert!(!make(true,true,false).exact());
+        assert!(make(true, true, true).exact());
+        assert!(!make(true, false, true).exact());
+        assert!(!make(false, true, true).exact());
+        assert!(!make(true, true, false).exact());
     }
 
     #[test]

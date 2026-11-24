@@ -61,7 +61,8 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn load(path: &Path) -> Result<Self> {
         anyhow::ensure!(
-            path.extension().is_some_and(|ext| ext == "yaml" || ext == "yml"),
+            path.extension()
+                .is_some_and(|ext| ext == "yaml" || ext == "yml"),
             "configuration must be YAML"
         );
         let raw = crate::config_yaml::read(path)

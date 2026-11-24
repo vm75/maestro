@@ -53,7 +53,11 @@ pub(super) fn render(body: &mut String, container: &Container) -> Result<()> {
     if !container.entrypoint.is_empty() {
         // Podman's JSON entrypoint syntax preserves argv boundaries, including
         // spaces and quotes, without introducing shell evaluation.
-        argument(body, "entrypoint", &serde_json::to_string(&container.entrypoint)?)?;
+        argument(
+            body,
+            "entrypoint",
+            &serde_json::to_string(&container.entrypoint)?,
+        )?;
     }
     if !container.shm_size.is_empty() {
         let size = container.shm_size.to_ascii_lowercase();
@@ -64,7 +68,9 @@ pub(super) fn render(body: &mut String, container: &Container) -> Result<()> {
     }
     if !container.stop_grace_period.is_empty() {
         let seconds = super::super::container_health::stop_seconds(&container.stop_grace_period)
-            .ok_or_else(|| anyhow::anyhow!("Quadlet stop grace period exceeds native timeout range"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("Quadlet stop grace period exceeds native timeout range")
+            })?;
         ensure!(seconds > 0, "invalid Quadlet stop grace period");
         writeln!(body, "StopTimeout={seconds}")?;
     }

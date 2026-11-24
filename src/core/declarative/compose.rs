@@ -41,53 +41,201 @@ pub(super) fn validate_options(service: &Service) -> Result<()> {
     let size = Regex::new(r"^[0-9]+([kKmMgGtT][bB]?)?$")?;
     let env_name = Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*$")?;
     let literal = |s: &str| !s.chars().any(char::is_control);
-    let path = |s: &str| super::path_valid(s,true) && !s.contains(['\0','\r','\n',':']);
-    for (name,v) in &service.containers {
-        ensure!(v.container_name.is_empty() || native_name.is_match(&v.container_name),"invalid container {name} container_name");
-        ensure!(v.entrypoint.len()<=32 && v.devices.len()<=32 && v.tmpfs.len()<=32
-            && v.depends_on.len()<=32 && v.uid_maps.len()<=64 && v.gid_maps.len()<=64
-            && v.security_opt.len()<=32 && v.log_options.len()<=32,"invalid container {name} option count");
-        ensure!(v.user.is_empty() || (v.user.split(':').count()<=2 && v.user.split(':').all(|part|identity.is_match(part))),"invalid container {name} user");
-        ensure!(v.userns_mode.is_empty() || (namespace.is_match(&v.userns_mode) && v.uid_maps.is_empty() && v.gid_maps.is_empty()),"invalid container {name} user namespace");
-        ensure!(v.uid_maps.iter().chain(&v.gid_maps).all(|m|mapping.is_match(m)),"invalid container {name} UID/GID mapping");
-        ensure!(service.engine!="docker" || (v.uid_maps.is_empty() && v.gid_maps.is_empty() && v.userns_mode!="nomap" && !v.userns_mode.starts_with("keep-id")),"Podman user namespace settings require Podman");
-        ensure!(v.group_add.iter().all(|g|if g=="keep-groups"{service.engine=="podman"}else{identity.is_match(g)}),"invalid container {name} group_add");
-        ensure!(matches!(v.network_mode.as_str(),""|"host"|"none") || v.network_mode.strip_prefix("service:").is_some_and(|peer|peer!=name.as_str()&&service.containers.contains_key(peer)&&v.ports.is_empty()),"invalid container {name} network_mode");
+    let path = |s: &str| super::path_valid(s, true) && !s.contains(['\0', '\r', '\n', ':']);
+    for (name, v) in &service.containers {
+        ensure!(
+            v.container_name.is_empty() || native_name.is_match(&v.container_name),
+            "invalid container {name} container_name"
+        );
+        ensure!(
+            v.entrypoint.len() <= 32
+                && v.devices.len() <= 32
+                && v.tmpfs.len() <= 32
+                && v.depends_on.len() <= 32
+                && v.uid_maps.len() <= 64
+                && v.gid_maps.len() <= 64
+                && v.security_opt.len() <= 32
+                && v.log_options.len() <= 32,
+            "invalid container {name} option count"
+        );
+        ensure!(
+            v.user.is_empty()
+                || (v.user.split(':').count() <= 2
+                    && v.user.split(':').all(|part| identity.is_match(part))),
+            "invalid container {name} user"
+        );
+        ensure!(
+            v.userns_mode.is_empty()
+                || (namespace.is_match(&v.userns_mode)
+                    && v.uid_maps.is_empty()
+                    && v.gid_maps.is_empty()),
+            "invalid container {name} user namespace"
+        );
+        ensure!(
+            v.uid_maps
+                .iter()
+                .chain(&v.gid_maps)
+                .all(|m| mapping.is_match(m)),
+            "invalid container {name} UID/GID mapping"
+        );
+        ensure!(
+            service.engine != "docker"
+                || (v.uid_maps.is_empty()
+                    && v.gid_maps.is_empty()
+                    && v.userns_mode != "nomap"
+                    && !v.userns_mode.starts_with("keep-id")),
+            "Podman user namespace settings require Podman"
+        );
+        ensure!(
+            v.group_add.iter().all(|g| if g == "keep-groups" {
+                service.engine == "podman"
+            } else {
+                identity.is_match(g)
+            }),
+            "invalid container {name} group_add"
+        );
+        ensure!(
+            matches!(v.network_mode.as_str(), "" | "host" | "none")
+                || v.network_mode
+                    .strip_prefix("service:")
+                    .is_some_and(|peer| peer != name.as_str()
+                        && service.containers.contains_key(peer)
+                        && v.ports.is_empty()),
+            "invalid container {name} network_mode"
+        );
         for device in &v.devices {
-            let parts:Vec<_>=device.split(':').collect();
-            ensure!(parts.len()<=3 && path(parts[0]) && (parts.len()<2||path(parts[1]))
-                && (parts.len()<3||(!parts[2].is_empty()&&parts[2].bytes().all(|c|b"rwm".contains(&c)))),"invalid container {name} device");
+            let parts: Vec<_> = device.split(':').collect();
+            ensure!(
+                parts.len() <= 3
+                    && path(parts[0])
+                    && (parts.len() < 2 || path(parts[1]))
+                    && (parts.len() < 3
+                        || (!parts[2].is_empty() && parts[2].bytes().all(|c| b"rwm".contains(&c)))),
+                "invalid container {name} device"
+            );
         }
-        ensure!(v.cap_add.iter().chain(&v.cap_drop).all(|c|capability.is_match(c)),"invalid container {name} capability");
-        ensure!(v.security_opt.iter().all(|s|matches!(s.as_str(),"no-new-privileges"|"no-new-privileges:true"|"no-new-privileges:false"|"label=disable"|"seccomp=unconfined"|"seccomp:unconfined")),"invalid container {name} security_opt");
-        ensure!(v.tmpfs.iter().all(|s|path(s.split(':').next().unwrap_or(""))&&!s.contains(['\0','\r','\n',' ','\t'])),"invalid container {name} tmpfs");
-        ensure!(v.working_dir.is_empty()||path(&v.working_dir),"invalid container {name} working_dir");
-        ensure!(v.entrypoint.iter().all(|s|literal(s)&&s.len()<=8192),"invalid container {name} entrypoint");
-        ensure!(v.command.iter().all(|s|!s.contains('\0')&&s.len()<=8192),"invalid container {name} command");
-        ensure!(v.environment.iter().all(|(k,v)|env_name.is_match(k)&&!v.contains('\0')&&v.len()<=8192),"invalid container {name} environment");
-        ensure!(v.shm_size.is_empty()||size.is_match(&v.shm_size),"invalid container {name} shm_size");
-        ensure!(super::container_health::duration(&v.stop_grace_period),"invalid container {name} stop_grace_period");
-        ensure!(matches!(v.pull_policy.as_str(),""|"missing"|"always"|"never"|"newer"),"invalid container {name} pull_policy");
+        ensure!(
+            v.cap_add
+                .iter()
+                .chain(&v.cap_drop)
+                .all(|c| capability.is_match(c)),
+            "invalid container {name} capability"
+        );
+        ensure!(
+            v.security_opt.iter().all(|s| matches!(
+                s.as_str(),
+                "no-new-privileges"
+                    | "no-new-privileges:true"
+                    | "no-new-privileges:false"
+                    | "label=disable"
+                    | "seccomp=unconfined"
+                    | "seccomp:unconfined"
+            )),
+            "invalid container {name} security_opt"
+        );
+        ensure!(
+            v.tmpfs
+                .iter()
+                .all(|s| path(s.split(':').next().unwrap_or(""))
+                    && !s.contains(['\0', '\r', '\n', ' ', '\t'])),
+            "invalid container {name} tmpfs"
+        );
+        ensure!(
+            v.working_dir.is_empty() || path(&v.working_dir),
+            "invalid container {name} working_dir"
+        );
+        ensure!(
+            v.entrypoint.iter().all(|s| literal(s) && s.len() <= 8192),
+            "invalid container {name} entrypoint"
+        );
+        ensure!(
+            v.command
+                .iter()
+                .all(|s| !s.contains('\0') && s.len() <= 8192),
+            "invalid container {name} command"
+        );
+        ensure!(
+            v.environment
+                .iter()
+                .all(|(k, v)| env_name.is_match(k) && !v.contains('\0') && v.len() <= 8192),
+            "invalid container {name} environment"
+        );
+        ensure!(
+            v.shm_size.is_empty() || size.is_match(&v.shm_size),
+            "invalid container {name} shm_size"
+        );
+        ensure!(
+            super::container_health::duration(&v.stop_grace_period),
+            "invalid container {name} stop_grace_period"
+        );
+        ensure!(
+            matches!(
+                v.pull_policy.as_str(),
+                "" | "missing" | "always" | "never" | "newer"
+            ),
+            "invalid container {name} pull_policy"
+        );
         if service.backend == "compose" {
-            ensure!(matches!(v.restart.as_str(),""|"no"),"Compose restart supervision is not supported with independent boot enablement; use Quadlet or omit restart");
+            ensure!(
+                matches!(v.restart.as_str(), "" | "no"),
+                "Compose restart supervision is not supported with independent boot enablement; use Quadlet or omit restart"
+            );
         }
-        ensure!(matches!(v.log_driver.as_str(),""|"k8s-file"|"journald"|"none"|"passthrough"|"passthrough-tty"),"invalid container {name} log_driver");
-        ensure!(v.log_options.iter().all(|(k,v)|env_name.is_match(&k.replace('-',"_" ))&&literal(v)&&v.len()<=4096),"invalid container {name} log_options");
+        ensure!(
+            matches!(
+                v.log_driver.as_str(),
+                "" | "k8s-file" | "journald" | "none" | "passthrough" | "passthrough-tty"
+            ),
+            "invalid container {name} log_driver"
+        );
+        ensure!(
+            v.log_options
+                .iter()
+                .all(|(k, v)| env_name.is_match(&k.replace('-', "_"))
+                    && literal(v)
+                    && v.len() <= 4096),
+            "invalid container {name} log_options"
+        );
         for mount in &v.mounts {
-            ensure!(matches!(mount.selinux.as_str(),""|"private"|"shared"|"z"|"Z")&&(!mount.chown||service.engine=="podman"),"invalid container {name} mount options");
+            ensure!(
+                matches!(
+                    mount.selinux.as_str(),
+                    "" | "private" | "shared" | "z" | "Z"
+                ) && (!mount.chown || service.engine == "podman"),
+                "invalid container {name} mount options"
+            );
         }
     }
     // Include shared-network namespace edges in the same dependency cycle test.
-    fn visit<'a>(service: &'a Service,name: &'a str,visiting: &mut std::collections::BTreeSet<&'a str>,done: &mut std::collections::BTreeSet<&'a str>) -> Result<()> {
-        if done.contains(name){return Ok(())}
-        ensure!(visiting.insert(name),"container dependency cycle");
-        let container=service.containers.get(name).ok_or_else(||anyhow!("unknown container dependency"))?;
-        for dep in container.depends_on.keys(){visit(service,dep,visiting,done)?;}
-        if let Some(peer)=container.network_mode.strip_prefix("service:"){visit(service,peer,visiting,done)?;}
-        visiting.remove(name);done.insert(name);Ok(())
+    fn visit<'a>(
+        service: &'a Service,
+        name: &'a str,
+        visiting: &mut std::collections::BTreeSet<&'a str>,
+        done: &mut std::collections::BTreeSet<&'a str>,
+    ) -> Result<()> {
+        if done.contains(name) {
+            return Ok(());
+        }
+        ensure!(visiting.insert(name), "container dependency cycle");
+        let container = service
+            .containers
+            .get(name)
+            .ok_or_else(|| anyhow!("unknown container dependency"))?;
+        for dep in container.depends_on.keys() {
+            visit(service, dep, visiting, done)?;
+        }
+        if let Some(peer) = container.network_mode.strip_prefix("service:") {
+            visit(service, peer, visiting, done)?;
+        }
+        visiting.remove(name);
+        done.insert(name);
+        Ok(())
     }
-    let mut visiting=std::collections::BTreeSet::new();let mut done=std::collections::BTreeSet::new();
-    for name in service.containers.keys(){visit(service,name,&mut visiting,&mut done)?;}
+    let mut visiting = std::collections::BTreeSet::new();
+    let mut done = std::collections::BTreeSet::new();
+    for name in service.containers.keys() {
+        visit(service, name, &mut visiting, &mut done)?;
+    }
     Ok(())
 }
 
@@ -156,8 +304,16 @@ fn render_compose(
             }
         }
         let mut security = Vec::new();
-        if no_new_privileges { security.push("no-new-privileges:true".to_owned()); }
-        security.extend(container.security_opt.iter().filter(|value| !value.starts_with("no-new-privileges")).cloned());
+        if no_new_privileges {
+            security.push("no-new-privileges:true".to_owned());
+        }
+        security.extend(
+            container
+                .security_opt
+                .iter()
+                .filter(|value| !value.starts_with("no-new-privileges"))
+                .cloned(),
+        );
         definition.insert("security_opt".into(), json!(words(&security)));
         for (field, values) in [
             ("ports", &container.ports),
@@ -306,7 +462,9 @@ fn render_compose(
         services.insert(name, Value::Object(definition));
     }
     let mut model = json!({"name":native::project(id),"services":services});
-    if service.engine == "podman" { model["x-podman"] = json!({"in_pod":false}); }
+    if service.engine == "podman" {
+        model["x-podman"] = json!({"in_pod":false});
+    }
     let yaml = serde_yaml::to_string(&model)?;
     Ok(format!(
         "{HEADER}\n# resource=service/{id}\n# fingerprint={fingerprint}\n\n{yaml}"
@@ -346,8 +504,8 @@ impl ComposeProvider {
     pub fn native_paths(mut self, systemctl: PathBuf) -> Self {
         self.systemctl = systemctl;
         if !self.runner.is_test_mode() {
-            self.unit_dir = self.base_dir.join(format!("{}-compose-units",self.engine));
-            self.base_dir = self.base_dir.join(format!("{}-compose",self.engine));
+            self.unit_dir = self.base_dir.join(format!("{}-compose-units", self.engine));
+            self.base_dir = self.base_dir.join(format!("{}-compose", self.engine));
         }
         self
     }
@@ -361,16 +519,33 @@ impl ComposeProvider {
     }
 
     pub async fn action(&self, service_id: &str, action: &str) -> Result<String> {
-        ensure!(self.runner.is_test_mode(),"native Compose actions require authoritative configuration");
-        ensure!(super::id_valid(service_id) && self.compose_file(service_id).exists(),"unknown Compose service");
-        ensure!(matches!(action,"start"|"stop"|"restart"),"unsupported Compose action");
+        ensure!(
+            self.runner.is_test_mode(),
+            "native Compose actions require authoritative configuration"
+        );
+        ensure!(
+            super::id_valid(service_id) && self.compose_file(service_id).exists(),
+            "unknown Compose service"
+        );
+        ensure!(
+            matches!(action, "start" | "stop" | "restart"),
+            "unsupported Compose action"
+        );
         Ok(format!("SIMULATED: Compose {action} on {service_id}"))
     }
 
     pub async fn logs(&self, service_id: &str, tail: usize) -> Result<String> {
-        ensure!(self.runner.is_test_mode(),"native Compose logs require authoritative configuration");
-        ensure!(super::id_valid(service_id) && self.compose_file(service_id).exists(),"unknown Compose service");
-        Ok(format!("SIMULATED: Compose logs for {service_id} (tail {tail})"))
+        ensure!(
+            self.runner.is_test_mode(),
+            "native Compose logs require authoritative configuration"
+        );
+        ensure!(
+            super::id_valid(service_id) && self.compose_file(service_id).exists(),
+            "unknown Compose service"
+        );
+        Ok(format!(
+            "SIMULATED: Compose logs for {service_id} (tail {tail})"
+        ))
     }
 }
 
@@ -397,13 +572,26 @@ impl ComposeProvider {
         optional(store::open_child_directory(&base, id))
     }
 
-    pub(super) fn recovery_targets(&self,change:&Change,previous:&Config,desired:&Config,id:&str)->Result<Vec<super::artifact_recovery::Target>>{
-        if !self.runner.is_test_mode(){return self.native_recovery_targets(previous,desired,id)}
+    pub(super) fn recovery_targets(
+        &self,
+        change: &Change,
+        previous: &Config,
+        desired: &Config,
+        id: &str,
+    ) -> Result<Vec<super::artifact_recovery::Target>> {
+        if !self.runner.is_test_mode() {
+            return self.native_recovery_targets(previous, desired, id);
+        }
         // Test-mode Compose publishes only its simulated definition using the
         // plan fingerprint, not a runtime fingerprint or a systemd launcher.
-        let defs=self.definitions(change,previous,desired)?;
-        Ok(vec![super::artifact_recovery::Target::dedicated("Native Compose definition",self.base_dir.join(id),"compose.yaml",
-            defs.before.map(String::into_bytes),defs.after.map(String::into_bytes))?])
+        let defs = self.definitions(change, previous, desired)?;
+        Ok(vec![super::artifact_recovery::Target::dedicated(
+            "Native Compose definition",
+            self.base_dir.join(id),
+            "compose.yaml",
+            defs.before.map(String::into_bytes),
+            defs.after.map(String::into_bytes),
+        )?])
     }
     fn definitions(
         &self,
@@ -472,17 +660,37 @@ fn read_definition(directory: &File) -> Result<Option<Vec<u8>>> {
 }
 
 impl ApplyProvider for ComposeProvider {
-    async fn preflight_mode(&self, change: &Change, previous: &Config, desired: &Config, mode: super::ApplyMode) -> Result<()> {
-        if self.runner.is_test_mode() { self.preflight(change,previous,desired).await }
-        else { self.native_preflight(change,previous,desired,mode).await }
+    async fn preflight_mode(
+        &self,
+        change: &Change,
+        previous: &Config,
+        desired: &Config,
+        mode: super::ApplyMode,
+    ) -> Result<()> {
+        if self.runner.is_test_mode() {
+            self.preflight(change, previous, desired).await
+        } else {
+            self.native_preflight(change, previous, desired, mode).await
+        }
     }
-    async fn apply_mode(&self, change: &Change, previous: &Config, desired: &Config, mode: super::ApplyMode) -> Result<()> {
-        if self.runner.is_test_mode() { self.apply(change,previous,desired).await }
-        else { self.native_apply(change,previous,desired,mode).await }
+    async fn apply_mode(
+        &self,
+        change: &Change,
+        previous: &Config,
+        desired: &Config,
+        mode: super::ApplyMode,
+    ) -> Result<()> {
+        if self.runner.is_test_mode() {
+            self.apply(change, previous, desired).await
+        } else {
+            self.native_apply(change, previous, desired, mode).await
+        }
     }
     async fn preflight(&self, change: &Change, previous: &Config, desired: &Config) -> Result<()> {
         if !self.runner.is_test_mode() {
-            return self.native_preflight(change,previous,desired,super::ApplyMode::Now).await;
+            return self
+                .native_preflight(change, previous, desired, super::ApplyMode::Now)
+                .await;
         }
         let definitions = self.definitions(change, previous, desired)?;
         let id = change.resource.trim_start_matches("service/");
@@ -496,7 +704,9 @@ impl ApplyProvider for ComposeProvider {
 
     async fn apply(&self, change: &Change, previous: &Config, desired: &Config) -> Result<()> {
         if !self.runner.is_test_mode() {
-            return self.native_apply(change,previous,desired,super::ApplyMode::Now).await;
+            return self
+                .native_apply(change, previous, desired, super::ApplyMode::Now)
+                .await;
         }
         self.preflight(change, previous, desired).await?;
         let definitions = self.definitions(change, previous, desired)?;
@@ -526,9 +736,18 @@ impl ApplyProvider for ComposeProvider {
 }
 
 impl RecoveryProvider for ComposeProvider {
-    async fn observe_mode(&self, change: &Change, previous: &Config, desired: &Config, mode: super::ApplyMode) -> Result<ObservedResource> {
-        if self.runner.is_test_mode() { self.observe(change,previous,desired).await }
-        else { self.native_observe(change,previous,desired,mode).await }
+    async fn observe_mode(
+        &self,
+        change: &Change,
+        previous: &Config,
+        desired: &Config,
+        mode: super::ApplyMode,
+    ) -> Result<ObservedResource> {
+        if self.runner.is_test_mode() {
+            self.observe(change, previous, desired).await
+        } else {
+            self.native_observe(change, previous, desired, mode).await
+        }
     }
     async fn observe(
         &self,
@@ -537,7 +756,9 @@ impl RecoveryProvider for ComposeProvider {
         desired: &Config,
     ) -> Result<ObservedResource> {
         if !self.runner.is_test_mode() {
-            return self.native_observe(change,previous,desired,super::ApplyMode::Now).await;
+            return self
+                .native_observe(change, previous, desired, super::ApplyMode::Now)
+                .await;
         }
         let definitions = self.definitions(change, previous, desired)?;
         let id = change.resource.trim_start_matches("service/");
@@ -637,7 +858,8 @@ mod tests {
 
     #[test]
     fn reference_podman_options_and_restart_policy() {
-        let mut config=super::super::parse(br#"version: 1
+        let mut config = super::super::parse(
+            br#"version: 1
 storage:
   data: {path: volumes/data}
 services:
@@ -655,21 +877,23 @@ services:
         cap_add: ["NET_ADMIN"]
         security_opt: ["no-new-privileges:false"]
         mounts: [{storage: data, target: /data, selinux: private, chown: true}]
-"#).unwrap();
-        let text=render_compose(&config,"demo",&"a".repeat(64),Path::new("/storage")).unwrap();
-        let value:serde_yaml::Value=serde_yaml::from_str(&text).unwrap();
-        let app=&value["services"]["app"];
-        assert_eq!(value["x-podman"]["in_pod"],false);
-        assert_eq!(app["restart"],"no");
-        assert_eq!(app["x-podman.uidmaps"][0],"0:1000:1");
-        assert_eq!(app["cap_add"][0],"NET_ADMIN");
-        assert_eq!(app["volumes"][0],"/storage/volumes/data:/data:rw,U,Z");
-        config.services.get_mut("demo").unwrap().engine="docker".into();
-        assert!(render_compose(&config,"demo",&"a".repeat(64),Path::new("/storage")).is_err());
-        let service=config.services.get_mut("demo").unwrap();
-        service.engine="podman".into();
-        service.containers.get_mut("app").unwrap().restart="unless-stopped".into();
-        assert!(render_compose(&config,"demo",&"a".repeat(64),Path::new("/storage")).is_err());
+"#,
+        )
+        .unwrap();
+        let text = render_compose(&config, "demo", &"a".repeat(64), Path::new("/storage")).unwrap();
+        let value: serde_yaml::Value = serde_yaml::from_str(&text).unwrap();
+        let app = &value["services"]["app"];
+        assert_eq!(value["x-podman"]["in_pod"], false);
+        assert_eq!(app["restart"], "no");
+        assert_eq!(app["x-podman.uidmaps"][0], "0:1000:1");
+        assert_eq!(app["cap_add"][0], "NET_ADMIN");
+        assert_eq!(app["volumes"][0], "/storage/volumes/data:/data:rw,U,Z");
+        config.services.get_mut("demo").unwrap().engine = "docker".into();
+        assert!(render_compose(&config, "demo", &"a".repeat(64), Path::new("/storage")).is_err());
+        let service = config.services.get_mut("demo").unwrap();
+        service.engine = "podman".into();
+        service.containers.get_mut("app").unwrap().restart = "unless-stopped".into();
+        assert!(render_compose(&config, "demo", &"a".repeat(64), Path::new("/storage")).is_err());
     }
 
     #[test]

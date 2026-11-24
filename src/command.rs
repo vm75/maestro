@@ -181,12 +181,14 @@ impl CommandRunner {
         tail: bool,
         environment: &[(&str, &str)],
     ) -> Result<CapturedOutput> {
-        self.capture_scoped(program,args,deadline,limit,tail,environment,None,&[]).await
+        self.capture_scoped(program, args, deadline, limit, tail, environment, None, &[])
+            .await
     }
 
     /// Fixed working directory and environment for local native adapters.
     /// A zero tail limit drains without retaining potentially private output.
     #[cfg(feature = "linux")]
+    #[allow(clippy::too_many_arguments)] // Keep native execution constraints explicit.
     pub(crate) async fn capture_scoped(
         &self,
         program: &Path,
@@ -198,46 +200,83 @@ impl CommandRunner {
         directory: Option<&Path>,
         remove_environment: &[&str],
     ) -> Result<CapturedOutput> {
-        self.capture_scoped_input(program,args,deadline,limit,tail,environment,directory,remove_environment,None).await
+        self.capture_scoped_input(
+            program,
+            args,
+            deadline,
+            limit,
+            tail,
+            environment,
+            directory,
+            remove_environment,
+            None,
+        )
+        .await
     }
 
     /// Native definition payloads are sent on stdin, never in argv or logs.
     #[cfg(feature = "linux")]
+    #[allow(clippy::too_many_arguments)] // Adds stdin to the same scoped execution contract.
     pub(crate) async fn capture_scoped_input(
-        &self, program: &Path, args: &[&str], deadline: Duration, limit: usize,
-        tail: bool, environment: &[(&str, &str)], directory: Option<&Path>,
-        remove_environment: &[&str], input: Option<&[u8]>,
+        &self,
+        program: &Path,
+        args: &[&str],
+        deadline: Duration,
+        limit: usize,
+        tail: bool,
+        environment: &[(&str, &str)],
+        directory: Option<&Path>,
+        remove_environment: &[&str],
+        input: Option<&[u8]>,
     ) -> Result<CapturedOutput> {
         use std::collections::VecDeque;
-        use tokio::io::{AsyncReadExt,AsyncWriteExt};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         if self.test_mode {
             bail!("command capture is unavailable in simulation");
         }
         let mut command = Command::new(program);
-        for key in remove_environment { command.env_remove(key); }
-        if let Some(directory) = directory { command.current_dir(directory); }
+        for key in remove_environment {
+            command.env_remove(key);
+        }
+        if let Some(directory) = directory {
+            command.current_dir(directory);
+        }
         command
             .args(args)
             .env("LC_ALL", "C")
             .envs(environment.iter().copied())
-            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         #[cfg(unix)]
-        if !environment.is_empty() || directory.is_some() || !remove_environment.is_empty() || input.is_some() {
+        if !environment.is_empty()
+            || directory.is_some()
+            || !remove_environment.is_empty()
+            || input.is_some()
+        {
             command.process_group(0);
         }
         let mut child = command
             .spawn()
             .with_context(|| format!("failed to start {}", program.display()))?;
         #[cfg(unix)]
-        let mut group_guard = ProcessGroupGuard(if environment.is_empty() && directory.is_none() && remove_environment.is_empty() && input.is_none() {
-            None
-        } else {
-            child.id()
-        });
+        let mut group_guard = ProcessGroupGuard(
+            if environment.is_empty()
+                && directory.is_none()
+                && remove_environment.is_empty()
+                && input.is_none()
+            {
+                None
+            } else {
+                child.id()
+            },
+        );
         let stdin = child.stdin.take();
         let mut stdout = child.stdout.take().context("missing command stdout")?;
         let mut stderr = child.stderr.take().context("missing command stderr")?;
@@ -280,7 +319,8 @@ impl CommandRunner {
                 }
                 Ok::<(), anyhow::Error>(())
             };
-            let ((stdout, truncated), had_stderr, ()) = tokio::try_join!(read_stdout, read_stderr, write_stdin)?;
+            let ((stdout, truncated), had_stderr, ()) =
+                tokio::try_join!(read_stdout, read_stderr, write_stdin)?;
             Ok(CapturedOutput {
                 stdout,
                 truncated,
@@ -301,26 +341,47 @@ impl CommandRunner {
     /// No native stderr or private output is returned to the caller.
     #[cfg(feature = "linux")]
     pub(crate) async fn stream_backup(
-        &self, program: &Path, args: &[&str], destination: std::fs::File,
-        deadline: Duration, max_bytes: u64,
+        &self,
+        program: &Path,
+        args: &[&str],
+        destination: std::fs::File,
+        deadline: Duration,
+        max_bytes: u64,
     ) -> Result<u64> {
         use tokio::io::AsyncReadExt;
-        anyhow::ensure!(!self.test_mode && program.is_absolute(), "native export unavailable");
+        anyhow::ensure!(
+            !self.test_mode && program.is_absolute(),
+            "native export unavailable"
+        );
         let mut command = Command::new(program);
-        command.args(args).env("LC_ALL","C").stdin(Stdio::null())
-            .stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+        command
+            .args(args)
+            .env("LC_ALL", "C")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
         command.process_group(0);
         let mut child = command.spawn()?;
         let mut group = ProcessGroupGuard(child.id());
-        let mut stdout = child.stdout.take().context("missing export stdout")?.take(max_bytes.saturating_add(1));
+        let mut stdout = child
+            .stdout
+            .take()
+            .context("missing export stdout")?
+            .take(max_bytes.saturating_add(1));
         let mut file = tokio::fs::File::from_std(destination);
         let result = timeout(deadline, async {
             let bytes = tokio::io::copy(&mut stdout, &mut file).await?;
-            anyhow::ensure!(bytes <= max_bytes, "native export exceeded available capture budget");
+            anyhow::ensure!(
+                bytes <= max_bytes,
+                "native export exceeded available capture budget"
+            );
             anyhow::ensure!(child.wait().await?.success(), "native export failed");
             file.sync_all().await?;
-            Ok::<_,anyhow::Error>(bytes)
-        }).await.context("native export timed out")??;
+            Ok::<_, anyhow::Error>(bytes)
+        })
+        .await
+        .context("native export timed out")??;
         group.0 = None;
         Ok(result)
     }

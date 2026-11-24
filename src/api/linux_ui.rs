@@ -41,7 +41,10 @@ mod tests {
             let entry = entry.unwrap();
             let path = entry.path();
             if entry.file_type().unwrap().is_file()
-                && matches!(path.extension().and_then(|ext| ext.to_str()), Some("js" | "css"))
+                && matches!(
+                    path.extension().and_then(|ext| ext.to_str()),
+                    Some("js" | "css")
+                )
             {
                 let name = entry.file_name();
                 let (_, embedded) = embedded_asset(name.to_str().unwrap()).unwrap();

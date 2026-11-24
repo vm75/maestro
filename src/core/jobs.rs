@@ -181,7 +181,10 @@ impl Jobs {
 
     #[cfg(test)]
     fn cancel(&self, id: Uuid) -> bool {
-        matches!(self.request_cancel(id), CancelRequest::Requested | CancelRequest::Finished)
+        matches!(
+            self.request_cancel(id),
+            CancelRequest::Requested | CancelRequest::Finished
+        )
     }
 }
 
@@ -190,7 +193,10 @@ impl RunningJob {
     /// False means cancellation won the race; the caller must finish Cancelled.
     pub fn begin_mutation(&self) -> bool {
         let mut entries = self.jobs.entries.lock();
-        let Some(entry) = entries.iter_mut().find(|entry| entry.job.id == self.id && entry.job.state == JobState::Running) else {
+        let Some(entry) = entries
+            .iter_mut()
+            .find(|entry| entry.job.id == self.id && entry.job.state == JobState::Running)
+        else {
             return false;
         };
         if entry.job.cancellation_requested {

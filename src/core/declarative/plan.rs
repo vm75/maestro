@@ -200,7 +200,7 @@ fn resources(config: &Config) -> Result<Vec<Resource>> {
         }
         if let Some(vm) = &service.vm {
             for mount in &vm.mounts {
-                storage.insert(&mount.storage,&config.storage[&mount.storage]);
+                storage.insert(&mount.storage, &config.storage[&mount.storage]);
             }
             for disk in &vm.disks {
                 storage.insert(disk, &config.storage[disk]);
@@ -336,6 +336,7 @@ services:
     #[test]
     fn storage_reference_only_review_has_no_native_creation() {
         let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let store = Store::new(temp.path().to_path_buf());
         let yaml = b"version: 1\nstorage:\n  data: {path: data, kind: directory}\n";
         let plan = store.preview(yaml, MISSING_REVISION).unwrap();

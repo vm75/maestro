@@ -18,7 +18,9 @@ pub(super) const MARKER: &str = ".maestro-storage.json";
 #[derive(Debug)]
 pub struct ProvisionCancelled;
 impl std::fmt::Display for ProvisionCancelled {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("operation cancelled before publication") }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("operation cancelled before publication")
+    }
 }
 impl std::error::Error for ProvisionCancelled {}
 
@@ -290,97 +292,189 @@ impl StorageProvider {
     ) -> Result<PreparedProvision> {
         use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
         use std::path::Path;
-        ensure!(super::id_valid(id) && store::valid_revision(revision), "invalid storage or revision");
-        ensure!(store.pending_apply()?.is_none(), "recover the pending apply before provisioning");
-        let snapshot = store.read()?.ok_or_else(|| anyhow!("configuration is unavailable"))?;
-        ensure!(snapshot.revision == revision, "configuration changed; review again");
+        ensure!(
+            super::id_valid(id) && store::valid_revision(revision),
+            "invalid storage or revision"
+        );
+        ensure!(
+            store.pending_apply()?.is_none(),
+            "recover the pending apply before provisioning"
+        );
+        let snapshot = store
+            .read()?
+            .ok_or_else(|| anyhow!("configuration is unavailable"))?;
+        ensure!(
+            snapshot.revision == revision,
+            "configuration changed; review again"
+        );
         let config = snapshot.config()?;
-        let storage = config.storage.get(id).ok_or_else(|| anyhow!("unknown storage reference"))?;
-        ensure!(!storage.external && super::path_valid(&storage.path, false) && storage.path != ".",
-            "new data requires an owned relative storage path");
-        let kind = if storage.kind.is_empty() { "directory" } else { storage.kind.as_str() };
+        let storage = config
+            .storage
+            .get(id)
+            .ok_or_else(|| anyhow!("unknown storage reference"))?;
+        ensure!(
+            !storage.external && super::path_valid(&storage.path, false) && storage.path != ".",
+            "new data requires an owned relative storage path"
+        );
+        let kind = if storage.kind.is_empty() {
+            "directory"
+        } else {
+            storage.kind.as_str()
+        };
         ensure!(
             (kind == "directory" && size_gib == 0)
-                || (kind == "file" && (1..=4096).contains(&size_gib)
+                || (kind == "file"
+                    && (1..=4096).contains(&size_gib)
                     && matches!(storage.format.as_str(), "raw" | "qcow2")),
             "directory size must be zero; disks require raw/qcow2 and 1–4096 GiB"
         );
-        ensure!(storage.source.is_none() || kind == "file", "only disks may have an initial image");
+        ensure!(
+            storage.source.is_none() || kind == "file",
+            "only disks may have an initial image"
+        );
         if storage.format == "qcow2" || storage.source.is_some() {
-            ensure!(!state.runner.is_test_mode() && qemu_img().is_some(),
-                "native qemu-img is required for qcow2 or source image provisioning");
+            ensure!(
+                !state.runner.is_test_mode() && qemu_img().is_some(),
+                "native qemu-img is required for qcow2 or source image provisioning"
+            );
         }
         let relative = Path::new(&storage.path);
         let destination = self.base_dir.join(relative);
         let authority = store.path();
-        let authority_root = authority.parent().ok_or_else(|| anyhow!("invalid authority path"))?;
-        let overlaps = |left: &Path, right: &Path| left.starts_with(right) || right.starts_with(left);
-        ensure!(!overlaps(&destination, &authority), "storage overlaps private configuration");
-        ensure!(relative.components().all(|part| {
-            let name = part.as_os_str().to_string_lossy();
-            !name.starts_with(".maestro") && !name.starts_with(".workload-")
-                && !name.starts_with(".maestro-")
-        }), "storage overlaps reserved generated state");
+        let authority_root = authority
+            .parent()
+            .ok_or_else(|| anyhow!("invalid authority path"))?;
+        let overlaps =
+            |left: &Path, right: &Path| left.starts_with(right) || right.starts_with(left);
+        ensure!(
+            !overlaps(&destination, &authority),
+            "storage overlaps private configuration"
+        );
+        ensure!(
+            relative.components().all(|part| {
+                let name = part.as_os_str().to_string_lossy();
+                !name.starts_with(".maestro")
+                    && !name.starts_with(".workload-")
+                    && !name.starts_with(".maestro-")
+            }),
+            "storage overlaps reserved generated state"
+        );
         for secret in config.secrets.values() {
-            ensure!(!overlaps(&destination, &authority_root.join(secret)),
-                "storage overlaps a private-file reference");
+            ensure!(
+                !overlaps(&destination, &authority_root.join(secret)),
+                "storage overlaps a private-file reference"
+            );
         }
         for (other_id, other) in &config.storage {
             if other_id != id {
-                let other_path = if other.external { PathBuf::from(&other.path) } else { self.base_dir.join(&other.path) };
-                ensure!(!overlaps(&destination, &other_path), "storage overlaps another declared data path");
+                let other_path = if other.external {
+                    PathBuf::from(&other.path)
+                } else {
+                    self.base_dir.join(&other.path)
+                };
+                ensure!(
+                    !overlaps(&destination, &other_path),
+                    "storage overlaps another declared data path"
+                );
             }
             if let Some(source) = &other.source {
-                ensure!(!overlaps(&destination, &authority_root.join(&source.path)),
-                    "storage overlaps an initial image asset");
+                ensure!(
+                    !overlaps(&destination, &authority_root.join(&source.path)),
+                    "storage overlaps an initial image asset"
+                );
             }
         }
 
-        let parent_path = relative.parent().ok_or_else(|| anyhow!("invalid storage parent"))?;
-        let mut parent = self.base(false)?.ok_or_else(|| anyhow!("storage root must already exist"))?;
+        let parent_path = relative
+            .parent()
+            .ok_or_else(|| anyhow!("invalid storage parent"))?;
+        let mut parent = self
+            .base(false)?
+            .ok_or_else(|| anyhow!("storage root must already exist"))?;
         for part in parent_path.components() {
-            let name = part.as_os_str().to_str().ok_or_else(|| anyhow!("invalid parent name"))?;
-            parent = store::open_child_directory(&parent, name)
-                .map_err(|_| anyhow!("every parent must already be an owner-only real directory"))?;
+            let name = part
+                .as_os_str()
+                .to_str()
+                .ok_or_else(|| anyhow!("invalid parent name"))?;
+            parent = store::open_child_directory(&parent, name).map_err(|_| {
+                anyhow!("every parent must already be an owner-only real directory")
+            })?;
         }
-        let name = relative.file_name().and_then(|name| name.to_str())
-            .ok_or_else(|| anyhow!("invalid storage filename"))?.to_owned();
+        let name = relative
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| anyhow!("invalid storage filename"))?
+            .to_owned();
         ensure!(
-            matches!(fs::statat(&parent, &name, fs::AtFlags::SYMLINK_NOFOLLOW), Err(Errno::NOENT)),
+            matches!(
+                fs::statat(&parent, &name, fs::AtFlags::SYMLINK_NOFOLLOW),
+                Err(Errno::NOENT)
+            ),
             "storage path already exists or cannot be verified; existing data is never replaced"
         );
         let info = parent.metadata()?;
         let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
         // SAFETY: fstatvfs initializes the supplied structure on success.
-        ensure!(unsafe { libc::fstatvfs(parent.as_raw_fd(), stat.as_mut_ptr()) } == 0,
-            "storage parent filesystem is unavailable");
+        ensure!(
+            unsafe { libc::fstatvfs(parent.as_raw_fd(), stat.as_mut_ptr()) } == 0,
+            "storage parent filesystem is unavailable"
+        );
         let stat = unsafe { stat.assume_init() };
-        ensure!(stat.f_flag & libc::ST_RDONLY == 0, "storage parent filesystem is read-only");
+        ensure!(
+            stat.f_flag & libc::ST_RDONLY == 0,
+            "storage parent filesystem is read-only"
+        );
         let available_bytes = stat.f_bavail.saturating_mul(stat.f_frsize);
-        ensure!(available_bytes >= 16 * 1024 * 1024, "storage parent requires at least 16 MiB free");
+        ensure!(
+            available_bytes >= 16 * 1024 * 1024,
+            "storage parent requires at least 16 MiB free"
+        );
         if !storage.mount.is_empty() {
-            ensure!(super::preflight::expected_mount(
-                &self.base_dir.join(parent_path), &storage.mount, state.config.paths.proc_stat.parent(),
-            ), "expected filesystem is not mounted; refusing replacement data");
+            ensure!(
+                super::preflight::expected_mount(
+                    &self.base_dir.join(parent_path),
+                    &storage.mount,
+                    state.config.paths.proc_stat.parent(),
+                ),
+                "expected filesystem is not mounted; refusing replacement data"
+            );
         }
 
         let mut consumers = Vec::new();
         for (service_id, service) in &config.services {
-            let uses_storage = service.containers.values().any(|container| {
-                container.mounts.iter().any(|mount| mount.storage == id)
-            }) || service.vm.as_ref().is_some_and(|vm| vm.disks.iter().any(|disk| disk == id)||vm.mounts.iter().any(|mount|mount.storage==id));
-            if !uses_storage { continue; }
+            let uses_storage = service
+                .containers
+                .values()
+                .any(|container| container.mounts.iter().any(|mount| mount.storage == id))
+                || service.vm.as_ref().is_some_and(|vm| {
+                    vm.disks.iter().any(|disk| disk == id)
+                        || vm.mounts.iter().any(|mount| mount.storage == id)
+                });
+            if !uses_storage {
+                continue;
+            }
             consumers.push(format!("service/{service_id}"));
-            providers.verify_storage_consumer_stopped(&config, service_id).await?;
+            providers
+                .verify_storage_consumer_stopped(&config, service_id)
+                .await?;
         }
         for (share_id, share) in &config.shares {
-            if share.storage != id { continue; }
+            if share.storage != id {
+                continue;
+            }
             consumers.push(format!("share/{share_id}"));
-            providers.shares.verify_unpublished(&config, share_id).await?;
+            providers
+                .shares
+                .verify_unpublished(&config, share_id)
+                .await?;
         }
         consumers.sort();
         let uid = unsafe { libc::geteuid() };
-        let gid = if info.mode() & 0o2000 != 0 { info.gid() } else { unsafe { libc::getegid() } };
+        let gid = if info.mode() & 0o2000 != 0 {
+            info.gid()
+        } else {
+            unsafe { libc::getegid() }
+        };
         let marker = if managed_directory(storage) {
             let bytes = serde_json::to_vec(&serde_json::json!({
                 "key":format!("storage/{id}"),"definition":storage,
@@ -389,24 +483,52 @@ impl StorageProvider {
                 resource: format!("storage/{id}"),
                 fingerprint: super::revision(&bytes),
             })
-        } else { None };
+        } else {
+            None
+        };
         let source = match &storage.source {
-            Some(source) => Some(SourceImage::inspect(state, authority_root, source, size_gib << 30).await?),
+            Some(source) => {
+                Some(SourceImage::inspect(state, authority_root, source, size_gib << 30).await?)
+            }
             None => None,
         };
         let token = super::revision(&serde_json::to_vec(&serde_json::json!([
-            revision,id,destination,kind,storage.format,size_gib,info.dev(),info.ino(),
-            storage.mount,uid,gid,consumers,storage.source,source.as_ref().map(|image| &image.identity),
+            revision,
+            id,
+            destination,
+            kind,
+            storage.format,
+            size_gib,
+            info.dev(),
+            info.ino(),
+            storage.mount,
+            uid,
+            gid,
+            consumers,
+            storage.source,
+            source.as_ref().map(|image| &image.identity),
         ]))?);
         Ok(PreparedProvision {
             plan: ProvisionPlan {
-                storage: id.into(), revision: revision.into(), path: destination,
-                kind: kind.into(), format: storage.format.clone(), size_gib, available_bytes,
-                uid, gid, mode: if kind == "directory" { "0700" } else { "0600" },
-                consumers, review_token: token,
-                source: storage.source.clone(), source_virtual_bytes: source.as_ref().map(|image| image.virtual_bytes),
+                storage: id.into(),
+                revision: revision.into(),
+                path: destination,
+                kind: kind.into(),
+                format: storage.format.clone(),
+                size_gib,
+                available_bytes,
+                uid,
+                gid,
+                mode: if kind == "directory" { "0700" } else { "0600" },
+                consumers,
+                review_token: token,
+                source: storage.source.clone(),
+                source_virtual_bytes: source.as_ref().map(|image| image.virtual_bytes),
             },
-            parent, name, marker, source,
+            parent,
+            name,
+            marker,
+            source,
         })
     }
 
@@ -419,7 +541,10 @@ impl StorageProvider {
         revision: &str,
         size_gib: u64,
     ) -> Result<ProvisionPlan> {
-        Ok(self.prepare_provision(state, store, providers, id, revision, size_gib).await?.plan)
+        Ok(self
+            .prepare_provision(state, store, providers, id, revision, size_gib)
+            .await?
+            .plan)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -439,30 +564,48 @@ impl StorageProvider {
         let authority = tokio::task::spawn_blocking(move || lock_store.lock_directory()).await??;
         super::journal::ensure_idle(&authority)?;
         crate::core::linux_config::mutation_ready(&state.config, store)?;
-        let prepared = self.prepare_provision(state, store, providers, id, revision, size_gib).await?;
-        ensure!(prepared.plan.review_token == token, "provisioning conditions changed; review again");
+        let prepared = self
+            .prepare_provision(state, store, providers, id, revision, size_gib)
+            .await?;
+        ensure!(
+            prepared.plan.review_token == token,
+            "provisioning conditions changed; review again"
+        );
         let parent = &prepared.parent;
         let temp = format!(".maestro-new-storage-{}", uuid::Uuid::new_v4().simple());
         let directory = prepared.plan.kind == "directory";
-        if *cancellation.borrow() { return Err(ProvisionCancelled.into()); }
+        if *cancellation.borrow() {
+            return Err(ProvisionCancelled.into());
+        }
         let staged = if directory {
             fs::mkdirat(parent, &temp, fs::Mode::from_bits_truncate(0o700))?;
             match store::open_child_directory(parent, &temp) {
                 Ok(staged) => staged,
                 Err(error) => {
                     // Do not remove a directory whose identity could not be verified.
-                    return Err(error.context("staging directory could not be verified; inspect storage parent"));
+                    return Err(error.context(
+                        "staging directory could not be verified; inspect storage parent",
+                    ));
                 }
             }
         } else {
-            let descriptor = fs::openat(parent, &temp,
-                fs::OFlags::RDWR | fs::OFlags::CREATE | fs::OFlags::EXCL | fs::OFlags::NOFOLLOW | fs::OFlags::CLOEXEC,
-                fs::Mode::from_bits_truncate(0o600))?;
+            let descriptor = fs::openat(
+                parent,
+                &temp,
+                fs::OFlags::RDWR
+                    | fs::OFlags::CREATE
+                    | fs::OFlags::EXCL
+                    | fs::OFlags::NOFOLLOW
+                    | fs::OFlags::CLOEXEC,
+                fs::Mode::from_bits_truncate(0o600),
+            )?;
             File::from(descriptor)
         };
         let identity = staged.metadata()?;
-        let same_staging = || fs::statat(parent, &temp, fs::AtFlags::SYMLINK_NOFOLLOW)
-            .is_ok_and(|info| info.st_dev == identity.dev() && info.st_ino == identity.ino());
+        let same_staging = || {
+            fs::statat(parent, &temp, fs::AtFlags::SYMLINK_NOFOLLOW)
+                .is_ok_and(|info| info.st_dev == identity.dev() && info.st_ino == identity.ino())
+        };
         let result = async {
             if directory {
                 if let Some(marker) = &prepared.marker {
@@ -474,42 +617,122 @@ impl StorageProvider {
                 if prepared.plan.format == "raw" {
                     staged.set_len(bytes)?;
                 } else {
-                    let program = qemu_img().ok_or_else(|| anyhow!("native qemu-img disappeared"))?;
+                    let program =
+                        qemu_img().ok_or_else(|| anyhow!("native qemu-img disappeared"))?;
                     let path = format!("/proc/{}/fd/{}", std::process::id(), staged.as_raw_fd());
                     let size = format!("{size_gib}G");
-                    state.runner.capture_bounded(&program, &["create", "-f", "qcow2", "-o", "preallocation=off", &path, &size],
-                        std::time::Duration::from_secs(120), 64 * 1024).await?;
-                    let metadata = state.runner.capture_bounded(&program, &["info", "--output=json", "-f", "qcow2", &path],
-                        std::time::Duration::from_secs(30), 64 * 1024).await?;
+                    state
+                        .runner
+                        .capture_bounded(
+                            &program,
+                            &[
+                                "create",
+                                "-f",
+                                "qcow2",
+                                "-o",
+                                "preallocation=off",
+                                &path,
+                                &size,
+                            ],
+                            std::time::Duration::from_secs(120),
+                            64 * 1024,
+                        )
+                        .await?;
+                    let metadata = state
+                        .runner
+                        .capture_bounded(
+                            &program,
+                            &["info", "--output=json", "-f", "qcow2", &path],
+                            std::time::Duration::from_secs(30),
+                            64 * 1024,
+                        )
+                        .await?;
                     let image: serde_json::Value = serde_json::from_slice(&metadata)?;
-                    ensure!(image["format"] == "qcow2" && image["virtual-size"].as_u64() == Some(bytes)
-                        && image.get("backing-filename").is_none(), "new qcow2 disk verification failed");
+                    ensure!(
+                        image["format"] == "qcow2"
+                            && image["virtual-size"].as_u64() == Some(bytes)
+                            && image.get("backing-filename").is_none(),
+                        "new qcow2 disk verification failed"
+                    );
                 }
                 if let Some(source) = &prepared.source {
-                    let definition = prepared.plan.source.as_ref().ok_or_else(|| anyhow!("source definition missing"))?;
-                    source.verify_checksum(&definition.sha256, cancellation).await?;
-                    if *cancellation.borrow() { return Err(ProvisionCancelled.into()); }
-                    let program = qemu_img().ok_or_else(|| anyhow!("native qemu-img disappeared"))?;
+                    let definition = prepared
+                        .plan
+                        .source
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("source definition missing"))?;
+                    source
+                        .verify_checksum(&definition.sha256, cancellation)
+                        .await?;
+                    if *cancellation.borrow() {
+                        return Err(ProvisionCancelled.into());
+                    }
+                    let program =
+                        qemu_img().ok_or_else(|| anyhow!("native qemu-img disappeared"))?;
                     let input = descriptor_path(&source.file);
                     let output = descriptor_path(&staged);
-                    state.runner.capture_bounded(&program, &["convert", "-n", "-f", &definition.format, "-O", &prepared.plan.format, &input, &output],
-                        std::time::Duration::from_secs(1200), 64 * 1024).await?;
-                    source.verify_checksum(&definition.sha256, cancellation).await?;
-                    ensure!(inspect_image(state, &staged, &prepared.plan.format).await? == bytes,
-                        "converted disk size verification failed");
+                    state
+                        .runner
+                        .capture_bounded(
+                            &program,
+                            &[
+                                "convert",
+                                "-n",
+                                "-f",
+                                &definition.format,
+                                "-O",
+                                &prepared.plan.format,
+                                &input,
+                                &output,
+                            ],
+                            std::time::Duration::from_secs(1200),
+                            64 * 1024,
+                        )
+                        .await?;
+                    source
+                        .verify_checksum(&definition.sha256, cancellation)
+                        .await?;
+                    ensure!(
+                        inspect_image(state, &staged, &prepared.plan.format).await? == bytes,
+                        "converted disk size verification failed"
+                    );
                 }
                 staged.sync_all()?;
             }
-            let latest = self.prepare_provision(state, store, providers, id, revision, size_gib).await?;
-            ensure!(latest.plan.review_token == token, "provisioning conditions changed; review again");
-            ensure!(store::current(&authority, &store.filename)?.is_some_and(|snapshot| snapshot.revision == revision),
-                "configuration changed; review again");
-            if *cancellation.borrow() { return Err(ProvisionCancelled.into()); }
-            ensure!(same_staging(), "staging identity changed; refusing publication");
-            fs::renameat_with(parent, &temp, parent, &prepared.name, fs::RenameFlags::NOREPLACE)?;
-            parent.sync_all().map_err(|_| anyhow!("data was published but parent sync failed; inspect destination before retrying"))?;
+            let latest = self
+                .prepare_provision(state, store, providers, id, revision, size_gib)
+                .await?;
+            ensure!(
+                latest.plan.review_token == token,
+                "provisioning conditions changed; review again"
+            );
+            ensure!(
+                store::current(&authority, &store.filename)?
+                    .is_some_and(|snapshot| snapshot.revision == revision),
+                "configuration changed; review again"
+            );
+            if *cancellation.borrow() {
+                return Err(ProvisionCancelled.into());
+            }
+            ensure!(
+                same_staging(),
+                "staging identity changed; refusing publication"
+            );
+            fs::renameat_with(
+                parent,
+                &temp,
+                parent,
+                &prepared.name,
+                fs::RenameFlags::NOREPLACE,
+            )?;
+            parent.sync_all().map_err(|_| {
+                anyhow!(
+                    "data was published but parent sync failed; inspect destination before retrying"
+                )
+            })?;
             Ok::<_, anyhow::Error>(())
-        }.await;
+        }
+        .await;
         if result.is_err() && same_staging() {
             if directory {
                 if prepared.marker.is_some() {
@@ -540,20 +763,27 @@ fn descriptor_path(file: &File) -> String {
 
 pub(super) fn check_image_header(file: &File, format: &str) -> Result<()> {
     use std::os::unix::fs::FileExt;
-    if format == "raw" { return Ok(()); }
+    if format == "raw" {
+        return Ok(());
+    }
     ensure!(format == "qcow2", "unsupported disk image format");
     let mut header = [0u8; 104];
     file.read_exact_at(&mut header[..72], 0)?;
     let version = u32::from_be_bytes(header[4..8].try_into()?);
-    ensure!(header[..4] == [0x51, 0x46, 0x49, 0xfb] && matches!(version, 2 | 3),
-        "unsupported qcow2 header");
-    ensure!(header[8..20].iter().all(|byte| *byte == 0)
-        && header[32..36].iter().all(|byte| *byte == 0),
-        "backed or encrypted qcow2 images are not supported");
+    ensure!(
+        header[..4] == [0x51, 0x46, 0x49, 0xfb] && matches!(version, 2 | 3),
+        "unsupported qcow2 header"
+    );
+    ensure!(
+        header[8..20].iter().all(|byte| *byte == 0) && header[32..36].iter().all(|byte| *byte == 0),
+        "backed or encrypted qcow2 images are not supported"
+    );
     if version == 3 {
         file.read_exact_at(&mut header[72..], 72)?;
-        ensure!(header[72..80].iter().all(|byte| *byte == 0),
-            "qcow2 incompatible features, including external data files, are not supported");
+        ensure!(
+            header[72..80].iter().all(|byte| *byte == 0),
+            "qcow2 incompatible features, including external data files, are not supported"
+        );
     }
     Ok(())
 }
@@ -562,54 +792,118 @@ async fn inspect_image(state: &crate::state::AppState, file: &File, format: &str
     check_image_header(file, format)?;
     let program = qemu_img().ok_or_else(|| anyhow!("native qemu-img is unavailable"))?;
     let path = descriptor_path(file);
-    let output = state.runner.capture_bounded(&program, &["info", "--output=json", "-f", format, &path],
-        std::time::Duration::from_secs(30), 64 * 1024).await?;
+    let output = state
+        .runner
+        .capture_bounded(
+            &program,
+            &["info", "--output=json", "-f", format, &path],
+            std::time::Duration::from_secs(30),
+            64 * 1024,
+        )
+        .await?;
     let info: serde_json::Value = serde_json::from_slice(&output)?;
-    ensure!(info["format"] == format && info.get("backing-filename").is_none()
-        && info.get("full-backing-filename").is_none(),
-        "source image format or backing file verification failed");
-    let size = info["virtual-size"].as_u64().ok_or_else(|| anyhow!("image virtual size unavailable"))?;
-    ensure!((1..=MAX_IMAGE_BYTES).contains(&size), "image virtual size out of range");
+    ensure!(
+        info["format"] == format
+            && info.get("backing-filename").is_none()
+            && info.get("full-backing-filename").is_none(),
+        "source image format or backing file verification failed"
+    );
+    let size = info["virtual-size"]
+        .as_u64()
+        .ok_or_else(|| anyhow!("image virtual size unavailable"))?;
+    ensure!(
+        (1..=MAX_IMAGE_BYTES).contains(&size),
+        "image virtual size out of range"
+    );
     Ok(size)
 }
 
 impl SourceImage {
-    async fn inspect(state: &crate::state::AppState, root: &std::path::Path,
-        source: &super::model::DiskSource, capacity: u64) -> Result<Self> {
+    async fn inspect(
+        state: &crate::state::AppState,
+        root: &std::path::Path,
+        source: &super::model::DiskSource,
+        capacity: u64,
+    ) -> Result<Self> {
         use std::{os::unix::fs::MetadataExt, path::Path};
-        ensure!(super::path_valid(&source.path, false) && source.path != ".",
-            "source image must be a relative asset");
-        ensure!(matches!(source.format.as_str(), "raw" | "qcow2")
-            && store::valid_revision(&source.sha256), "invalid image format or checksum");
+        ensure!(
+            super::path_valid(&source.path, false) && source.path != ".",
+            "source image must be a relative asset"
+        );
+        ensure!(
+            matches!(source.format.as_str(), "raw" | "qcow2")
+                && store::valid_revision(&source.sha256),
+            "invalid image format or checksum"
+        );
         let path = Path::new(&source.path);
         let mut parent = store::open_directory(root)?;
         let uid = unsafe { libc::geteuid() };
-        for part in path.parent().ok_or_else(|| anyhow!("invalid source parent"))?.components() {
+        for part in path
+            .parent()
+            .ok_or_else(|| anyhow!("invalid source parent"))?
+            .components()
+        {
             let name = part.as_os_str();
-            let fd = fs::openat(&parent, name,
-                fs::OFlags::RDONLY | fs::OFlags::DIRECTORY | fs::OFlags::NOFOLLOW | fs::OFlags::CLOEXEC,
-                fs::Mode::empty())?;
+            let fd = fs::openat(
+                &parent,
+                name,
+                fs::OFlags::RDONLY
+                    | fs::OFlags::DIRECTORY
+                    | fs::OFlags::NOFOLLOW
+                    | fs::OFlags::CLOEXEC,
+                fs::Mode::empty(),
+            )?;
             parent = File::from(fd);
             let info = parent.metadata()?;
-            ensure!((info.uid() == uid || info.uid() == 0) && info.mode() & 0o022 == 0,
-                "source directory is not owned and protected");
+            ensure!(
+                (info.uid() == uid || info.uid() == 0) && info.mode() & 0o022 == 0,
+                "source directory is not owned and protected"
+            );
         }
-        let fd = fs::openat(&parent, path.file_name().ok_or_else(|| anyhow!("invalid source name"))?,
+        let fd = fs::openat(
+            &parent,
+            path.file_name()
+                .ok_or_else(|| anyhow!("invalid source name"))?,
             fs::OFlags::RDONLY | fs::OFlags::NOFOLLOW | fs::OFlags::NONBLOCK | fs::OFlags::CLOEXEC,
-            fs::Mode::empty())?;
+            fs::Mode::empty(),
+        )?;
         let file = File::from(fd);
         let info = file.metadata()?;
-        ensure!(info.is_file() && (1..=MAX_IMAGE_BYTES).contains(&info.len())
-            && info.nlink() == 1 && (info.uid() == uid || info.uid() == 0)
-            && info.mode() & 0o022 == 0, "source must be a protected regular image file");
+        ensure!(
+            info.is_file()
+                && (1..=MAX_IMAGE_BYTES).contains(&info.len())
+                && info.nlink() == 1
+                && (info.uid() == uid || info.uid() == 0)
+                && info.mode() & 0o022 == 0,
+            "source must be a protected regular image file"
+        );
         let virtual_bytes = inspect_image(state, &file, &source.format).await?;
-        ensure!(virtual_bytes <= capacity, "source image exceeds requested disk capacity");
-        let identity = serde_json::json!([info.dev(),info.ino(),info.len(),info.mtime(),
-            info.mtime_nsec(),info.ctime(),info.ctime_nsec(),virtual_bytes]);
-        Ok(Self { file, virtual_bytes, identity })
+        ensure!(
+            virtual_bytes <= capacity,
+            "source image exceeds requested disk capacity"
+        );
+        let identity = serde_json::json!([
+            info.dev(),
+            info.ino(),
+            info.len(),
+            info.mtime(),
+            info.mtime_nsec(),
+            info.ctime(),
+            info.ctime_nsec(),
+            virtual_bytes
+        ]);
+        Ok(Self {
+            file,
+            virtual_bytes,
+            identity,
+        })
     }
 
-    async fn verify_checksum(&self, expected: &str, cancellation: &tokio::sync::watch::Receiver<bool>) -> Result<()> {
+    async fn verify_checksum(
+        &self,
+        expected: &str,
+        cancellation: &tokio::sync::watch::Receiver<bool>,
+    ) -> Result<()> {
         use sha2::{Digest, Sha256};
         use std::os::unix::fs::FileExt;
         let file = self.file.try_clone()?;
@@ -620,22 +914,35 @@ impl SourceImage {
             let mut offset = 0u64;
             let mut buffer = vec![0u8; 1024 * 1024];
             loop {
-                if *cancellation.borrow() { return Err(ProvisionCancelled.into()); }
+                if *cancellation.borrow() {
+                    return Err(ProvisionCancelled.into());
+                }
                 let read = file.read_at(&mut buffer, offset)?;
-                if read == 0 { break; }
+                if read == 0 {
+                    break;
+                }
                 offset += read as u64;
-                ensure!(offset <= MAX_IMAGE_BYTES, "source image exceeds checksum limit");
+                ensure!(
+                    offset <= MAX_IMAGE_BYTES,
+                    "source image exceeds checksum limit"
+                );
                 hash.update(&buffer[..read]);
             }
-            ensure!(format!("{:x}", hash.finalize()) == expected, "source image checksum mismatch");
+            ensure!(
+                format!("{:x}", hash.finalize()) == expected,
+                "source image checksum mismatch"
+            );
             Ok(())
-        }).await?
+        })
+        .await?
     }
 }
 
 pub(super) fn qemu_img() -> Option<PathBuf> {
     ["/usr/bin/qemu-img", "/usr/local/bin/qemu-img"]
-        .into_iter().map(PathBuf::from).find(|path| path.is_file())
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
 }
 
 #[cfg(test)]

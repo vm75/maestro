@@ -2445,10 +2445,10 @@ printf '%s\n' "boot enabled"
     );
     assert!(!audit.exists());
     let direct = serde_json::json!({"scope":"user","unit":"maestro-demo-0123456789abcdef.service"});
-    assert_eq!(
-        invoke("services_enable", direct).await.0,
-        StatusCode::FORBIDDEN
-    );
+    let (status, rejected) = invoke("services_enable", direct).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(rejected["error"]["code"], "unavailable");
+    assert!(!audit.exists());
     let args = serde_json::json!({"scope":"user","unit":"demo.service"});
     let (status, started) = invoke("services_enable", args).await;
     assert_eq!(status, StatusCode::OK);
@@ -2531,6 +2531,7 @@ printf '%s\n' 'Inst demo [1] (2 Debian [amd64])' '1 upgraded, 0 newly installed'
     config.paths.ostree_booted = temp.path().join("ostree-booted");
     state.runner = maestro::command::CommandRunner::new(false);
     let token = config.server.auth_token.clone();
+    let packages_authorized = maestro::platforms::admin::probe().await.permits_packages();
     let app = api::app(state).unwrap();
     let request = Request::builder()
         .method("POST")
@@ -2547,7 +2548,8 @@ printf '%s\n' 'Inst demo [1] (2 Debian [amd64])' '1 upgraded, 0 newly installed'
         .unwrap();
     let status: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(status["manager"]["id"], "apt");
-    assert_eq!(status["manager"]["canRefresh"], false);
+    assert_eq!(status["manager"]["canRefresh"], packages_authorized);
+    assert_eq!(status["manager"]["canInstall"], packages_authorized);
     assert_eq!(status["distribution"], "Ubuntu test");
     assert_eq!(status["valid"], true);
     assert_eq!(status["reboot"]["required"], true);
@@ -2698,15 +2700,25 @@ async fn linux_workloads_and_applications_lifecycle() {
 
     let (status, readiness) = call("managed_config_readiness", serde_json::json!({})).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(readiness, serde_json::json!({"configured":false,"valid":false}));
-    let (status, _) = call("managed_config_readiness", serde_json::json!({"force":true})).await;
+    assert_eq!(
+        readiness,
+        serde_json::json!({"configured":false,"valid":false})
+    );
+    let (status, _) = call(
+        "managed_config_readiness",
+        serde_json::json!({"force":true}),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     let (status, _) = call("managed_config_check", serde_json::json!({})).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     let (status, services) = call("managed_services", serde_json::json!({})).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(services, serde_json::json!({"configured":false,"services":[]}));
+    assert_eq!(
+        services,
+        serde_json::json!({"configured":false,"services":[]})
+    );
 
     // 2. Plan a valid workload
     let yaml = r#"version: 1
@@ -2941,26 +2953,55 @@ async fn linux_reviewed_storage_provisioning() {
         let app = app.clone();
         let token = token.clone();
         async move {
-            let response = app.oneshot(Request::builder().method("POST")
-                .uri(format!("/api/tools/{tool}")).header(header::HOST, "localhost:3030")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap()).await.unwrap();
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/api/tools/{tool}"))
+                        .header(header::HOST, "localhost:3030")
+                        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
             let status = response.status();
-            let bytes = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
-            (status, serde_json::from_slice::<serde_json::Value>(&bytes).unwrap())
+            let bytes = axum::body::to_bytes(response.into_body(), 65536)
+                .await
+                .unwrap();
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            )
         }
     };
-    let (status, _) = call("managed_storage_plan", serde_json::json!({"storage":"missing","revision":revision})).await;
+    let (status, _) = call(
+        "managed_storage_plan",
+        serde_json::json!({"storage":"missing","revision":revision}),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(!root.join("absent").exists());
-    let (status, share_plan) = call("managed_storage_plan", serde_json::json!({"storage":"shared","revision":revision})).await;
+    let (status, share_plan) = call(
+        "managed_storage_plan",
+        serde_json::json!({"storage":"shared","revision":revision}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{share_plan:?}");
     assert_eq!(share_plan["consumers"], serde_json::json!(["share/draft"]));
     assert!(!root.join("shared").exists());
-    let (status, _) = call("managed_storage_plan", serde_json::json!({"storage":"published","revision":revision})).await;
+    let (status, _) = call(
+        "managed_storage_plan",
+        serde_json::json!({"storage":"published","revision":revision}),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    let (status, plan) = call("managed_storage_plan", serde_json::json!({"storage":"disk","revision":revision,"sizeGiB":1})).await;
+    let (status, plan) = call(
+        "managed_storage_plan",
+        serde_json::json!({"storage":"disk","revision":revision,"sizeGiB":1}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{plan:?}");
     assert!(!root.join("disk.raw").exists());
     let mut request = serde_json::json!({"storage":"disk","revision":revision,"sizeGiB":1,
@@ -2974,14 +3015,24 @@ async fn linux_reviewed_storage_provisioning() {
     let mut succeeded = false;
     for _ in 0..100 {
         let (_, job) = call("jobs_get", serde_json::json!({"id":started["job"]["id"]})).await;
-        if job["state"] == "succeeded" { succeeded = true; break; }
+        if job["state"] == "succeeded" {
+            succeeded = true;
+            break;
+        }
         assert_ne!(job["state"], "failed", "{job:?}");
         tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
     }
     assert!(succeeded);
-    assert_eq!(std::fs::metadata(root.join("disk.raw")).unwrap().len(), 1 << 30);
+    assert_eq!(
+        std::fs::metadata(root.join("disk.raw")).unwrap().len(),
+        1 << 30
+    );
     assert_eq!(store.read().unwrap().unwrap().revision, revision);
-    let (status, _) = call("managed_storage_plan", serde_json::json!({"storage":"disk","revision":revision,"sizeGiB":1})).await;
+    let (status, _) = call(
+        "managed_storage_plan",
+        serde_json::json!({"storage":"disk","revision":revision,"sizeGiB":1}),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
@@ -3057,10 +3108,8 @@ async fn linux_mcp_protocol_flow() {
         .iter()
         .find(|t| t["name"] == "managed_directory_browse")
         .unwrap();
-    let reference: serde_json::Value = serde_json::from_str(include_str!(
-        "../test-fixtures/phase2/maestro-tools.json"
-    ))
-    .unwrap();
+    let reference: serde_json::Value =
+        serde_json::from_str(include_str!("../test-fixtures/phase2/maestro-tools.json")).unwrap();
     let expected = reference["tools"]
         .as_array()
         .unwrap()
@@ -3145,11 +3194,25 @@ async fn linux_mcp_protocol_flow() {
 #[tokio::test]
 async fn asuswrt_excludes_linux_tool_and_asset_routes() {
     let (app, state, _temp) = setup_test_app().await;
-    let response = app.clone().oneshot(Request::builder()
-        .uri("/api/auth/check")
-        .header(header::AUTHORIZATION, format!("Bearer {}", state.config.server.auth_token))
-        .body(Body::empty()).unwrap()).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK, "router token works without administrator setup");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/check")
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", state.config.server.auth_token),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "router token works without administrator setup"
+    );
     assert_linux_routes_missing(app).await;
     let paths = &state.config.paths;
     for path in [
@@ -3541,7 +3604,6 @@ async fn linux_next_start_config_typed_edit_and_revert_share_the_recorded_mode()
     assert!(pending["pending"].is_null());
 }
 
-
 #[cfg(feature = "linux")]
 #[tokio::test]
 async fn linux_generated_host_service_routes_fail_closed() {
@@ -3559,29 +3621,59 @@ async fn linux_generated_host_service_routes_fail_closed() {
     ).unwrap();
     let app = api::app(state).unwrap();
     for (tool, unit, confirm, expected, code, message) in [
-        ("services_reload", "maestro-compose-stack.service", true, StatusCode::BAD_REQUEST,
-            "invalid_arguments", "Apply the application definition"),
-        ("services_stop", "maestro-compose-stack.service", false, StatusCode::BAD_REQUEST,
-            "confirmation_required", "confirm=true"),
-        ("services_start", "maestro-compose-stale.service", false, StatusCode::SERVICE_UNAVAILABLE,
-            "unavailable", "Unknown, stale or ambiguous generated unit"),
+        (
+            "services_reload",
+            "maestro-compose-stack.service",
+            true,
+            StatusCode::BAD_REQUEST,
+            "invalid_arguments",
+            "Apply the application definition",
+        ),
+        (
+            "services_stop",
+            "maestro-compose-stack.service",
+            false,
+            StatusCode::BAD_REQUEST,
+            "confirmation_required",
+            "confirm=true",
+        ),
+        (
+            "services_start",
+            "maestro-compose-stale.service",
+            false,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable",
+            "Unknown, stale or ambiguous generated unit",
+        ),
     ] {
         let args = serde_json::json!({"scope":"user","unit":unit,"confirm":confirm});
-        let response = app.clone().oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/tools/{tool}"))
-                .header(header::HOST, "localhost:3030")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(args.to_string()))
-                .unwrap(),
-        ).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tools/{tool}"))
+                    .header(header::HOST, "localhost:3030")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(args.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         let status = response.status();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(status, expected, "{tool}: {value}");
         assert_eq!(value["error"]["code"], code, "{tool}: {value}");
-        assert!(value["error"]["message"].as_str().unwrap().contains(message), "{tool}: {value}");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(message),
+            "{tool}: {value}"
+        );
     }
 }

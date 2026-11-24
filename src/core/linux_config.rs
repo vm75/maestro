@@ -148,7 +148,9 @@ fn read_token(path: &Path) -> Result<String> {
 }
 
 pub fn load(path: &Path) -> Result<AppConfig> {
-    Store::at_path(path)?.read()?.ok_or_else(|| anyhow::anyhow!("Linux configuration is missing"))?;
+    Store::at_path(path)?
+        .read()?
+        .ok_or_else(|| anyhow::anyhow!("Linux configuration is missing"))?;
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| anyhow::anyhow!("HOME is required for Linux defaults"))?;
@@ -371,6 +373,7 @@ mod tests {
     fn linux_yaml_without_a_server_section_uses_native_defaults() {
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let path = root.path().join("maestro.yaml");
         let token = root.path().join("token");
         std::fs::write(&path, "version: 1\n").unwrap();
@@ -477,7 +480,8 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(result["plan"]["restartRequired"], true);
         assert_eq!(result["plan"]["changes"], serde_json::json!([]));
-        let combined = candidate.clone() + "services: {web: {kind: container, containers: {app: {image: nginx:alpine}}}}\n";
+        let combined = candidate.clone()
+            + "services: {web: {kind: container, containers: {app: {image: nginx:alpine}}}}\n";
         let (status, _, _) = auth_request(
             &app,
             "POST",

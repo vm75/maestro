@@ -4,7 +4,13 @@ set -euo pipefail
 # Real, unprivileged Linux integration smoke test. No mocks, host service
 # configuration changes, DNS provider calls, or firewall rule modifications.
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-tools=(nginx openssl curl python3)
+python_bin=${PYTHON:-python3}
+if [[ -z "${PYTHON:-}" && -x "$repo_root/.dev-tools/python/bin/python3" ]]; then
+    python_bin="$repo_root/.dev-tools/python/bin/python3"
+fi
+# Keep all Python subprocesses on the same interpreter as the dependency check.
+python3() { command "$python_bin" "$@"; }
+tools=(nginx openssl curl "$python_bin")
 if [[ -z "${MAESTRO_LINUX_SMOKE_BIN:-}" ]]; then
     tools+=(cargo)
 fi

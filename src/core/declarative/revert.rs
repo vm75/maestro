@@ -19,7 +19,7 @@ impl Store {
         let desired = parse(bytes)?;
         let store = self.clone();
         let directory = tokio::task::spawn_blocking(move || store.lock_directory()).await??;
-        super::backup_capture::ensure_idle_locked(self,&directory)?;
+        super::backup_capture::ensure_idle_locked(self, &directory)?;
         let (previous, plan) = Self::plan(
             store::current(&directory, &self.filename)?,
             bytes,
@@ -55,7 +55,7 @@ impl Store {
         let desired = parse(bytes)?;
         let store = self.clone();
         let directory = tokio::task::spawn_blocking(move || store.lock_directory()).await??;
-        super::backup_capture::ensure_idle_locked(self,&directory)?;
+        super::backup_capture::ensure_idle_locked(self, &directory)?;
         let (previous, plan) = Self::plan(
             store::current(&directory, &self.filename)?,
             bytes,
@@ -123,7 +123,7 @@ impl Store {
             .await;
             if let Err(error) = result {
                 let resource = change.resource.clone();
-                journal.failed(&directory, resource,&error)?;
+                journal.failed(&directory, resource, &error)?;
                 return Err(error);
             }
             journal.completed += 1;

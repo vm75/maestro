@@ -120,9 +120,14 @@ pub(super) fn expected_mount(path: &Path, expected: &str, proc_root: Option<&Pat
     if !Path::new(expected).is_absolute() {
         return false;
     }
-    let Some(mounts) = proc_root.and_then(read_mounts) else { return false; };
-    let Ok(real) = fs::canonicalize(path) else { return false; };
-    mounted_filesystem(&real, &mounts).is_some_and(|mount| mount.source == expected && !mount.read_only)
+    let Some(mounts) = proc_root.and_then(read_mounts) else {
+        return false;
+    };
+    let Ok(real) = fs::canonicalize(path) else {
+        return false;
+    };
+    mounted_filesystem(&real, &mounts)
+        .is_some_and(|mount| mount.source == expected && !mount.read_only)
 }
 
 fn access(path: &Path, mode: libc::c_int) -> bool {
@@ -307,7 +312,12 @@ pub fn check_files(
         }
         if let Some(vm) = &service.vm {
             writable.extend(vm.disks.iter().map(String::as_str));
-            writable.extend(vm.mounts.iter().filter(|m|!m.read_only).map(|m|m.storage.as_str()));
+            writable.extend(
+                vm.mounts
+                    .iter()
+                    .filter(|m| !m.read_only)
+                    .map(|m| m.storage.as_str()),
+            );
         }
     }
     for share in config.shares.values() {
@@ -426,7 +436,11 @@ pub fn check_files(
         }
         if let Some(vm) = &service.vm {
             refs.extend(vm.disks.iter().map(|disk| format!("storage/{disk}")));
-            refs.extend(vm.mounts.iter().map(|mount| format!("storage/{}",mount.storage)));
+            refs.extend(
+                vm.mounts
+                    .iter()
+                    .map(|mount| format!("storage/{}", mount.storage)),
+            );
         }
         for input in &initial {
             if refs.contains(&input.resource) {
@@ -497,7 +511,12 @@ pub fn service_backend(service: &super::Service) -> String {
     }
 }
 
-fn backend_issue(backend: &str, severity: &'static str, code: &'static str, message: &'static str) -> Issue {
+fn backend_issue(
+    backend: &str,
+    severity: &'static str,
+    code: &'static str,
+    message: &'static str,
+) -> Issue {
     issue(
         severity,
         &format!("backend/{backend}"),
@@ -509,17 +528,15 @@ fn backend_issue(backend: &str, severity: &'static str, code: &'static str, mess
 }
 
 /// Bounded, fixed-argument probes. Never return native output to the caller.
-async fn probe(
-    state: &crate::state::AppState,
-    program: &Path,
-    args: &[&str],
-) -> Option<Vec<u8>> {
+async fn probe(state: &crate::state::AppState, program: &Path, args: &[&str]) -> Option<Vec<u8>> {
     if !program.is_absolute() || !program.is_file() {
         return None;
     }
-    let output = state.runner.capture_status(
-        program, args, std::time::Duration::from_secs(4), 64 * 1024,
-    ).await.ok()?;
+    let output = state
+        .runner
+        .capture_status(program, args, std::time::Duration::from_secs(4), 64 * 1024)
+        .await
+        .ok()?;
     (output.status.success() && !output.truncated).then_some(output.stdout)
 }
 
@@ -533,29 +550,61 @@ async fn backend_prerequisites(
     let mut issues = Vec::new();
     if matches!(backend, "podman/quadlet" | "podman/compose") {
         let rootless = probe(
-            state, &commands.podman,
-            &["--remote=false", "info", "--format", "{{.Host.Security.Rootless}}"],
-        ).await;
-        if !rootless.as_deref().is_some_and(|bytes| {
-            std::str::from_utf8(bytes).is_ok_and(|text| text.trim() == "true")
-        }) {
-            issues.push(backend_issue(backend, "error", "rootless_unavailable",
-                "The local rootless Podman runtime could not be verified."));
+            state,
+            &commands.podman,
+            &[
+                "--remote=false",
+                "info",
+                "--format",
+                "{{.Host.Security.Rootless}}",
+            ],
+        )
+        .await;
+        if !rootless
+            .as_deref()
+            .is_some_and(|bytes| std::str::from_utf8(bytes).is_ok_and(|text| text.trim() == "true"))
+        {
+            issues.push(backend_issue(
+                backend,
+                "error",
+                "rootless_unavailable",
+                "The local rootless Podman runtime could not be verified.",
+            ));
         }
     }
-    if matches!(backend, "podman/quadlet" | "podman/compose" | "docker/compose") {
-        if probe(state, &commands.systemctl, &[
-            "--user", "--no-pager", "--no-ask-password", "show", "--property=Version",
-        ]).await.is_none() {
-            issues.push(backend_issue(backend, "error", "user_manager_unavailable",
-                "The workload account's systemd user manager is inaccessible."));
-        }
+    if matches!(
+        backend,
+        "podman/quadlet" | "podman/compose" | "docker/compose"
+    ) && probe(
+        state,
+        &commands.systemctl,
+        &[
+            "--user",
+            "--no-pager",
+            "--no-ask-password",
+            "show",
+            "--property=Version",
+        ],
+    )
+    .await
+    .is_none()
+    {
+        issues.push(backend_issue(
+            backend,
+            "error",
+            "user_manager_unavailable",
+            "The workload account's systemd user manager is inaccessible.",
+        ));
     }
     match backend {
         "podman/quadlet" => {
             if !quadlet_available {
-                issues.push(backend_issue(backend, "error", "missing_adapter",
-                    "The rootless Quadlet provider is unavailable."));
+                issues.push(backend_issue(
+                    backend,
+                    "error",
+                    "missing_adapter",
+                    "The rootless Quadlet provider is unavailable.",
+                ));
             }
             // The provider verifies generated files, loaded unit ownership and
             // runtime state before lifecycle actions. Boot enablement separately
@@ -563,22 +612,45 @@ async fn backend_prerequisites(
             // would disable every Quadlet application's controls in the UI.
         }
         "podman/compose" | "docker/compose" => {
-            let engine = if backend == "podman/compose" {"podman"} else {"docker"};
-            let binary = if engine == "podman" {commands.podman.clone()} else {commands.docker.clone()};
-            let provider = super::compose::ComposeProvider::new(engine,binary,
-                state.config.paths.applications_dir.clone(),state.config.paths.storage_dir.clone(),state.runner.clone())
-                .native_paths(commands.systemctl.clone());
+            let engine = if backend == "podman/compose" {
+                "podman"
+            } else {
+                "docker"
+            };
+            let binary = if engine == "podman" {
+                commands.podman.clone()
+            } else {
+                commands.docker.clone()
+            };
+            let provider = super::compose::ComposeProvider::new(
+                engine,
+                binary,
+                state.config.paths.applications_dir.clone(),
+                state.config.paths.storage_dir.clone(),
+                state.runner.clone(),
+            )
+            .native_paths(commands.systemctl.clone());
             if let Err(error) = provider.check_prerequisites().await {
-                issues.push(issue("error",&format!("backend/{backend}"),"runtime","compose_unavailable",
-                    error.to_string(),"Check local engine/provider installation and user systemd."));
+                issues.push(issue(
+                    "error",
+                    &format!("backend/{backend}"),
+                    "runtime",
+                    "compose_unavailable",
+                    error.to_string(),
+                    "Check local engine/provider installation and user systemd.",
+                ));
             } else if let Err(error) = provider.check_autostart().await {
                 issues.push(issue("error",&format!("backend/{backend}"),"autostart","compose_boot_unavailable",
                     error.to_string(),"Check the distribution's native boot prerequisites; current-run actions remain separate."));
             }
         }
         "libvirt" => {
-            let mut provider = super::libvirt::LibvirtProvider::new(commands.virsh.clone(),state.runner.clone())
-                .native_paths(state.config.paths.applications_dir.clone(),state.config.paths.storage_dir.clone());
+            let mut provider =
+                super::libvirt::LibvirtProvider::new(commands.virsh.clone(), state.runner.clone())
+                    .native_paths(
+                        state.config.paths.applications_dir.clone(),
+                        state.config.paths.storage_dir.clone(),
+                    );
             if let Some(authority) = state.config.linux_authority.as_ref() {
                 provider.uri = Some(authority.settings.libvirt_uri.clone());
             }
@@ -588,25 +660,40 @@ async fn backend_prerequisites(
             }
         }
         "incus" => {
-            let provider = super::incus::IncusProvider::new(commands.incus.clone(),state.runner.clone())
-                .native_paths(state.config.paths.applications_dir.clone()).storage_root(state.config.paths.storage_dir.clone());
+            let provider =
+                super::incus::IncusProvider::new(commands.incus.clone(), state.runner.clone())
+                    .native_paths(state.config.paths.applications_dir.clone())
+                    .storage_root(state.config.paths.storage_dir.clone());
             if let Err(error) = provider.check_daemon().await {
-                issues.push(issue("error","backend/incus","runtime","incus_unavailable",
-                    error.to_string(),"Check local daemon and workload account permissions."));
+                issues.push(issue(
+                    "error",
+                    "backend/incus",
+                    "runtime",
+                    "incus_unavailable",
+                    error.to_string(),
+                    "Check local daemon and workload account permissions.",
+                ));
             } else {
-                use futures_util::{StreamExt,stream};
+                use futures_util::{StreamExt, stream};
                 // Own each ID so the concurrent futures do not retain service
                 // iterator borrows across their native prerequisite checks.
-                let ids: Vec<String> = config.services.iter()
-                    .filter(|(_,service)|service.backend=="incus")
-                    .map(|(id,_)|id.clone()).collect();
+                let ids: Vec<String> = config
+                    .services
+                    .iter()
+                    .filter(|(_, service)| service.backend == "incus")
+                    .map(|(id, _)| id.clone())
+                    .collect();
                 let mut checks = stream::iter(ids)
-                    .map(|id: String| { let provider=&provider; async move {
-                        let result=provider.check_resource(config,&id).await;
-                        (id,result)
-                    }}).buffer_unordered(4);
-                while let Some((id,result))=checks.next().await {
-                    if let Err(error)=result {
+                    .map(|id: String| {
+                        let provider = &provider;
+                        async move {
+                            let result = provider.check_resource(config, &id).await;
+                            (id, result)
+                        }
+                    })
+                    .buffer_unordered(4);
+                while let Some((id, result)) = checks.next().await {
+                    if let Err(error) = result {
                         issues.push(issue("error",&format!("service/{id}"),"bindings","incus_prerequisite",
                             error.to_string(),"Check the explicit Incus project, pool, network, guest type and QEMU SPICE support for VMs."));
                     }
@@ -614,14 +701,21 @@ async fn backend_prerequisites(
             }
         }
         "samba" | "nfs" => {
-            let provider = super::shares::ShareProvider::from_config(&state.config,state.runner.is_test_mode());
-            if let Err(error) = provider.check_prerequisites(backend,config).await {
+            let provider = super::shares::ShareProvider::from_config(
+                &state.config,
+                state.runner.is_test_mode(),
+            );
+            if let Err(error) = provider.check_prerequisites(backend, config).await {
                 issues.push(issue("error",&format!("backend/{backend}"),"share","share_setup",error.to_string(),
                     "Check native share packages/setup, directory permissions and access identities."));
             }
-        },
-        _ => issues.push(backend_issue(backend, "unknown", "check_unavailable",
-            "Backend prerequisite checks are not implemented.")),
+        }
+        _ => issues.push(backend_issue(
+            backend,
+            "unknown",
+            "check_unavailable",
+            "Backend prerequisite checks are not implemented.",
+        )),
     }
     issues
 }
@@ -649,16 +743,28 @@ pub(super) fn propagate(config: &Config, health: &mut Health, native: Vec<Issue>
             }
         }
     }
-    let mut blocked: BTreeSet<String> = health.issues.iter()
+    let mut blocked: BTreeSet<String> = health
+        .issues
+        .iter()
         .filter(|issue| issue.severity != "warning" && issue.field != "autostart")
-        .map(|issue| issue.resource.clone()).collect();
+        .map(|issue| issue.resource.clone())
+        .collect();
     if let Ok(order) = config.service_order() {
         for id in order {
-            if config.services[id].depends_on.iter().any(|dep| blocked.contains(&format!("service/{dep}"))) {
+            if config.services[id]
+                .depends_on
+                .iter()
+                .any(|dep| blocked.contains(&format!("service/{dep}")))
+            {
                 let key = format!("service/{id}");
-                health.issues.push(issue("error", &key, "depends_on", "blocked_dependency",
+                health.issues.push(issue(
+                    "error",
+                    &key,
+                    "depends_on",
+                    "blocked_dependency",
                     "A required service has startup blockers.",
-                    "Repair the dependency's configuration issues and recheck."));
+                    "Repair the dependency's configuration issues and recheck.",
+                ));
                 blocked.insert(key);
             }
         }
@@ -673,12 +779,21 @@ pub fn check_startup_files(
     config: &Config,
     id: &str,
 ) -> anyhow::Result<()> {
-    let mut health = check_files(store, config, &state.config.paths.storage_dir,
-        state.config.paths.proc_stat.parent());
+    let mut health = check_files(
+        store,
+        config,
+        &state.config.paths.storage_dir,
+        state.config.paths.proc_stat.parent(),
+    );
     propagate(config, &mut health, Vec::new());
     let key = format!("service/{id}");
-    anyhow::ensure!(!health.issues.iter().any(|issue| issue.resource == key
-        && issue.severity != "warning"), "required service data or dependencies are unavailable; inspect configuration health");
+    anyhow::ensure!(
+        !health
+            .issues
+            .iter()
+            .any(|issue| issue.resource == key && issue.severity != "warning"),
+        "required service data or dependencies are unavailable; inspect configuration health"
+    );
     Ok(())
 }
 
@@ -692,29 +807,59 @@ impl ReadinessCache {
         quadlet_available: bool,
         refresh: bool,
     ) -> Health {
-        let mut health = check_files(store, config, &state.config.paths.storage_dir,
-            state.config.paths.proc_stat.parent());
+        let mut health = check_files(
+            store,
+            config,
+            &state.config.paths.storage_dir,
+            state.config.paths.proc_stat.parent(),
+        );
         match crate::core::linux_config::restart_required(&state.config, &snapshot.bytes) {
             Ok(false) => {}
-            Ok(true) => health.issues.push(issue("error", "configuration", "server",
-                "restart_required", "Server settings differ from the running process.",
-                "Restart Maestro before managing resources.")),
-            Err(_) => health.issues.push(issue("unknown", "configuration", "server",
-                "restart_state_unknown", "Running server settings could not be compared.",
-                "Inspect configuration and restart Maestro if needed.")),
+            Ok(true) => health.issues.push(issue(
+                "error",
+                "configuration",
+                "server",
+                "restart_required",
+                "Server settings differ from the running process.",
+                "Restart Maestro before managing resources.",
+            )),
+            Err(_) => health.issues.push(issue(
+                "unknown",
+                "configuration",
+                "server",
+                "restart_state_unknown",
+                "Running server settings could not be compared.",
+                "Inspect configuration and restart Maestro if needed.",
+            )),
         }
         match store.pending_apply() {
             Ok(None) => {}
-            Ok(Some(_)) => health.issues.push(issue("error", "configuration", "apply",
-                "apply_incomplete", "An earlier configuration apply has not completed.",
-                "Inspect apply status and explicitly retry or revert before starting workloads.")),
-            Err(_) => health.issues.push(issue("unknown", "configuration", "apply",
-                "apply_unavailable", "Previous apply status cannot be verified.",
-                "Inspect the private apply journal before managing workloads.")),
+            Ok(Some(_)) => health.issues.push(issue(
+                "error",
+                "configuration",
+                "apply",
+                "apply_incomplete",
+                "An earlier configuration apply has not completed.",
+                "Inspect apply status and explicitly retry or revert before starting workloads.",
+            )),
+            Err(_) => health.issues.push(issue(
+                "unknown",
+                "configuration",
+                "apply",
+                "apply_unavailable",
+                "Previous apply status cannot be verified.",
+                "Inspect the private apply journal before managing workloads.",
+            )),
         }
-        if super::backup_capture::ensure_idle(store).is_err(){
-            health.issues.push(issue("error","configuration","backup","backup_recovery_pending",
-                "A backup recovery record is pending or inaccessible.","Review backup recovery before changing workloads."));
+        if super::backup_capture::ensure_idle(store).is_err() {
+            health.issues.push(issue(
+                "error",
+                "configuration",
+                "backup",
+                "backup_recovery_pending",
+                "A backup recovery record is pending or inaccessible.",
+                "Review backup recovery before changing workloads.",
+            ));
         }
         if state.runner.is_test_mode() {
             propagate(config, &mut health, Vec::new());
@@ -736,17 +881,22 @@ impl ReadinessCache {
         let mut checks = stream::iter(targets)
             .map(|backend| async move {
                 backend_prerequisites(state, quadlet_available, &backend, config).await
-            }).buffer_unordered(4);
+            })
+            .buffer_unordered(4);
         let mut native = Vec::new();
         while let Some(mut issues) = checks.next().await {
             native.append(&mut issues);
         }
-        native.sort_by(|a, b| (&a.resource, &a.field, &a.code).cmp(&(&b.resource, &b.field, &b.code)));
+        native.sort_by(|a, b| {
+            (&a.resource, &a.field, &a.code).cmp(&(&b.resource, &b.field, &b.code))
+        });
         let checked_at = Utc::now();
         health.runtime_checked_at = Some(checked_at);
         *cache = Some(CachedPrerequisites {
-            revision: snapshot.revision.clone(), instant: std::time::Instant::now(),
-            checked_at, issues: native.clone(),
+            revision: snapshot.revision.clone(),
+            instant: std::time::Instant::now(),
+            checked_at,
+            issues: native.clone(),
         });
         propagate(config, &mut health, native);
         health

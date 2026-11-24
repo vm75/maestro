@@ -97,7 +97,10 @@ async fn main() -> Result<()> {
     );
     let config_path = PathBuf::from(&args[1]);
     let config = AppConfig::load(&config_path)?;
-    ensure!(config.platform == Platform::Linux, "MCP requires native Linux YAML");
+    ensure!(
+        config.platform == Platform::Linux,
+        "MCP requires native Linux YAML"
+    );
     config.validate()?;
     ensure!(
         unsafe { libc::geteuid() } != 0,

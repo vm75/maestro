@@ -14,7 +14,9 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-fn is_false(value: &bool) -> bool { !*value }
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 
 use crate::{command::CommandRunner, state::AppState};
 

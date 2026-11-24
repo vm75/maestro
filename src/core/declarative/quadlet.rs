@@ -170,7 +170,10 @@ pub fn render_quadlet_at(
                 !source.contains(':')
                     && !mount.target.contains(':')
                     && matches!(mount.kind.as_str(), "" | "bind" | "directory" | "file")
-                    && matches!(mount.selinux.as_str(), "" | "z" | "Z" | "private" | "shared"),
+                    && matches!(
+                        mount.selinux.as_str(),
+                        "" | "z" | "Z" | "private" | "shared"
+                    ),
                 "unsupported Quadlet mount"
             );
             let mut options = vec![if mount.read_only { "ro" } else { "rw" }];
@@ -202,7 +205,10 @@ pub fn render_quadlet_at(
             "no" => "no",
             _ => return Err(anyhow!("unsupported Quadlet restart policy")),
         };
-        writeln!(body, "\n[Service]\nRestart={restart}\nRestartSec=5\nTimeoutStartSec=900")?;
+        writeln!(
+            body,
+            "\n[Service]\nRestart={restart}\nRestartSec=5\nTimeoutStartSec=900"
+        )?;
         let stop = super::container_health::stop_seconds(&container.stop_grace_period)
             .ok_or_else(|| anyhow!("Quadlet stop grace period exceeds native timeout range"))?;
         let stop = if stop == 0 { 90 } else { u64::from(stop) + 30 };
@@ -227,9 +233,10 @@ fn is_quadlet(service: &super::Service) -> bool {
 pub fn managed_unit_owner<'a>(config: &'a Config, unit: &str) -> Option<&'a str> {
     let mut owners = config.services.iter().filter(|(id, service)| {
         if is_quadlet(service) {
-            service.containers.keys().any(|member| {
-                format!("{}.service", unit_name(id, member)) == unit
-            })
+            service
+                .containers
+                .keys()
+                .any(|member| format!("{}.service", unit_name(id, member)) == unit)
         } else {
             service.kind == "container"
                 && service.backend == "compose"
@@ -529,7 +536,13 @@ services:
     #[test]
     fn remaining_reference_quadlet_options_render_with_typed_arguments() {
         let mut config = super::super::parse(FIXTURE.as_bytes()).unwrap();
-        let container = config.services.get_mut("demo").unwrap().containers.get_mut("web").unwrap();
+        let container = config
+            .services
+            .get_mut("demo")
+            .unwrap()
+            .containers
+            .get_mut("web")
+            .unwrap();
         container.entrypoint = vec!["/entrypoint".into(), "two words".into(), "$VALUE".into()];
         container.tty = true;
         container.privileged = true;
@@ -537,10 +550,19 @@ services:
         container.shm_size = "256MB".into();
         container.stop_grace_period = "1m30.5s".into();
         container.mounts[0].selinux = "private".into();
-        let files = render_quadlet(&config, "demo", Path::new("/tmp/quadlet-test"), &revision(FIXTURE.as_bytes())).unwrap();
+        let files = render_quadlet(
+            &config,
+            "demo",
+            Path::new("/tmp/quadlet-test"),
+            &revision(FIXTURE.as_bytes()),
+        )
+        .unwrap();
         let body = &files[&format!("{}.container", unit_name("demo", "web"))];
         let entrypoint = serde_json::to_string(&container_entrypoint_fixture()).unwrap();
-        assert!(body.contains(&format!("PodmanArgs={}", word(&format!("--entrypoint={}", entrypoint.replace('$', "$$"))).unwrap())));
+        assert!(body.contains(&format!(
+            "PodmanArgs={}",
+            word(&format!("--entrypoint={}", entrypoint.replace('$', "$$"))).unwrap()
+        )));
         assert!(body.contains("PodmanArgs=--tty"));
         assert!(body.contains("PodmanArgs=\"--shm-size=256m\""));
         assert!(body.contains("StopTimeout=91"));
@@ -637,10 +659,19 @@ mod managed_unit_routing_tests {
         );
         let unit = format!("{}.service", unit_name("demo", "web"));
         assert_eq!(managed_unit_owner(&config, &unit), Some("demo"));
-        assert_eq!(managed_unit_owner(&config, "maestro-compose-stack.service"), Some("stack"));
-        assert_eq!(managed_unit_owner(&config, "maestro-compose-stale.service"), None);
+        assert_eq!(
+            managed_unit_owner(&config, "maestro-compose-stack.service"),
+            Some("stack")
+        );
+        assert_eq!(
+            managed_unit_owner(&config, "maestro-compose-stale.service"),
+            None
+        );
         assert_eq!(managed_unit_owner(&config, "maestro-custom.service"), None);
-        let network = format!("maestro-network-{}-network.service", &revision(b"demo")[..24]);
+        let network = format!(
+            "maestro-network-{}-network.service",
+            &revision(b"demo")[..24]
+        );
         assert!(managed_unit(&network));
         assert_eq!(managed_unit_owner(&config, &network), None);
         assert!(managed_unit("maestro-compose-stale.service"));

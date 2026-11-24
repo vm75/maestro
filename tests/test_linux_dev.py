@@ -230,8 +230,8 @@ class LinuxDevTest(unittest.TestCase):
         self.assertEqual(self.commands(), [["id", "-u"]])
 
     def test_setup_with_installed_dehydrated_creates_directories_and_preserves_files(self):
-        # Run the actual setup script in a fresh temporary repository. The old
-        # ordering only made certs/ when dehydrated was absent from PATH.
+        # Run setup in a fresh temporary repository with dehydrated installed.
+        # Its executable and hook live directly under the native state root.
         scripts = self.root / "scripts"
         scripts.mkdir()
         shutil.copyfile(SCRIPT.with_name("setup-linux.sh"), scripts / "setup-linux.sh")
@@ -250,7 +250,7 @@ class LinuxDevTest(unittest.TestCase):
         setup = f"bash {shlex.quote(str(scripts / 'setup-linux.sh'))}"
         self.run_shell(setup)
         state = self.root / "data/linux"
-        hook = state / "certs/dehydrated-dns01-hook.sh"
+        hook = state / "dehydrated-dns01-hook.sh"
         self.assertEqual(hook.read_text(), "bundled hook\n")
         config = state / "maestro.yaml"
         original_config = config.read_bytes()

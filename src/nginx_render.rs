@@ -1093,11 +1093,17 @@ impl FileTransaction {
         }
         for (path, content) in files {
             use std::os::unix::fs::PermissionsExt;
-            let private_key = path.file_name().and_then(|name| name.to_str())
+            let private_key = path
+                .file_name()
+                .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with("privkey") && name.ends_with(".pem"));
             if private_key {
                 let permissions = std::fs::Permissions::from_mode(0o600);
-                nginx::atomic_write_with_permissions(&path, content.as_bytes(), Some(&permissions))?;
+                nginx::atomic_write_with_permissions(
+                    &path,
+                    content.as_bytes(),
+                    Some(&permissions),
+                )?;
             } else {
                 nginx::atomic_write(&path, content.as_bytes())?;
             }
@@ -1388,8 +1394,12 @@ mod tests {
         let config = transaction_config(root.path());
         let path = config.nginx.root_dir.join("certs/example/privkey.pem");
         FileTransaction::apply(&config, [(path.clone(), "private key".into())].into())
-            .unwrap().commit();
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            .unwrap()
+            .commit();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[test]

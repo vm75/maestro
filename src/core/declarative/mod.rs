@@ -1,8 +1,8 @@
 mod apply;
-mod artifacts;
 pub mod artifact_recovery;
-pub mod backup_inventory;
+mod artifacts;
 pub mod backup_capture;
+pub mod backup_inventory;
 pub mod browse;
 mod container_health;
 mod revert;
@@ -19,10 +19,10 @@ mod libvirt_render;
 mod model;
 pub mod native_inventory;
 pub mod native_shares;
-pub(crate) mod share_definitions;
 mod plan;
 pub mod preflight;
 pub mod quadlet;
+pub(crate) mod share_definitions;
 pub use composite::{ApplicationSummary, CompositeProvider, ShareSummary};
 pub use plan::{Change, Operation, Plan};
 pub use quadlet::{QuadletArtifacts, QuadletProvider, managed_unit, render_quadlet};
@@ -324,28 +324,59 @@ impl Config {
                     );
                     ensure!(
                         vm.instance_type.is_empty()
-                            || (vm.is_system_container() && service.backend == "incus"
-                                && vm.firmware.is_empty() && vm.machine.is_empty() && vm.disks.is_empty()),
+                            || (vm.is_system_container()
+                                && service.backend == "incus"
+                                && vm.firmware.is_empty()
+                                && vm.machine.is_empty()
+                                && vm.disks.is_empty()),
                         "system-container type requires Incus without VM-only hardware or disks"
                     );
-                    ensure!(vm.is_system_container() || (vm.mounts.is_empty() && vm.environment.is_empty()),
-                        "mounts and environment are only supported for Incus system containers");
-                    ensure!(vm.mounts.len()<=64 && vm.environment.len()<=128,"system-container resource limit exceeded");
-                    let mut targets=BTreeSet::new();
+                    ensure!(
+                        vm.is_system_container()
+                            || (vm.mounts.is_empty() && vm.environment.is_empty()),
+                        "mounts and environment are only supported for Incus system containers"
+                    );
+                    ensure!(
+                        vm.mounts.len() <= 64 && vm.environment.len() <= 128,
+                        "system-container resource limit exceeded"
+                    );
+                    let mut targets = BTreeSet::new();
                     for mount in &vm.mounts {
-                        ensure!(self.storage.get(&mount.storage).is_some_and(|s|s.kind!="file")
-                            && mount.path.is_empty() && matches!(mount.kind.as_str(),""|"directory")
-                            && mount.selinux.is_empty() && !mount.chown && path_valid(&mount.target,true)
-                            && mount.target!="/" && !mount.target.chars().any(char::is_control)
-                            && targets.insert(mount.target.as_str()),
-                            "system-container mounts require a distinct absolute target and a whole directory storage reference");
+                        ensure!(
+                            self.storage
+                                .get(&mount.storage)
+                                .is_some_and(|s| s.kind != "file")
+                                && mount.path.is_empty()
+                                && matches!(mount.kind.as_str(), "" | "directory")
+                                && mount.selinux.is_empty()
+                                && !mount.chown
+                                && path_valid(&mount.target, true)
+                                && mount.target != "/"
+                                && !mount.target.chars().any(char::is_control)
+                                && targets.insert(mount.target.as_str()),
+                            "system-container mounts require a distinct absolute target and a whole directory storage reference"
+                        );
                     }
-                    ensure!(targets.iter().all(|target|!targets.iter().any(|other| target!=other && target.strip_prefix(*other).is_some_and(|rest|rest.starts_with('/')))),
-                        "system-container mount targets overlap");
-                    for (key,value) in &vm.environment {
-                        ensure!(!key.is_empty() && key.len()<=128 && (key.as_bytes()[0].is_ascii_alphabetic()||key.starts_with('_'))
-                            && key.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'_') && value.len()<=8192 && !value.contains('\0'),
-                            "invalid system-container environment entry");
+                    ensure!(
+                        targets
+                            .iter()
+                            .all(|target| !targets.iter().any(|other| target != other
+                                && target
+                                    .strip_prefix(*other)
+                                    .is_some_and(|rest| rest.starts_with('/')))),
+                        "system-container mount targets overlap"
+                    );
+                    for (key, value) in &vm.environment {
+                        ensure!(
+                            !key.is_empty()
+                                && key.len() <= 128
+                                && (key.as_bytes()[0].is_ascii_alphabetic()
+                                    || key.starts_with('_'))
+                                && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                                && value.len() <= 8192
+                                && !value.contains('\0'),
+                            "invalid system-container environment entry"
+                        );
                     }
                     ensure!(
                         self.bindings
