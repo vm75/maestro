@@ -184,3 +184,18 @@ Python is needed only for lab setup and bundle tests, not by Maestro at runtime.
 
 
 Maestro configuration is YAML on all platforms. Router and native Linux use separate schemas, and TOML is not accepted. Linux uses a private version: 1 authority and token file; see [Linux configuration](linux.md). State JSON and authored native service files retain their formats.
+
+## Router filesystem aliases
+
+Entware mount aliases and explicitly configured directory symlinks are supported.
+Router YAML, fixed JSON stores, WireGuard configuration and Dehydrated files
+retain valid file symlinks during writes. Broken/cyclic links are errors rather
+than empty configuration. Migrated linked state keeps its resolved target;
+its original link text and contents are saved in the private migration backup.
+NGINX site activation accepts matching relative or absolute links, and deployed
+certificate aliases retain their targets. Unexpected links in managed NGINX
+inputs and temporary paths are rejected. Ban Shield continues to reject linked
+log files; configure the regular log path under an allowed log directory.
+Backups include known linked router state and certificate targets; restore
+continues to require safe real destination parents. Cross-router mount remapping
+requires explicit administrator preparation, not automatic traversal of links.

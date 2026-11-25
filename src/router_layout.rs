@@ -245,7 +245,8 @@ pub fn require_current(config: &AppConfig) -> Result<()> {
     check_roots(config, data)?;
     let legacy_policy = data.join(POLICY);
     let policy = config.firewall_policy_path();
-    let mut pending = data == Path::new(OLD_DATA)
+    source_file(&policy)?;
+    let mut pending = same_path(data, Path::new(OLD_DATA)) && !same_path(data, Path::new(NEW_DATA))
         || (source_file(&legacy_policy)?.is_some() && !same_entry(&legacy_policy, &policy));
     for name in HTTP_FILES {
         let source = inputs.join(name);
@@ -282,7 +283,7 @@ fn migrate_with_defaults(
     new_default: &Path,
 ) -> Result<()> {
     let old_data = &config.paths.data_dir;
-    let change_data = old_data == old_default && old_default != new_default;
+    let change_data = same_path(old_data, old_default) && !same_path(old_data, new_default);
     let data = if change_data { new_default } else { old_data };
     let inputs = &config.nginx.inputs_dir;
     let policy = config.firewall_policy_path();

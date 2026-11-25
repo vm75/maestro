@@ -1047,6 +1047,39 @@ impl FileTransaction {
         Self::apply_with_removals(config, files, &[])
     }
 
+    /// Certificate deployment is a separate trust boundary: the fixed named
+    /// PEM files may be administrator-linked to a shared certificate store.
+    /// Resolve them before taking the rollback snapshot; never replace links.
+    pub(crate) fn apply_router_certificates(
+        files: BTreeMap<std::path::PathBuf, String>,
+    ) -> Result<Self> {
+        let mut resolved = BTreeMap::new();
+        for (path, content) in files {
+            let target = crate::util::trusted_file_path(&path)?;
+            anyhow::ensure!(resolved.insert(target, (path, content)).is_none(),
+                "multiple certificate files resolve to the same target");
+        }
+        let mut previous = Vec::new();
+        for (target, (_, content)) in &resolved {
+            let backup = backup_file(target)?;
+            if backup.as_ref().is_some_and(|old| old.bytes == content.as_bytes()) {
+                continue;
+            }
+            previous.push((target.clone(), backup));
+        }
+        let mut transaction = Self { previous: Vec::new(), committed: false };
+        for (target, backup) in previous {
+            let (path, content) = &resolved[&target];
+            anyhow::ensure!(crate::util::trusted_file_path(path)? == target,
+                "certificate destination changed: {}", path.display());
+            transaction.previous.push((target, backup));
+            let mode = path.file_name().and_then(|name| name.to_str())
+                .filter(|name| *name == "privkey.pem").map(|_| 0o600);
+            crate::util::write_trusted_file(path, content.as_bytes(), mode)?;
+        }
+        Ok(transaction)
+    }
+
     fn apply_with_removals(
         config: &crate::config::AppConfig,
         files: BTreeMap<std::path::PathBuf, String>,
@@ -1431,6 +1464,28 @@ mod tests {
         config.nginx.inputs_dir = root.join("maestro/nginx");
         std::fs::create_dir_all(config.nginx.root_dir.join("settings")).unwrap();
         config
+    }
+
+    #[test]
+    fn router_certificate_transaction_preserves_directory_and_file_links() {
+        use std::{fs, os::unix::fs::symlink};
+        let temp = tempfile::tempdir().unwrap();
+        let store = temp.path().join("store");
+        fs::create_dir(&store).unwrap();
+        let certificate = store.join("version.pem");
+        fs::write(&certificate, "old").unwrap();
+        symlink("version.pem", store.join("fullchain.pem")).unwrap();
+        let alias = temp.path().join("certs");
+        symlink(&store, &alias).unwrap();
+        let link = alias.join("fullchain.pem");
+        let mut transaction = FileTransaction::apply_router_certificates(
+            [(link.clone(), "new".into())].into()).unwrap();
+        assert_eq!(fs::read(&certificate).unwrap(), b"new");
+        assert_eq!(fs::read_link(&link).unwrap(), std::path::Path::new("version.pem"));
+        transaction.rollback().unwrap();
+        assert_eq!(fs::read(&certificate).unwrap(), b"old");
+        assert!(fs::symlink_metadata(&alias).unwrap().is_symlink());
+        assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
     }
 
     #[test]

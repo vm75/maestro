@@ -206,7 +206,18 @@ fn object_entry(
     path: &Path,
     nginx_running: bool,
 ) -> Result<NginxObject> {
-    let enabled = symlink_exists(&enabled_path(config, kind, domain, name)?);
+    let link = enabled_path(config, kind, domain, name)?;
+    let enabled = if config.platform == crate::config::Platform::Asuswrt {
+        let expected = if kind == NginxObjectKind::Domain {
+            path.parent().context("domain configuration has no parent")?
+        } else {
+            path
+        };
+        fs::symlink_metadata(&link).is_ok_and(|m| m.is_symlink())
+            && link.canonicalize().ok().zip(expected.canonicalize().ok()).is_some_and(|(a,b)| a == b)
+    } else {
+        symlink_exists(&link)
+    };
     let parent_enabled = kind == NginxObjectKind::Domain
         || symlink_exists(&config.nginx.domains_enabled_dir.join(domain));
     let metadata = path.metadata()?;

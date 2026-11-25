@@ -46,13 +46,18 @@ fi
 # Respect the configured executable and challenge hook paths.
 HOOK=$(/opt/bin/maestro --config "$CONFIG_DIR/maestro.yaml" config-value certificates.dns01_hook)
 DEHYDRATED_BIN=$(/opt/bin/maestro --config "$CONFIG_DIR/maestro.yaml" config-value commands.dehydrated)
-if [ ! -e "$HOOK" ] && [ ! -L "$HOOK" ]; then
+if [ -L "$HOOK" ] && [ ! -e "$HOOK" ]; then
+    echo "Warning: configured DNS hook is a dangling symlink: $HOOK" >&2
+elif [ ! -e "$HOOK" ]; then
     mkdir -p "$(dirname "$HOOK")"
     if [ -f "$EXAMPLES_DIR/dehydrated-dns01-hook.sh" ]; then
         install -m 0755 "$EXAMPLES_DIR/dehydrated-dns01-hook.sh" "$HOOK"
     elif [ -f "$EXAMPLES_DIR/../scripts/dehydrated-dns01-hook.sh" ]; then
         install -m 0755 "$EXAMPLES_DIR/../scripts/dehydrated-dns01-hook.sh" "$HOOK"
     fi
+fi
+if [ ! -f "$HOOK" ] || [ ! -x "$HOOK" ]; then
+    echo "Warning: configured DNS hook is missing or not executable: $HOOK" >&2
 fi
 # The application updater verifies TLS and publishes atomically.
 if ! /opt/bin/maestro --config "$CONFIG_DIR/maestro.yaml" update-dehydrated; then

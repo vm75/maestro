@@ -453,7 +453,20 @@ impl AppState {
                 })?,
             );
         }
-        let mut transaction = crate::nginx_render::FileTransaction::apply(&self.config, files)?;
+        let mut transaction = if self.config.platform == crate::config::Platform::Asuswrt {
+            // A deployment already linked to the current dehydrated output is
+            // a no-op. Never overwrite an older immutable generation.
+            let source_root = source.canonicalize()?;
+            for path in files.keys() {
+                let resolved = crate::util::trusted_file_path(path)?;
+                let input = crate::util::trusted_file_path(&source.join(path.file_name().unwrap()))?;
+                anyhow::ensure!(!resolved.starts_with(&source_root) || resolved == input,
+                    "certificate destination refers to a different dehydrated generation: {}", path.display());
+            }
+            crate::nginx_render::FileTransaction::apply_router_certificates(files)?
+        } else {
+            crate::nginx_render::FileTransaction::apply(&self.config, files)?
+        };
         let result = async {
             let test = crate::api::nginx::nginx_test(self).await?;
             if !test.success {
