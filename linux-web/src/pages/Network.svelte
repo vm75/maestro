@@ -69,7 +69,6 @@
   let peerConfig = $state<PeerConfig | null>(null)
   let peerDraft = $state<Peer[] | null>(null)
   let peerRevision = $state('')
-  const canEditPeers = $derived(allowWrites && !!wg?.peers_writable && !wg.is_running && !!peerConfig && !peerConfig.is_running && !loading && !busy)
   function openPeerBatch(){if(!canEditPeers||!peerConfig)return;peerDraft=peerConfig.peers.map(p=>({...p}));peerRevision=peerConfig.revision;resetPeer()}
   async function savePeerBatch(){
     if(!canEditPeers||!peerDraft||!peerConfig)return
@@ -96,6 +95,7 @@
   let errors = $state<Record<string,string>>({})
   let busy = $state(false)
   let loading = $state(false)
+  const canEditPeers = $derived(allowWrites && !!wg?.peers_writable && !wg.is_running && !!peerConfig && !peerConfig.is_running && !loading && !busy)
   let message = $state('')
   let controller: AbortController | undefined
   async function refresh() {

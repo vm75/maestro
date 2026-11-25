@@ -77,7 +77,7 @@
       <p class="muted">Used by: {used('listener','legacy').join(', ') || 'No saved references'}</p>
       {#each Object.entries(draft.listener_profiles) as [name,profile] (name)}
         <div class="editor-card">
-          <h4>{name}</h4><label>Listener name<input value={name} required pattern="[A-Za-z0-9_]{1,32}" onchange={e=>rename('listener',name,e.currentTarget)}/></label><p class="muted">Used by: {used('listener',name).join(', ') || 'No saved references'}</p>
+          <h4>{name}</h4><label>Listener name<input value={name} required pattern={"[A-Za-z0-9_]{1,32}"} onchange={e=>rename('listener',name,e.currentTarget)}/></label><p class="muted">Used by: {used('listener',name).join(', ') || 'No saved references'}</p>
           {#each ['https','http'] as protocol}
             {@const p = protocol as 'http'|'https'}
             <h5>{protocol.toUpperCase()} endpoints</h5>
@@ -96,7 +96,7 @@
       <label>Legacy allowed IPs/networks (one per line)<textarea bind:value={allowed} rows="4"></textarea></label>
       <p class="muted">Used by: {used('access','legacy').join(', ') || 'No saved references'}</p>
       {#each Object.entries(draft.access_policies) as [name,policy] (name)}
-        <div class="editor-card"><h4>{name}</h4><label>Access rule name<input value={name} required pattern="[A-Za-z0-9_]{1,32}" onchange={e=>rename('access',name,e.currentTarget)}/></label><p class="muted">Used by: {used('access',name).join(', ') || 'No saved references'}</p>
+        <div class="editor-card"><h4>{name}</h4><label>Access rule name<input value={name} required pattern={"[A-Za-z0-9_]{1,32}"} onchange={e=>rename('access',name,e.currentTarget)}/></label><p class="muted">Used by: {used('access',name).join(', ') || 'No saved references'}</p>
           <label>Allowed IPs/networks<textarea rows="4" value={policy.allow.join('\n')} onchange={e=>policy.allow=lines(e.currentTarget.value)}></textarea></label>
           <button type="button" onclick={()=>remove('access',name)}>Remove access rule</button>
         </div>
