@@ -13,6 +13,7 @@
 
 - Preserve certificate drafts when permissions change, report certificate operation state and restore shared NGINX editing and policy workflows.
 - Harden opt-in Linux firewall enforcement and helper authorization while preserving router behavior.
+- Build the Linux UI before VS Code launch and build tasks, use the Linux feature set and YAML configuration, and reuse managed Node.js tooling.
 
 ## 0.12.1
 
