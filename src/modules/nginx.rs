@@ -720,7 +720,10 @@ pub fn http_forwarder_files(
         .get_template("conf.d/05-http-to-https.conf.jinja")?
         .render(minijinja::value::Serde(context))?;
     let mut files = std::collections::BTreeMap::from([
-        (config.nginx.root_dir.join("settings/servers.conf"), servers.clone()),
+        (
+            config.nginx.root_dir.join("settings/servers.conf"),
+            servers.clone(),
+        ),
         (config.nginx.http_forwarder_path.clone(), rendered),
     ]);
     if config.platform == crate::config::Platform::Linux {

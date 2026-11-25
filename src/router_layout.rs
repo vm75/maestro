@@ -174,7 +174,10 @@ fn check_roots(config: &AppConfig, data: &Path) -> Result<()> {
     nginx_render::ensure_managed_path(config, &config.nginx.inputs_dir)?;
     ensure!(
         !same_path(&config.nginx.inputs_dir, &config.nginx.root_dir)
-            && !same_path(&config.nginx.inputs_dir, &config.nginx.root_dir.join("settings")),
+            && !same_path(
+                &config.nginx.inputs_dir,
+                &config.nginx.root_dir.join("settings")
+            ),
         "nginx.inputs_dir must be separate from native nginx configuration"
     );
     ensure!(
@@ -220,7 +223,12 @@ pub fn require_current(config: &AppConfig) -> Result<()> {
 }
 
 pub fn migrate(config_path: &Path, config: &AppConfig) -> Result<()> {
-    migrate_with_defaults(config_path, config, Path::new(OLD_DATA), Path::new(NEW_DATA))
+    migrate_with_defaults(
+        config_path,
+        config,
+        Path::new(OLD_DATA),
+        Path::new(NEW_DATA),
+    )
 }
 
 fn migrate_with_defaults(
@@ -253,7 +261,11 @@ fn migrate_with_defaults(
         // but never let it take precedence over the effective old policy.
         let unused_policy = data.join(POLICY);
         if !same_path(&unused_policy, &old_policy) && !same_path(&unused_policy, &policy) {
-            retire(&mut retired, unused_policy, "inactive-firewall-policy.json".into())?;
+            retire(
+                &mut retired,
+                unused_policy,
+                "inactive-firewall-policy.json".into(),
+            )?;
         }
     }
     plan(
@@ -292,7 +304,9 @@ fn migrate_with_defaults(
     // Copy it only if neither the previous primary nor new authority exists.
     let fallback = old_default.join(POLICY);
     let import_fallback = regular(&policy)?.is_none()
-        && !transfers.iter().any(|transfer| transfer.destination == policy)
+        && !transfers
+            .iter()
+            .any(|transfer| transfer.destination == policy)
         && !same_path(&fallback, &policy)
         && regular(&fallback)?.is_some();
 
@@ -370,7 +384,11 @@ mod tests {
     fn fixture(root: &Path, custom: bool) -> (PathBuf, PathBuf, PathBuf, AppConfig) {
         let old = root.join("etc/maestro");
         let new = root.join("var/lib/maestro");
-        let data = if custom { root.join("custom") } else { old.clone() };
+        let data = if custom {
+            root.join("custom")
+        } else {
+            old.clone()
+        };
         let inputs = old.join("nginx");
         fs::create_dir_all(&inputs).unwrap();
         fs::create_dir_all(&data).unwrap();
@@ -424,10 +442,16 @@ mod tests {
             assert!(!old.join(name).exists());
         }
         for name in HTTP_FILES {
-            assert_eq!(fs::read(new.join("nginx").join(name)).unwrap(), b"saved recovery");
+            assert_eq!(
+                fs::read(new.join("nginx").join(name)).unwrap(),
+                b"saved recovery"
+            );
             assert!(!inputs.join(name).exists());
         }
-        assert_eq!(fs::read(inputs.join("domains.conf")).unwrap(), b"custom upstream");
+        assert_eq!(
+            fs::read(inputs.join("domains.conf")).unwrap(),
+            b"custom upstream"
+        );
         assert!(inputs.join("settings/unknown.conf").exists());
         for name in DERIVED {
             assert!(!inputs.join(name).exists());
@@ -436,7 +460,10 @@ mod tests {
             fs::read(new.join("layout-v13-backup/maestro.yaml.before-layout")).unwrap(),
             original
         );
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         let rewritten = fs::read(&path).unwrap();
         migrate_with_defaults(&path, &migrated, &old, &new).unwrap();
         assert_eq!(fs::read(&path).unwrap(), rewritten);
@@ -468,13 +495,23 @@ mod tests {
         let data = &config.paths.data_dir;
         fs::write(data.join(POLICY), b"custom policy").unwrap();
         fs::write(data.join("wol-machines.json"), b"custom state").unwrap();
-        fs::write(config.nginx.inputs_dir.join("http01-wan-owner.json"), b"owner").unwrap();
+        fs::write(
+            config.nginx.inputs_dir.join("http01-wan-owner.json"),
+            b"owner",
+        )
+        .unwrap();
         migrate_with_defaults(&path, &config, &old, &new).unwrap();
         assert_eq!(fs::read(&path).unwrap(), original);
         assert_eq!(fs::read(old.join(POLICY)).unwrap(), b"custom policy");
         assert!(!data.join(POLICY).exists());
-        assert_eq!(fs::read(data.join("wol-machines.json")).unwrap(), b"custom state");
-        assert_eq!(fs::read(data.join("nginx/http01-wan-owner.json")).unwrap(), b"owner");
+        assert_eq!(
+            fs::read(data.join("wol-machines.json")).unwrap(),
+            b"custom state"
+        );
+        assert_eq!(
+            fs::read(data.join("nginx/http01-wan-owner.json")).unwrap(),
+            b"owner"
+        );
         assert!(!new.exists());
     }
 }

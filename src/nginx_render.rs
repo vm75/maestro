@@ -806,7 +806,9 @@ pub fn shared_files(
             if router
                 && matches!(
                     name,
-                    "settings/allowed_ips.txt" | "settings/free_subdomains.txt" | "settings/servers.conf"
+                    "settings/allowed_ips.txt"
+                        | "settings/free_subdomains.txt"
+                        | "settings/servers.conf"
                 )
             {
                 continue;
@@ -957,7 +959,9 @@ pub fn shared_files(
         if !router
             || !matches!(
                 name.as_str(),
-                "settings/allowed_ips.txt" | "settings/free_subdomains.txt" | "settings/servers.conf"
+                "settings/allowed_ips.txt"
+                    | "settings/free_subdomains.txt"
+                    | "settings/servers.conf"
             )
         {
             files.insert(
