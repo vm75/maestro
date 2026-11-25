@@ -84,7 +84,9 @@ impl Tailer {
             let state = self.paths.entry(file.path.clone()).or_default();
             state.linked_log_roots = file.linked_log_roots.clone();
             if state.active.is_none() {
-                if let Ok(open) = OpenFile::open_with_roots(&file.path, file.start_at, &state.linked_log_roots) {
+                if let Ok(open) =
+                    OpenFile::open_with_roots(&file.path, file.start_at, &state.linked_log_roots)
+                {
                     state.active = Some(open);
                 }
                 state.initialized = true;
@@ -115,7 +117,8 @@ impl Tailer {
         let metadata_result = if state.linked_log_roots.is_empty() {
             std::fs::metadata(path)
         } else {
-            crate::util::open_contained_log(path, &state.linked_log_roots).and_then(|file| file.metadata())
+            crate::util::open_contained_log(path, &state.linked_log_roots)
+                .and_then(|file| file.metadata())
         };
         let path_metadata = match metadata_result {
             Ok(metadata) => Some(metadata),
@@ -136,7 +139,11 @@ impl Tailer {
                 } else {
                     initial_start
                 };
-                state.active = Some(OpenFile::open_with_roots(path, start_at, &state.linked_log_roots)?);
+                state.active = Some(OpenFile::open_with_roots(
+                    path,
+                    start_at,
+                    &state.linked_log_roots,
+                )?);
                 state.initialized = true;
             } else {
                 let current_id = FileId::from_metadata(metadata);
@@ -147,7 +154,11 @@ impl Tailer {
                 if rotated {
                     let old = state.active.take().expect("active file exists");
                     state.retired.push(old);
-                    state.active = Some(OpenFile::open_with_roots(path, StartAt::Beginning, &state.linked_log_roots)?);
+                    state.active = Some(OpenFile::open_with_roots(
+                        path,
+                        StartAt::Beginning,
+                        &state.linked_log_roots,
+                    )?);
                 } else if let Some(active) = &mut state.active {
                     if active.was_rewritten(metadata)? {
                         active.reset(metadata);
@@ -453,14 +464,24 @@ mod tests {
         let link = root.join("access.log");
         symlink(&first, &link).unwrap();
         let mut tailer = Tailer::default();
-        tailer.paths.entry(link.clone()).or_default().linked_log_roots = vec![root];
-        assert_eq!(tailer.read_lines(&link, StartAt::Beginning).unwrap(), vec![b"first".to_vec()]);
+        tailer
+            .paths
+            .entry(link.clone())
+            .or_default()
+            .linked_log_roots = vec![root];
+        assert_eq!(
+            tailer.read_lines(&link, StartAt::Beginning).unwrap(),
+            vec![b"first".to_vec()]
+        );
         std::fs::remove_file(&link).unwrap();
         symlink(&outside, &link).unwrap();
         assert!(tailer.read_lines(&link, StartAt::Beginning).is_err());
         std::fs::remove_file(&link).unwrap();
         symlink(&second, &link).unwrap();
-        assert_eq!(tailer.read_lines(&link, StartAt::Beginning).unwrap(), vec![b"second".to_vec()]);
+        assert_eq!(
+            tailer.read_lines(&link, StartAt::Beginning).unwrap(),
+            vec![b"second".to_vec()]
+        );
     }
 
     #[test]

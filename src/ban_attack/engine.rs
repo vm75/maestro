@@ -103,7 +103,10 @@ impl BanEngine {
 
     pub(crate) fn start_router(config: Config) -> Result<Self, Error> {
         let backend = Arc::new(CommandIpSet::new_with_options(
-            config.ipset.clone(), config.firewall.clone(), config.test_mode));
+            config.ipset.clone(),
+            config.firewall.clone(),
+            config.test_mode,
+        ));
         Self::start_with_links(config, backend, true)
     }
 
@@ -111,7 +114,11 @@ impl BanEngine {
         Self::start_with_links(config, backend, false)
     }
 
-    fn start_with_links(config: Config, backend: Arc<dyn BanBackend>, allow_links: bool) -> Result<Self, Error> {
+    fn start_with_links(
+        config: Config,
+        backend: Arc<dyn BanBackend>,
+        allow_links: bool,
+    ) -> Result<Self, Error> {
         let command_queue_capacity = config.command_queue_capacity;
         let command_timeout = Duration::from_secs(config.command_timeout_seconds);
         let compiled = CompiledConfig::compile_with_links(config, allow_links)?;

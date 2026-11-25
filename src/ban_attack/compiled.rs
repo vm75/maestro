@@ -57,7 +57,11 @@ impl CompiledConfig {
                 path: file.path.clone(),
                 start_at: file.start_at,
                 rules,
-                linked_log_roots: if allow_links { config.log_dirs.clone() } else { Vec::new() },
+                linked_log_roots: if allow_links {
+                    config.log_dirs.clone()
+                } else {
+                    Vec::new()
+                },
             });
         }
 
@@ -211,7 +215,11 @@ fn validate_log_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<(), Error
     validate_log_path_with_links(path, allowed_roots, false)
 }
 
-fn validate_log_path_with_links(path: &Path, allowed_roots: &[PathBuf], allow_links: bool) -> Result<(), Error> {
+fn validate_log_path_with_links(
+    path: &Path,
+    allowed_roots: &[PathBuf],
+    allow_links: bool,
+) -> Result<(), Error> {
     if !path.is_absolute() {
         return Err(Error::Config(format!(
             "log path `{}` must be absolute",

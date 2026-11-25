@@ -1177,7 +1177,9 @@ impl FileTransaction {
                 .is_some_and(|name| name.starts_with("privkey") && name.ends_with(".pem"));
             if config.platform == crate::config::Platform::Asuswrt {
                 let target = crate::util::trusted_file_path(&path)?;
-                let mode = if private_key { 0o600 } else {
+                let mode = if private_key {
+                    0o600
+                } else {
                     std::fs::metadata(&target).map_or(0o644, |m| m.permissions().mode())
                 };
                 crate::util::publish_physical_file(&target, content.as_bytes(), mode, None, true)?;
@@ -2003,7 +2005,11 @@ mod tests {
             .collect();
         assert!(FileTransaction::apply(&config, files).is_err());
         assert_eq!(fs::read(&external_file).unwrap(), b"untouched");
-        assert!(fs::symlink_metadata(outside.join("nginx.yaml")).unwrap().is_symlink());
+        assert!(
+            fs::symlink_metadata(outside.join("nginx.yaml"))
+                .unwrap()
+                .is_symlink()
+        );
     }
     #[test]
     fn deployment_globals_preserve_linux_runtime_options_and_ignore_retired_fallback() {

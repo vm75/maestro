@@ -104,8 +104,13 @@ fn sync_parent(path: &Path) -> Result<()> {
 
 fn write_file(path: &Path, bytes: &[u8], metadata: &Metadata, replace: bool) -> Result<()> {
     let target = crate::util::trusted_file_path(path)?;
-    crate::util::publish_physical_file(&target, bytes, metadata.permissions().mode(),
-        Some((metadata.uid(),metadata.gid())), replace)
+    crate::util::publish_physical_file(
+        &target,
+        bytes,
+        metadata.permissions().mode(),
+        Some((metadata.uid(), metadata.gid())),
+        replace,
+    )
 }
 
 fn copy_checked(source: &Path, destination: &Path) -> Result<()> {

@@ -129,11 +129,17 @@ pub(crate) fn open_physical_file(path: &Path) -> Result<std::fs::File> {
     use anyhow::{Context, ensure};
     use rustix::fs::{self as rfs, Mode, OFlags};
     let directory = physical_directory(path.parent().context("missing parent")?, false)?;
-    let file = std::fs::File::from(rfs::openat(&directory,
+    let file = std::fs::File::from(rfs::openat(
+        &directory,
         path.file_name().context("missing filename")?,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-        Mode::empty())?);
-    ensure!(file.metadata()?.is_file(), "not a regular file: {}", path.display());
+        Mode::empty(),
+    )?);
+    ensure!(
+        file.metadata()?.is_file(),
+        "not a regular file: {}",
+        path.display()
+    );
     Ok(file)
 }
 
@@ -141,9 +147,14 @@ pub(crate) fn open_physical_file(path: &Path) -> Result<std::fs::File> {
 /// final symlink. Open the physical path with no-follow directory traversal.
 pub(crate) fn open_contained_log(path: &Path, roots: &[PathBuf]) -> std::io::Result<std::fs::File> {
     let resolved = path.canonicalize()?;
-    if !roots.iter().any(|root| root.canonicalize().is_ok_and(|root| resolved.starts_with(root))) {
-        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied,
-            format!("log target is outside configured roots: {}", path.display())));
+    if !roots.iter().any(|root| {
+        root.canonicalize()
+            .is_ok_and(|root| resolved.starts_with(root))
+    }) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("log target is outside configured roots: {}", path.display()),
+        ));
     }
     open_physical_file(&resolved).map_err(|error| std::io::Error::other(error.to_string()))
 }
@@ -151,7 +162,11 @@ pub(crate) fn open_contained_log(path: &Path, roots: &[PathBuf]) -> std::io::Res
 /// Atomic publication in a pinned physical directory. With replace=false,
 /// linkat publishes only if the destination does not exist.
 pub(crate) fn publish_physical_file(
-    target: &Path, bytes: &[u8], mode: u32, owner: Option<(u32,u32)>, replace: bool,
+    target: &Path,
+    bytes: &[u8],
+    mode: u32,
+    owner: Option<(u32, u32)>,
+    replace: bool,
 ) -> Result<()> {
     use anyhow::{Context, ensure};
     use rustix::fs::{self as rfs, AtFlags, FileType, Mode, OFlags};
@@ -160,17 +175,23 @@ pub(crate) fn publish_physical_file(
     let directory = physical_directory(target.parent().context("missing parent")?, true)?;
     let name = target.file_name().context("missing filename")?;
     match rfs::statat(&directory, name, AtFlags::SYMLINK_NOFOLLOW) {
-        Ok(stat) => ensure!(replace && FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile,
-            "refusing to replace non-regular or existing file: {}", target.display()),
+        Ok(stat) => ensure!(
+            replace && FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile,
+            "refusing to replace non-regular or existing file: {}",
+            target.display()
+        ),
         Err(Errno::NOENT) => {}
         Err(error) => return Err(error.into()),
     }
     let temporary = format!(".maestro-write-{}", uuid::Uuid::new_v4().simple());
-    let mut file = File::from(rfs::openat(&directory, &temporary,
+    let mut file = File::from(rfs::openat(
+        &directory,
+        &temporary,
         OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::from_raw_mode(0o600))?);
+        Mode::from_raw_mode(0o600),
+    )?);
     let result = (|| -> Result<()> {
-        if let Some((uid,gid)) = owner {
+        if let Some((uid, gid)) = owner {
             use std::os::unix::fs::MetadataExt;
             let metadata = file.metadata()?;
             if metadata.uid() != uid || metadata.gid() != gid {
@@ -200,18 +221,28 @@ pub(crate) fn publish_physical_file(
 
 /// Atomic publication to the resolved regular file, not over its symlink.
 pub(crate) fn write_trusted_file(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<()> {
-    use std::{fs, io::ErrorKind, os::unix::fs::{MetadataExt, PermissionsExt}};
+    use std::{
+        fs,
+        io::ErrorKind,
+        os::unix::fs::{MetadataExt, PermissionsExt},
+    };
     let target = trusted_file_path(path)?;
     let existing = match fs::symlink_metadata(&target) {
         Ok(metadata) => {
-            anyhow::ensure!(metadata.is_file(), "not a regular file: {}", target.display());
+            anyhow::ensure!(
+                metadata.is_file(),
+                "not a regular file: {}",
+                target.display()
+            );
             Some(metadata)
         }
         Err(error) if error.kind() == ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
-    let permissions = mode.or_else(|| existing.as_ref().map(|m| m.permissions().mode())).unwrap_or(0o600);
-    let owner = existing.as_ref().map(|m| (m.uid(),m.gid()));
+    let permissions = mode
+        .or_else(|| existing.as_ref().map(|m| m.permissions().mode()))
+        .unwrap_or(0o600);
+    let owner = existing.as_ref().map(|m| (m.uid(), m.gid()));
     publish_physical_file(&target, bytes, permissions, owner, true)
 }
 
@@ -221,7 +252,11 @@ pub(crate) fn unlink_trusted_entry(path: &Path) -> Result<()> {
     use rustix::fs::{self as rfs, AtFlags};
     let parent = path.parent().context("missing parent")?.canonicalize()?;
     let directory = physical_directory(&parent, false)?;
-    rfs::unlinkat(&directory, path.file_name().context("missing filename")?, AtFlags::empty())?;
+    rfs::unlinkat(
+        &directory,
+        path.file_name().context("missing filename")?,
+        AtFlags::empty(),
+    )?;
     rfs::fsync(&directory)?;
     Ok(())
 }

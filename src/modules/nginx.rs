@@ -853,7 +853,9 @@ pub fn list_logs(config: &AppConfig) -> Result<Vec<NginxLogEntry>> {
         let entry = entry?;
         let metadata = if entry.file_type().is_file() {
             entry.metadata()?
-        } else if config.platform == crate::config::Platform::Asuswrt && entry.file_type().is_symlink() {
+        } else if config.platform == crate::config::Platform::Asuswrt
+            && entry.file_type().is_symlink()
+        {
             let mut roots = config.firewall.log_dirs.clone();
             roots.push(config.nginx.log_dir.clone());
             match crate::util::open_contained_log(entry.path(), &roots) {

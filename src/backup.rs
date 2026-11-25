@@ -187,18 +187,25 @@ fn router_manifest() -> Result<RouterBackupManifest> {
     for logical in [PathBuf::from("/opt"), PathBuf::from("/jffs")] {
         match logical.canonicalize() {
             Ok(physical) => {
-                ensure!(physical.is_dir() && physical != Path::new("/"),
-                    "invalid router mount {}", logical.display());
+                ensure!(
+                    physical.is_dir() && physical != Path::new("/"),
+                    "invalid router mount {}",
+                    logical.display()
+                );
                 mounts.push(RouterMount { logical, physical });
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
     }
     Ok(RouterBackupManifest { version: 1, mounts })
 }
 
-fn write_router_archive(file: &fs::File, sources: &[PathBuf], manifest: &RouterBackupManifest) -> Result<()> {
+fn write_router_archive(
+    file: &fs::File,
+    sources: &[PathBuf],
+    manifest: &RouterBackupManifest,
+) -> Result<()> {
     use flate2::{Compression, write::GzEncoder};
     let mut archive = tar::Builder::new(GzEncoder::new(file, Compression::default()));
     archive.follow_symlinks(false);
@@ -209,19 +216,29 @@ fn write_router_archive(file: &fs::File, sources: &[PathBuf], manifest: &RouterB
     header.set_cksum();
     archive.append_data(&mut header, ROUTER_MANIFEST, bytes.as_slice())?;
     for source in sources {
-        for entry in walkdir::WalkDir::new(source).follow_links(false).follow_root_links(false)
-            .into_iter().filter_entry(|entry| {
+        for entry in walkdir::WalkDir::new(source)
+            .follow_links(false)
+            .follow_root_links(false)
+            .into_iter()
+            .filter_entry(|entry| {
                 let name = entry.file_name().to_string_lossy();
                 !name.starts_with(".maestro-backup-")
                     && !(name.starts_with("maestro-backup-") && name.ends_with(".tar.gz"))
-            }) {
+            })
+        {
             let entry = entry?;
             let path = entry.path();
             let relative = path.strip_prefix("/")?;
-            ensure!(relative != Path::new(ROUTER_MANIFEST), "reserved router archive path");
+            ensure!(
+                relative != Path::new(ROUTER_MANIFEST),
+                "reserved router archive path"
+            );
             let kind = entry.file_type();
-            ensure!(kind.is_file() || kind.is_dir() || kind.is_symlink(),
-                "unsupported backup file type: {}", path.display());
+            ensure!(
+                kind.is_file() || kind.is_dir() || kind.is_symlink(),
+                "unsupported backup file type: {}",
+                path.display()
+            );
             archive.append_path_with_name(path, relative)?;
         }
     }
@@ -267,23 +284,23 @@ pub async fn run(config: &AppConfig, config_path: &Path, output_dir: Option<&Pat
     if config.platform == Platform::Asuswrt {
         write_router_archive(&file, &sources, &router_manifest()?)?;
     } else {
-    let mut args: Vec<OsString> = vec![
-        "-czf".into(),
-        archive.as_os_str().into(),
-        "--exclude=maestro-backup-*.tar.gz".into(),
-        "--exclude=.maestro-backup-*".into(),
-        "-C".into(),
-        "/".into(),
-        "--".into(),
-    ];
-    for path in sources {
-        args.push(path.strip_prefix("/")?.as_os_str().into());
-    }
-    let result = CommandRunner::new(false)
-        .run_process_group(&config.commands.tar, args, Duration::from_secs(300))
-        .await
-        .context("unable to create backup archive")?;
-    ensure!(result.success, "backup archive failed: {}", result.stderr);
+        let mut args: Vec<OsString> = vec![
+            "-czf".into(),
+            archive.as_os_str().into(),
+            "--exclude=maestro-backup-*.tar.gz".into(),
+            "--exclude=.maestro-backup-*".into(),
+            "-C".into(),
+            "/".into(),
+            "--".into(),
+        ];
+        for path in sources {
+            args.push(path.strip_prefix("/")?.as_os_str().into());
+        }
+        let result = CommandRunner::new(false)
+            .run_process_group(&config.commands.tar, args, Duration::from_secs(300))
+            .await
+            .context("unable to create backup archive")?;
+        ensure!(result.success, "backup archive failed: {}", result.stderr);
     }
     ensure!(file.metadata()?.len() > 0, "backup archive is empty");
     file.sync_all()?;

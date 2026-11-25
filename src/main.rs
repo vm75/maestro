@@ -130,7 +130,12 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
     // Recovery must remain available when the installed configuration is corrupt.
-    if let Some(Command::Restore { archive, root, mappings }) = &cli.command {
+    if let Some(Command::Restore {
+        archive,
+        root,
+        mappings,
+    }) = &cli.command
+    {
         if mappings.is_empty() {
             return restore::run(archive, root, cli.test_mode);
         }

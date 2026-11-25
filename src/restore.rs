@@ -256,18 +256,29 @@ impl Destination {
 /// Existing directory aliases are permitted only if their resolved locations
 /// remain within that root. No arbitrary archive parent links are traversed.
 fn mapped_destination(root: &Path, logical: &Path) -> Result<PathBuf> {
-    ensure!(logical.is_absolute(), "restore mapping destination must be absolute");
+    ensure!(
+        logical.is_absolute(),
+        "restore mapping destination must be absolute"
+    );
     let relative_path = relative(logical.strip_prefix("/")?)?;
     let candidate = root.join(relative_path);
     let mut existing = candidate.as_path();
     while !existing.exists() {
-        ensure!(!fs::symlink_metadata(existing).is_ok_and(|m| m.is_symlink()),
-            "broken restore mapping: {}", existing.display());
-        existing = existing.parent().context("restore mapping has no existing parent")?;
+        ensure!(
+            !fs::symlink_metadata(existing).is_ok_and(|m| m.is_symlink()),
+            "broken restore mapping: {}",
+            existing.display()
+        );
+        existing = existing
+            .parent()
+            .context("restore mapping has no existing parent")?;
     }
     let resolved = existing.canonicalize()?;
-    ensure!(resolved.starts_with(root) && resolved.is_dir(),
-        "restore mapping escapes destination root: {}", logical.display());
+    ensure!(
+        resolved.starts_with(root) && resolved.is_dir(),
+        "restore mapping escapes destination root: {}",
+        logical.display()
+    );
     let physical = resolved.join(candidate.strip_prefix(existing)?);
     relative(physical.strip_prefix(root)?)
 }
@@ -278,15 +289,17 @@ fn normalized_absolute(path: &Path) -> Result<PathBuf> {
     for part in path.components().skip(1) {
         match part {
             Component::Normal(name) => result.push(name),
-            Component::CurDir => {},
-            Component::ParentDir => { ensure!(result.pop(), "link escapes filesystem root"); },
+            Component::CurDir => {}
+            Component::ParentDir => {
+                ensure!(result.pop(), "link escapes filesystem root");
+            }
             _ => bail!("invalid absolute path"),
         }
     }
     Ok(result)
 }
 
-fn map_archive_path(path: &Path, mappings: &[(PathBuf,PathBuf)]) -> Result<Option<PathBuf>> {
+fn map_archive_path(path: &Path, mappings: &[(PathBuf, PathBuf)]) -> Result<Option<PathBuf>> {
     for (source, destination) in mappings {
         if let Ok(suffix) = path.strip_prefix(source) {
             return Ok(Some(relative(&destination.join(suffix))?));
@@ -297,58 +310,101 @@ fn map_archive_path(path: &Path, mappings: &[(PathBuf,PathBuf)]) -> Result<Optio
 
 fn relative_link(from: &Path, to: &Path) -> PathBuf {
     let parent = from.parent().unwrap_or(Path::new(""));
-    let common = parent.components().zip(to.components()).take_while(|(a,b)| a == b).count();
+    let common = parent
+        .components()
+        .zip(to.components())
+        .take_while(|(a, b)| a == b)
+        .count();
     let mut result = PathBuf::new();
-    for _ in parent.components().skip(common) { result.push(".."); }
-    for part in to.components().skip(common) { result.push(part.as_os_str()); }
-    if result.as_os_str().is_empty() { result.push("."); }
+    for _ in parent.components().skip(common) {
+        result.push("..");
+    }
+    for part in to.components().skip(common) {
+        result.push(part.as_os_str());
+    }
+    if result.as_os_str().is_empty() {
+        result.push(".");
+    }
     result
 }
 
 fn portable_items(
-    mut items: BTreeMap<PathBuf, Item>, root: &Path, explicit: &[String],
+    mut items: BTreeMap<PathBuf, Item>,
+    root: &Path,
+    explicit: &[String],
 ) -> Result<BTreeMap<PathBuf, Item>> {
     let Some(manifest) = items.remove(Path::new(crate::backup::ROUTER_MANIFEST)) else {
-        ensure!(explicit.is_empty(), "restore mappings require a router backup manifest");
+        ensure!(
+            explicit.is_empty(),
+            "restore mappings require a router backup manifest"
+        );
         return Ok(items);
     };
-    let Contents::File(manifest) = manifest.contents else { bail!("invalid router backup manifest"); };
-    ensure!(fs::metadata(&manifest)?.len() <= 64 * 1024, "router backup manifest too large");
-    let manifest: crate::backup::RouterBackupManifest = serde_json::from_slice(&fs::read(manifest)?)?;
-    ensure!(manifest.version == 1, "unsupported router backup manifest version");
+    let Contents::File(manifest) = manifest.contents else {
+        bail!("invalid router backup manifest");
+    };
+    ensure!(
+        fs::metadata(&manifest)?.len() <= 64 * 1024,
+        "router backup manifest too large"
+    );
+    let manifest: crate::backup::RouterBackupManifest =
+        serde_json::from_slice(&fs::read(manifest)?)?;
+    ensure!(
+        manifest.version == 1,
+        "unsupported router backup manifest version"
+    );
     let mut mappings = Vec::new();
     for value in explicit {
-        let (source, destination) = value.split_once('=').context("restore mapping must be SOURCE=DESTINATION")?;
+        let (source, destination) = value
+            .split_once('=')
+            .context("restore mapping must be SOURCE=DESTINATION")?;
         let source = Path::new(source);
-        ensure!(normalized_absolute(source)? == source && source != Path::new("/"), "invalid restore mapping source");
+        ensure!(
+            normalized_absolute(source)? == source && source != Path::new("/"),
+            "invalid restore mapping source"
+        );
         let destination = mapped_destination(root, Path::new(destination))?;
         let source = relative(source.strip_prefix("/")?)?;
-        ensure!(!mappings.iter().any(|(old,_)| old == &source), "duplicate restore mapping");
+        ensure!(
+            !mappings.iter().any(|(old, _)| old == &source),
+            "duplicate restore mapping"
+        );
         mappings.push((source, destination));
     }
     let mut moved = false;
     let mut logical = Vec::new();
     for mount in manifest.mounts {
-        ensure!(matches!(mount.logical.to_str(), Some("/opt" | "/jffs")),
-            "unsupported router mount");
-        ensure!(normalized_absolute(&mount.physical)? == mount.physical && mount.physical != Path::new("/"),
-            "invalid physical router mount");
+        ensure!(
+            matches!(mount.logical.to_str(), Some("/opt" | "/jffs")),
+            "unsupported router mount"
+        );
+        ensure!(
+            normalized_absolute(&mount.physical)? == mount.physical
+                && mount.physical != Path::new("/"),
+            "invalid physical router mount"
+        );
         let source = relative(mount.physical.strip_prefix("/")?)?;
         let destination = mapped_destination(root, &mount.logical)?;
         moved |= source != destination;
         let logical_source = relative(mount.logical.strip_prefix("/")?)?;
-        ensure!(!logical.iter().any(|(old,_)| old == &logical_source), "duplicate router mount");
+        ensure!(
+            !logical.iter().any(|(old, _)| old == &logical_source),
+            "duplicate router mount"
+        );
         logical.push((logical_source, destination.clone()));
-        if !mappings.iter().any(|(old,_)| old == &source) {
+        if !mappings.iter().any(|(old, _)| old == &source) {
             mappings.push((source, destination));
         }
     }
-    mappings.sort_by_key(|(source,_)| std::cmp::Reverse(source.components().count()));
+    mappings.sort_by_key(|(source, _)| std::cmp::Reverse(source.components().count()));
     let mut relocated = BTreeMap::new();
     for (source, mut item) in items {
         let mapped = map_archive_path(&source, &mappings)?;
-        ensure!(!moved || mapped.is_some(),
-            "external backup path requires --map SOURCE=DESTINATION: /{}", source.display());
+        ensure!(
+            !moved || mapped.is_some(),
+            "external backup path requires --map SOURCE=DESTINATION: /{}",
+            source.display()
+        );
         let destination = mapped.unwrap_or_else(|| source.clone());
         if let Contents::Symlink(target) = &mut item.contents {
             let absolute = if target.is_absolute() {
@@ -362,18 +418,27 @@ fn portable_items(
             if let Some(mapped_target) = mapped_target {
                 *target = relative_link(&destination, &mapped_target);
             } else if moved {
-                ensure!(!target.is_absolute() && destination == source,
-                    "external link target requires --map SOURCE=DESTINATION: {}", absolute.display());
+                ensure!(
+                    !target.is_absolute() && destination == source,
+                    "external link target requires --map SOURCE=DESTINATION: {}",
+                    absolute.display()
+                );
             }
         }
-        ensure!(relocated.insert(destination.clone(), item).is_none(),
-            "restore mapping collision: {}", destination.display());
+        ensure!(
+            relocated.insert(destination.clone(), item).is_none(),
+            "restore mapping collision: {}",
+            destination.display()
+        );
     }
     for path in relocated.keys() {
         for ancestor in path.ancestors().skip(1) {
             if let Some(parent) = relocated.get(ancestor) {
-                ensure!(matches!(parent.contents, Contents::Directory),
-                    "mapped archive writes through a non-directory: {}", ancestor.display());
+                ensure!(
+                    matches!(parent.contents, Contents::Directory),
+                    "mapped archive writes through a non-directory: {}",
+                    ancestor.display()
+                );
             }
         }
     }
@@ -384,7 +449,12 @@ pub fn run(archive: &Path, root: &Path, test_mode: bool) -> Result<()> {
     run_with_mappings(archive, root, test_mode, &[])
 }
 
-pub fn run_with_mappings(archive: &Path, root: &Path, test_mode: bool, mappings: &[String]) -> Result<()> {
+pub fn run_with_mappings(
+    archive: &Path,
+    root: &Path,
+    test_mode: bool,
+    mappings: &[String],
+) -> Result<()> {
     let root = root
         .canonicalize()
         .context("restore root must be an existing directory")?;
@@ -603,28 +673,62 @@ mod tests {
 
     #[test]
     fn portable_router_backup_maps_entware_mount_and_certificate_links() {
-        use crate::backup::{RouterBackupManifest, RouterMount, ROUTER_MANIFEST};
+        use crate::backup::{ROUTER_MANIFEST, RouterBackupManifest, RouterMount};
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("router");
         fs::create_dir_all(root.join("new-usb/entware")).unwrap();
         symlink("new-usb/entware", root.join("opt")).unwrap();
         let manifest_file = temp.path().join("manifest");
-        fs::write(&manifest_file, serde_json::to_vec(&RouterBackupManifest {
-            version: 1,
-            mounts: vec![RouterMount { logical: "/opt".into(), physical: "/old-usb/entware".into() }],
-        }).unwrap()).unwrap();
+        fs::write(
+            &manifest_file,
+            serde_json::to_vec(&RouterBackupManifest {
+                version: 1,
+                mounts: vec![RouterMount {
+                    logical: "/opt".into(),
+                    physical: "/old-usb/entware".into(),
+                }],
+            })
+            .unwrap(),
+        )
+        .unwrap();
         let data = temp.path().join("data");
         fs::write(&data, b"certificate").unwrap();
         let mut items = BTreeMap::from([
-            (PathBuf::from(ROUTER_MANIFEST), Item { mode: 0o600, contents: Contents::File(manifest_file) }),
-            (PathBuf::from("old-usb/entware/certs/version.pem"), Item { mode: 0o600, contents: Contents::File(data) }),
-            (PathBuf::from("old-usb/entware/certs/fullchain.pem"), Item { mode: 0o777, contents: Contents::Symlink("/old-usb/entware/certs/version.pem".into()) }),
+            (
+                PathBuf::from(ROUTER_MANIFEST),
+                Item {
+                    mode: 0o600,
+                    contents: Contents::File(manifest_file),
+                },
+            ),
+            (
+                PathBuf::from("old-usb/entware/certs/version.pem"),
+                Item {
+                    mode: 0o600,
+                    contents: Contents::File(data),
+                },
+            ),
+            (
+                PathBuf::from("old-usb/entware/certs/fullchain.pem"),
+                Item {
+                    mode: 0o777,
+                    contents: Contents::Symlink("/old-usb/entware/certs/version.pem".into()),
+                },
+            ),
         ]);
         let relocated = portable_items(items.clone(), &root, &[]).unwrap();
         assert!(relocated.contains_key(Path::new("new-usb/entware/certs/version.pem")));
-        assert!(matches!(&relocated[Path::new("new-usb/entware/certs/fullchain.pem")].contents,
-            Contents::Symlink(target) if target == Path::new("version.pem")));
-        items.insert("external/cert.pem".into(), Item { mode: 0o600, contents: Contents::File(temp.path().join("unused")) });
+        assert!(
+            matches!(&relocated[Path::new("new-usb/entware/certs/fullchain.pem")].contents,
+            Contents::Symlink(target) if target == Path::new("version.pem"))
+        );
+        items.insert(
+            "external/cert.pem".into(),
+            Item {
+                mode: 0o600,
+                contents: Contents::File(temp.path().join("unused")),
+            },
+        );
         assert!(portable_items(items.clone(), &root, &[]).is_err());
         assert!(portable_items(items, &root, &["/external=/new-usb/external".into()]).is_ok());
     }
