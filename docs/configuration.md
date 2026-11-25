@@ -196,8 +196,5 @@ relocation; original link text and contents are saved in the private migration
 backup.
 NGINX site activation accepts matching relative or absolute links, and deployed
 certificate aliases retain their targets. Unexpected links in managed NGINX
-inputs and temporary paths are rejected. Ban Shield continues to reject linked
-log files; configure the regular log path under an allowed log directory.
-Backups include known linked router state and certificate targets; restore
-continues to require safe real destination parents. Cross-router mount remapping
-requires explicit administrator preparation, not automatic traversal of links.
+inputs and temporary paths are rejected. Router Ban Shield and the NGINX log viewer allow linked regular log files only within configured log roots; the resolved target is checked on each poll or open.
+Backups include known linked router state and certificate targets. Router backup manifests map physical Entware and JFFS roots to the destination router; other relocated roots require explicit restore mappings. Restore continues to require safe real destination parents.

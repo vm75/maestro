@@ -166,6 +166,69 @@ fn inputs(config: &AppConfig, config_path: &Path) -> Result<Vec<PathBuf>> {
     Ok(roots)
 }
 
+pub(crate) const ROUTER_MANIFEST: &str = ".maestro-router-backup.json";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RouterBackupManifest {
+    pub version: u32,
+    pub mounts: Vec<RouterMount>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RouterMount {
+    pub logical: PathBuf,
+    pub physical: PathBuf,
+}
+
+fn router_manifest() -> Result<RouterBackupManifest> {
+    let mut mounts = Vec::new();
+    for logical in [PathBuf::from("/opt"), PathBuf::from("/jffs")] {
+        match logical.canonicalize() {
+            Ok(physical) => {
+                ensure!(physical.is_dir() && physical != Path::new("/"),
+                    "invalid router mount {}", logical.display());
+                mounts.push(RouterMount { logical, physical });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(RouterBackupManifest { version: 1, mounts })
+}
+
+fn write_router_archive(file: &fs::File, sources: &[PathBuf], manifest: &RouterBackupManifest) -> Result<()> {
+    use flate2::{Compression, write::GzEncoder};
+    let mut archive = tar::Builder::new(GzEncoder::new(file, Compression::default()));
+    archive.follow_symlinks(false);
+    let bytes = serde_json::to_vec(manifest)?;
+    let mut header = tar::Header::new_gnu();
+    header.set_mode(0o600);
+    header.set_size(bytes.len() as u64);
+    header.set_cksum();
+    archive.append_data(&mut header, ROUTER_MANIFEST, bytes.as_slice())?;
+    for source in sources {
+        for entry in walkdir::WalkDir::new(source).follow_links(false).follow_root_links(false)
+            .into_iter().filter_entry(|entry| {
+                let name = entry.file_name().to_string_lossy();
+                !name.starts_with(".maestro-backup-")
+                    && !(name.starts_with("maestro-backup-") && name.ends_with(".tar.gz"))
+            }) {
+            let entry = entry?;
+            let path = entry.path();
+            let relative = path.strip_prefix("/")?;
+            ensure!(relative != Path::new(ROUTER_MANIFEST), "reserved router archive path");
+            let kind = entry.file_type();
+            ensure!(kind.is_file() || kind.is_dir() || kind.is_symlink(),
+                "unsupported backup file type: {}", path.display());
+            archive.append_path_with_name(path, relative)?;
+        }
+    }
+    archive.into_inner()?.finish()?;
+    Ok(())
+}
+
 struct Staging(PathBuf);
 
 impl Drop for Staging {
@@ -201,6 +264,9 @@ pub async fn run(config: &AppConfig, config_path: &Path, output_dir: Option<&Pat
         .create_new(true)
         .mode(0o600)
         .open(&archive)?;
+    if config.platform == Platform::Asuswrt {
+        write_router_archive(&file, &sources, &router_manifest()?)?;
+    } else {
     let mut args: Vec<OsString> = vec![
         "-czf".into(),
         archive.as_os_str().into(),
@@ -218,6 +284,7 @@ pub async fn run(config: &AppConfig, config_path: &Path, output_dir: Option<&Pat
         .await
         .context("unable to create backup archive")?;
     ensure!(result.success, "backup archive failed: {}", result.stderr);
+    }
     ensure!(file.metadata()?.len() > 0, "backup archive is empty");
     file.sync_all()?;
     // hard_link publishes atomically without replacing a same-second backup or symlink.

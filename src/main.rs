@@ -99,6 +99,9 @@ enum Command {
         /// Restore beneath this existing directory instead of /.
         #[arg(long, default_value = "/")]
         root: PathBuf,
+        /// Map an external archived router root to a destination (SOURCE=DESTINATION).
+        #[arg(long = "map")]
+        mappings: Vec<String>,
     },
     /// Download the newest stable Entware IPK and optionally install it (router only).
     Upgrade {
@@ -127,8 +130,11 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
     // Recovery must remain available when the installed configuration is corrupt.
-    if let Some(Command::Restore { archive, root }) = &cli.command {
-        return restore::run(archive, root, cli.test_mode);
+    if let Some(Command::Restore { archive, root, mappings }) = &cli.command {
+        if mappings.is_empty() {
+            return restore::run(archive, root, cli.test_mode);
+        }
+        return restore::run_with_mappings(archive, root, cli.test_mode, mappings);
     }
     #[cfg(feature = "linux")]
     if matches!(cli.command, Some(Command::InitLinuxConfig)) {
@@ -526,7 +532,7 @@ mod cli_tests {
         ])
         .unwrap();
         assert!(
-            matches!(cli.command, Some(Command::Restore { archive, root }) if archive == Path::new("/tmp/backup.tar.gz") && root == Path::new("/tmp/recovery"))
+            matches!(cli.command, Some(Command::Restore { archive, root, .. }) if archive == Path::new("/tmp/backup.tar.gz") && root == Path::new("/tmp/recovery"))
         );
 
         let cli = Cli::try_parse_from(["maestro", "toolbox", "list"]).unwrap();

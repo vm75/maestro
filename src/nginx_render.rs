@@ -1175,7 +1175,13 @@ impl FileTransaction {
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with("privkey") && name.ends_with(".pem"));
-            if private_key {
+            if config.platform == crate::config::Platform::Asuswrt {
+                let target = crate::util::trusted_file_path(&path)?;
+                let mode = if private_key { 0o600 } else {
+                    std::fs::metadata(&target).map_or(0o644, |m| m.permissions().mode())
+                };
+                crate::util::publish_physical_file(&target, content.as_bytes(), mode, None, true)?;
+            } else if private_key {
                 let permissions = std::fs::Permissions::from_mode(0o600);
                 nginx::atomic_write_with_permissions(
                     &path,

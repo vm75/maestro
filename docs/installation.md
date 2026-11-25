@@ -383,3 +383,25 @@ sudo ./scripts/install-linux.sh --user YOUR_ACCOUNT --config /home/YOUR_ACCOUNT/
 ```
 
 Review the plan and repeat without `--dry-run` to apply. Select `podman,docker,virtualization,incus,samba,nfs` individually or `all`. Omitting `--backends` preserves the minimal deployment behavior. `--skip-packages` verifies existing native packages without upgrading them. On Ubuntu/Debian the installer refreshes APT and installs native packages; on Arch it performs a synchronized full upgrade. It adds required Docker, libvirt and Incus groups, starts their socket/service units, enables lingering and prepares the workload user's D-Bus socket before Maestro starts. No external repositories are added. Docker and Incus group membership confers broad host control. Samba/NFS publication and Incus initialization remain explicit. The helper is independently optional (`--with-helper --helper /absolute/path/maestro-admin`); root-owned grants still default to deny. Package, group and daemon changes are not rolled back after later failures.
+
+### Restore a portable router backup
+
+New router backups contain a versioned manifest for /opt and /jffs. Stop
+services and mount Entware on the destination before restoring. Restore maps
+the archived physical roots to the destination's existing logical mounts.
+When a mount moves, external archived paths must be explicitly mapped (including
+identity mappings if they should stay in the original location):
+
+```sh
+maestro restore /tmp/maestro-backup.tar.gz --test-mode \\
+  --map /mnt/old-certs=/mnt/new-certs
+maestro restore /tmp/maestro-backup.tar.gz \\
+  --map /mnt/old-certs=/mnt/new-certs
+```
+
+Mappings are absolute source and logical destination prefixes. Validate the
+archive first with test mode. Explicitly mapped symlink targets are rewritten
+relative to the restored files. Old archives retain their original restore
+semantics. Review physical paths embedded in authored YAML and native NGINX
+configuration manually before starting services; arbitrary file contents are
+not rewritten.
