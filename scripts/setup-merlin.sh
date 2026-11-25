@@ -51,9 +51,11 @@ if [ -L "$HOOK" ] && [ ! -e "$HOOK" ]; then
 elif [ ! -e "$HOOK" ]; then
     mkdir -p "$(dirname "$HOOK")"
     if [ -f "$EXAMPLES_DIR/dehydrated-dns01-hook.sh" ]; then
-        install -m 0755 "$EXAMPLES_DIR/dehydrated-dns01-hook.sh" "$HOOK"
+        cp "$EXAMPLES_DIR/dehydrated-dns01-hook.sh" "$HOOK"
+        chmod 0755 "$HOOK"
     elif [ -f "$EXAMPLES_DIR/../scripts/dehydrated-dns01-hook.sh" ]; then
-        install -m 0755 "$EXAMPLES_DIR/../scripts/dehydrated-dns01-hook.sh" "$HOOK"
+        cp "$EXAMPLES_DIR/../scripts/dehydrated-dns01-hook.sh" "$HOOK"
+        chmod 0755 "$HOOK"
     fi
 fi
 if [ ! -f "$HOOK" ] || [ ! -x "$HOOK" ]; then
