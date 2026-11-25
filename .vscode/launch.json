@@ -6,7 +6,7 @@
             "type": "lldb",
             "request": "launch",
             "cargo": {
-                "args": ["build", "--bin", "maestro"],
+                "args": ["build", "--bin", "maestro", "--no-default-features", "--features", "linux-ui"],
                 "filter": {
                     "name": "maestro",
                     "kind": "bin"
@@ -14,10 +14,11 @@
             },
             "args": [
                 "--config",
-                "${workspaceFolder}/data/linux/maestro.toml",
+                "${workspaceFolder}/data/linux/maestro.yaml",
                 "--linux-mode",
                 "serve"
             ],
+            "preLaunchTask": "Build Linux UI",
             "cwd": "${workspaceFolder}",
             "terminal": "integrated"
         }

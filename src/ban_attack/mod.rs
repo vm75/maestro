@@ -16,7 +16,7 @@ mod tailer;
 #[allow(unused_imports)]
 pub use aggregate::{ActiveBan, Aggregator, PersistentState, RuleStats, RuleStatsEntry, Snapshot};
 #[allow(unused_imports)]
-pub use backend::{BanBackend, BanTarget, CommandIpSet, MemoryBanBackend};
+pub use backend::{BanBackend, BanTarget, CommandIpSet, MemoryBanBackend, ReconcileReport};
 #[allow(unused_imports)]
 pub use config::{
     AggregationConfig, Config, FileConfig, FirewallConfig, IpSetConfig, RuleConfig, StartAt,

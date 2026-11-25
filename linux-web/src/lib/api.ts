@@ -34,11 +34,11 @@ export class ApiError extends Error {
   constructor(message: string, public status: number, public code?: string) { super(message) }
 }
 
-export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+export async function request<T>(path: string, options: RequestInit = {}, timeoutMs = 15_000): Promise<T> {
   const response = await fetch(path, {
     ...options,
     headers: { 'Content-Type': 'application/json', ...options.headers },
-    signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
+    signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
   })
   if (!response.ok) {
     const body = await response.json().catch(() => ({ error: response.statusText }))

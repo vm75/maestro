@@ -56,7 +56,7 @@ impl FirewallManager {
                 tracing::debug!("firewall policy enabled but no log files configured");
                 return;
             }
-            match BanEngine::start(ban_config) {
+            match self.start_engine(ban_config) {
                 Ok(engine) => {
                     *inner = Some(engine);
                 }
@@ -180,6 +180,23 @@ impl FirewallManager {
     pub async fn replace_policy(&self, candidate: FirewallPolicy) -> Result<()> {
         let _update = self.policy_update.lock().await;
         validate_policy(&candidate)?;
+        #[cfg(feature = "linux")]
+        if self.config.platform == crate::config::Platform::Linux
+            && candidate.enabled
+            && !candidate.observe_only
+        {
+            anyhow::ensure!(
+                crate::platforms::admin::probe().await.ban_shield,
+                "Ban Shield enforcement requires nftables and the root-owned ban_shield grant"
+            );
+            anyhow::ensure!(
+                candidate
+                    .rules
+                    .iter()
+                    .any(|rule| rule.enabled && !rule.log_paths.is_empty()),
+                "Enforcement requires at least one enabled detection rule with a log path"
+            );
+        }
         let candidate_config = self.build_ban_attack_config(&candidate)?;
         if !candidate_config.files.is_empty() {
             crate::ban_attack::validate_config(candidate_config)?;
@@ -188,8 +205,10 @@ impl FirewallManager {
         self.update_policy(&candidate).await?;
         *self.stores.firewall_policy.write().await = candidate;
         if let Err(error) = self.stores.save_firewall_policy().await {
-            *self.stores.firewall_policy.write().await = previous.clone();
+            // Roll back while the store still describes the live candidate,
+            // so a Linux backend mode transition knows which table to remove.
             let _ = self.update_policy(&previous).await;
+            *self.stores.firewall_policy.write().await = previous;
             return Err(error);
         }
         Ok(())
@@ -198,13 +217,63 @@ impl FirewallManager {
     pub async fn update_policy(&self, policy: &FirewallPolicy) -> Result<()> {
         let ban_config = self.build_ban_attack_config(policy)?;
         let mut inner = self.inner.write().await;
+        #[cfg(feature = "linux")]
+        if self.config.platform == crate::config::Platform::Linux {
+            let previous = self.stores.firewall_policy.read().await.clone();
+            let previous_enforced = previous.enabled && !previous.observe_only;
+            let next_enforced =
+                policy.enabled && !policy.observe_only && !ban_config.files.is_empty();
+
+            // Apply ordinary rule/allowlist changes without restarting the worker.
+            if previous.observe_only == policy.observe_only
+                && policy.enabled
+                && !ban_config.files.is_empty()
+            {
+                if let Some(engine) = inner.as_ref() {
+                    engine.handle().update_config(ban_config)?;
+                    return Ok(());
+                }
+            }
+
+            // Stop the old worker before touching the host table, otherwise a
+            // queued poll could recreate the table after the disable request.
+            if let Some(engine) = inner.take() {
+                engine.shutdown()?;
+            }
+            let result = async {
+                if previous_enforced && !next_enforced {
+                    crate::platforms::admin::network_operation(
+                        "ban_shield_apply",
+                        serde_json::json!({"enabled":false,"active":[],"exceptions":[]}),
+                    )
+                    .await?;
+                }
+                if policy.enabled && !ban_config.files.is_empty() {
+                    *inner = Some(self.start_engine(ban_config)?);
+                }
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
+            if let Err(error) = result {
+                // Recover the previous backend and reconcile its persisted bans.
+                if previous.enabled {
+                    if let Ok(config) = self.build_ban_attack_config(&previous) {
+                        if !config.files.is_empty() {
+                            *inner = self.start_engine(config).ok();
+                        }
+                    }
+                }
+                return Err(error);
+            }
+            return Ok(());
+        }
         if let Some(ref mut engine) = *inner {
             if !policy.enabled || ban_config.files.is_empty() {
                 engine.handle().disable()?;
                 *inner = None;
             } else if let Err(update_error) = engine.handle().update_config(ban_config.clone()) {
                 engine.handle().flush()?;
-                let new_engine = BanEngine::start(ban_config).map_err(|restart_error| {
+                let new_engine = self.start_engine(ban_config).map_err(|restart_error| {
                     anyhow::anyhow!(
                         "live policy update failed ({update_error}); replacement engine failed ({restart_error})"
                     )
@@ -212,7 +281,7 @@ impl FirewallManager {
                 *inner = Some(new_engine);
             }
         } else if policy.enabled && !ban_config.files.is_empty() {
-            let engine = BanEngine::start(ban_config)?;
+            let engine = self.start_engine(ban_config)?;
             *inner = Some(engine);
         }
         Ok(())
@@ -318,6 +387,28 @@ impl FirewallManager {
             third_ban_days: self.config.firewall.third_ban_days,
             max_ban_days: self.config.firewall.max_ban_days,
         })
+    }
+
+    fn start_engine(&self, config: BanAttackConfig) -> Result<BanEngine, crate::ban_attack::Error> {
+        if self.config.platform == crate::config::Platform::Linux {
+            if config.firewall.observe_only {
+                return BanEngine::start_with_backend(
+                    config,
+                    Arc::new(crate::ban_attack::MemoryBanBackend::default()),
+                );
+            }
+            #[cfg(feature = "linux")]
+            return BanEngine::start_with_backend(
+                config,
+                Arc::new(crate::platforms::admin::HelperBanBackend::default()),
+            );
+            #[cfg(not(feature = "linux"))]
+            return Err(crate::ban_attack::Error::Config(
+                "Linux helper unavailable".into(),
+            ));
+        } else {
+            BanEngine::start(config)
+        }
     }
 
     fn build_ban_attack_config(&self, policy: &FirewallPolicy) -> Result<BanAttackConfig> {

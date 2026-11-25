@@ -201,6 +201,14 @@ class LinuxDevTest(unittest.TestCase):
         self.assertIn("linux-ui", serve)
         self.assertNotIn("--test-mode", serve)
 
+    def test_debug_ui_task_uses_managed_node_without_starting_server(self):
+        self.program("id", "print('1000')")
+        self.program("mise")
+        self.run_shell("main build-ui")
+        self.assertIn(["mise", "exec", "node@22", "--", "npm", "--prefix",
+                       str(self.root / "linux-web"), "run", "build"], self.commands())
+        self.assertFalse(any("cargo" in c or c[0] == "sudo" for c in self.commands()))
+
     def test_helper_build_before_sudo_and_without_ui(self):
         self.program("id", "print('1000')")
         self.program("mise", "if 'rustc' in sys.argv: print('rustc 1.85.0 (fixture)')")

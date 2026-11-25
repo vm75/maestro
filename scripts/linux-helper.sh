@@ -76,12 +76,12 @@ if p.stat().st_size > 16384:
 data = json.loads(p.read_bytes())
 if not isinstance(data, dict) or data.get("version") != 1 or data.get("workload_uid") != int(sys.argv[2]):
     sys.exit("Existing policy belongs to a different workload account or version.")
-if set(data) - {"version", "workload_uid", "system_units", "package_writes", "samba_password", "share_writes"}:
+if set(data) - {"version", "workload_uid", "system_units", "package_writes", "samba_password", "share_writes", "ban_shield", "wireguard_peers"}:
     sys.exit("Existing policy has unknown fields.")
 units = data.get("system_units")
 if not isinstance(units, list) or len(units) > 128 or any(not isinstance(u, str) for u in units):
     sys.exit("Invalid system_units policy.")
-if any(type(data.get(k, False)) is not bool for k in ("package_writes", "samba_password", "share_writes")):
+if any(type(data.get(k, False)) is not bool for k in ("package_writes", "samba_password", "share_writes", "ban_shield", "wireguard_peers")):
     sys.exit("Invalid helper grant flags.")
 PY
         existing=1

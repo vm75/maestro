@@ -27,6 +27,9 @@ const MAX_CAPTURE: usize = 1 << 20;
 const MAX_TAIL: usize = 128 << 10;
 
 const OPERATIONS: &[&str] = &[
+    "ban_shield_apply",
+    "wireguard_peers_read",
+    "wireguard_peers_write",
     "shares_definitions_validate",
     "shares_definitions_inspect",
     "shares_definitions_apply",
@@ -1092,6 +1095,12 @@ pub(super) async fn execute(
     uid: u32,
     cancel: tokio::sync::watch::Receiver<bool>,
 ) -> Response {
+    if matches!(
+        request.operation.as_str(),
+        "ban_shield_apply" | "wireguard_peers_read" | "wireguard_peers_write"
+    ) {
+        return super::network::execute(request, policy).await;
+    }
     let mut output = Tail::default();
     let result = match validate(&request) {
         Err(error) => Err(error),

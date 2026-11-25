@@ -188,6 +188,11 @@ pub fn load(path: &Path) -> Result<AppConfig> {
     config.commands.nginx = native("nginx");
     config.commands.openssl = native("openssl");
     config.commands.ip = native("ip");
+    config.commands.wg = native("wg");
+    config.commands.wg_quick = native("wg-quick");
+    config.commands.ipset = native("ipset");
+    config.commands.iptables = native("iptables");
+    config.commands.ip6tables = native("ip6tables");
     config.commands.dehydrated = root.join("dehydrated");
     config.server.allowed_origins = vec![if settings.public_origin.is_empty() {
         format!("http://{}", settings.listen)
@@ -197,6 +202,11 @@ pub fn load(path: &Path) -> Result<AppConfig> {
     config.asus_ui.enabled = false;
     config.adguard.enabled = false;
     config.paths.data_dir = root.clone();
+    config.paths.wireguard_conf = "/etc/wireguard/wg0.conf".into();
+    config.paths.hosts_add = root.join("hosts.add");
+    config.paths.dnsmasq_conf_add = root.join("dnsmasq.conf.add");
+    config.firewall.protect_forward = false;
+    config.firewall.command_timeout_seconds = 25;
     config.paths.runtime_dir = root.join("run");
     config.paths.log_file = root.join("logs/maestro.log");
     config.paths.storage_dir = root.join("storage");

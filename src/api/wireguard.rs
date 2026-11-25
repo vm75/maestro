@@ -148,6 +148,11 @@ fn write_wg_conf(config: &WireGuardConfig) -> String {
 }
 
 pub async fn get_config(State(state): State<AppState>) -> Result<Json<WireGuardConfig>, ApiError> {
+    if state.config.platform == crate::config::Platform::Linux {
+        return Err(ApiError::bad_request(
+            "Use the Linux shared WireGuard peer endpoint; private configuration is not exposed",
+        ));
+    }
     let iface = state
         .config
         .paths
@@ -185,6 +190,11 @@ pub async fn update_config(
     State(state): State<AppState>,
     Json(config): Json<WireGuardConfig>,
 ) -> Result<Json<WireGuardConfig>, ApiError> {
+    if state.config.platform == crate::config::Platform::Linux {
+        return Err(ApiError::bad_request(
+            "Use the Linux shared WireGuard peer endpoint for authorized peer edits",
+        ));
+    }
     let content = write_wg_conf(&config);
     let path = &state.config.paths.wireguard_conf;
     let iface = path
@@ -259,6 +269,16 @@ pub async fn toggle(
     State(state): State<AppState>,
     Json(req): Json<ToggleRequest>,
 ) -> Result<Json<ApiMessage>, ApiError> {
+    #[cfg(feature = "linux")]
+    if state.config.platform == crate::config::Platform::Linux {
+        crate::platforms::admin::system_service(
+            "wg-quick@wg0.service",
+            if req.enable { "start" } else { "stop" },
+        )
+        .await
+        .map_err(ApiError::conflict)?;
+        return Ok(Json(ApiMessage::new("WireGuard service action completed")));
+    }
     let iface = state
         .config
         .paths

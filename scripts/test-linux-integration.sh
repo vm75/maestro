@@ -151,6 +151,73 @@ python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["tools"] and x["mo
 get /api/system/usage | python3 -c 'import json,sys; x=json.load(sys.stdin); assert "cpu" in x and "memory" in x, x'
 get /api/firewall | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["policy"]["enabled"] is False, x'
 
+# Test session-backed shared routes without sending WOL packets or touching host firewall.
+shared_code() {
+    curl --silent --output /dev/null --write-out '%{http_code}' "$@"
+}
+[[ $(shared_code "$api/api/shared/wol") == 401 ]]
+curl --silent --show-error --fail-with-body -c "$lab/cookies" \
+    -H "Origin: $api" -H 'Content-Type: application/json' \
+    -d "{\"token\":\"$token\"}" "$api/api/session" >/dev/null
+shared_get() {
+    curl --silent --show-error --fail-with-body -b "$lab/cookies" "$api/api/shared/$1"
+}
+shared_write() {
+    curl --silent --show-error --fail-with-body -b "$lab/cookies" \
+        -H "Origin: $api" -H 'Content-Type: application/json' "$@"
+}
+shared_get modules | python3 -c 'import json,sys; x=json.load(sys.stdin); assert {m["id"] for m in x["modules"]} >= {"nginx","certificates","ban_shield","wol","adguard","wireguard"}, x'
+machine='{"name":"Test machine","mac":"02:00:00:00:00:01","broadcast":"192.0.2.255","port":9}'
+[[ $(shared_code -b "$lab/cookies" -H 'Content-Type: application/json' -d "$machine" "$api/api/shared/wol") == 403 ]]
+[[ $(shared_code -b "$lab/cookies" -H 'Origin: https://invalid.example' -H 'Content-Type: application/json' -d "$machine" "$api/api/shared/wol") == 403 ]]
+id=$(shared_write -d "$machine" "$api/api/shared/wol" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+shared_get wol | python3 -c 'import json,sys; x=json.load(sys.stdin); assert len(x)==1 and x[0]["name"]=="Test machine", x'
+shared_write -X PUT -d '{"name":"Updated","mac":"02:00:00:00:00:01","port":9}' "$api/api/shared/wol/$id" >/dev/null
+shared_get wol | python3 -c 'import json,sys; assert json.load(sys.stdin)[0]["name"]=="Updated"'
+shared_write -X DELETE "$api/api/shared/wol/$id" >/dev/null
+shared_get wol | python3 -c 'import json,sys; assert json.load(sys.stdin)==[]'
+shared_get 'firewall?include_bans=false' | python3 -c 'import json,sys; assert json.load(sys.stdin)["bans"]==[]'
+shared_get firewall/bans | python3 -c 'import json,sys; assert isinstance(json.load(sys.stdin),list)'
+shared_get firewall/capability | python3 -c 'import json,sys; x=json.load(sys.stdin); assert not x["enforcement"], x'
+# Use disabled detection rules and the same validated per-rule handlers as router mode.
+rule_id=$(shared_write -d '{"name":"Linux parity rule","enabled":false,"log_paths":["/tmp/maestro-lab-only.log"],"pattern":"(?P<ip>[0-9.]+)","weight":1}' "$api/api/shared/firewall/rules" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+shared_write -X PUT -d '{"name":"Linux parity rule edited","enabled":false,"log_paths":["/tmp/maestro-lab-only.log"],"pattern":"(?P<ip>[0-9.]+)","weight":2}' "$api/api/shared/firewall/rules/$rule_id" >/dev/null
+shared_get firewall | python3 -c 'import json,sys; assert any(r["name"]=="Linux parity rule edited" and r["weight"]==2 for r in json.load(sys.stdin)["policy"]["rules"])'
+shared_write -X DELETE "$api/api/shared/firewall/rules/$rule_id" >/dev/null
+shared_get firewall | python3 -c 'import json,sys; assert not json.load(sys.stdin)["policy"]["rules"]'
+[[ $(shared_code -b "$lab/cookies" "$api/api/shared/wireguard/peers") == 400 ]]
+shared_get adguard/config | python3 -c 'import json,sys; x=json.load(sys.stdin); assert not x["enabled"] and "password" not in x'
+shared_write -X PUT -d '{"enabled":false,"api_endpoint":"http://127.0.0.1:3000","username":"test","password":"not-a-real-password","lan_ip":"127.0.0.1"}' "$api/api/shared/adguard/config" >/dev/null
+shared_get adguard/config | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["username"]=="test" and "password" not in x'
+[[ $(shared_code -b "$lab/cookies" -H "Origin: $api" -H 'Content-Type: application/json' -X PUT -d '{"enabled":true,"observe_only":false}' "$api/api/shared/firewall") == 400 ]]
+[[ $(shared_code -b "$lab/cookies" -H "Origin: $api" -H 'Content-Type: application/json' -d '{"name":"bad","domains":["example.test"],"method":"dns","staging":true,"auto_renew":false,"hook":"/tmp/invalid"}' "$api/api/shared/certificates") == 422 ]]
+shared_get nginx/settings > "$lab/shared-nginx-settings.json"
+python3 - "$lab/shared-nginx-settings.json" <<'PYSHAREDNGINX'
+import json, sys
+x=json.load(open(sys.argv[1]))
+assert isinstance(x["shared"],dict) and isinstance(x["site_defaults"],dict), x
+assert isinstance(x["allowed_ips"],list) and isinstance(x["limit_policies"],dict), x
+PYSHAREDNGINX
+shared_get nginx/ingress-usage | python3 -c 'import json,sys; assert isinstance(json.load(sys.stdin),dict)'
+shared_write -d '{"kind":"domain","domain":"preview.test","settings":{"access_policy":"public"}}' "$api/api/shared/nginx/access-preview" | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["access_policy"]=="public" and x["allowed_sources"] is None, x'
+[[ $(shared_code -b "$lab/cookies" -H 'Content-Type: application/json' -X PUT --data-binary "@$lab/shared-nginx-settings.json" "$api/api/shared/nginx/settings") == 403 ]]
+# Exercise actual global config mutations through the browser session API.
+python3 - "$lab/shared-nginx-settings.json" "$lab/shared-nginx-candidate.json" <<'PYNGINXCANDIDATE'
+import json, sys
+x=json.load(open(sys.argv[1]))
+x.setdefault("access_policies",{})["linux_test"]={"allow":["192.0.2.0/24"]}
+x["limit_policies"]["linux_test"]={"rate":"10r/s","burst":20,"nodelay":True,"connections":10}
+x["site_defaults"]["limit_policy"]="linux_test"
+json.dump(x,open(sys.argv[2],"w"))
+PYNGINXCANDIDATE
+shared_write -X PUT --data-binary "@$lab/shared-nginx-candidate.json" "$api/api/shared/nginx/settings" >/dev/null
+shared_get nginx/settings | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["access_policies"]["linux_test"]["allow"]==["192.0.2.0/24"] and x["site_defaults"]["limit_policy"]=="linux_test", x'
+shared_get nginx/ingress-usage | python3 -c 'import json,sys; assert "Global defaults" in json.load(sys.stdin)["limit:linux_test"]'
+shared_write -d '{"kind":"domain","domain":"preview.test","settings":{"access_policy":"linux_test"}}' "$api/api/shared/nginx/access-preview" | python3 -c 'import json,sys; assert json.load(sys.stdin)["allowed_sources"]==["192.0.2.0/24"]'
+# Restore the fixture so subsequent bearer API tests retain their original defaults.
+shared_write -X PUT --data-binary "@$lab/shared-nginx-settings.json" "$api/api/shared/nginx/settings" >/dev/null
+shared_write -X POST "$api/api/shared/nginx/test" | real_result
+
 post /api/nginx/test | real_result
 post /api/nginx/start | real_result
 get /api/nginx/status | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["running"] is True, x'
@@ -201,11 +268,19 @@ curl --silent --show-error --fail-with-body -X PUT \
     --data-binary "@$lab/nginx-settings.json" "$api/api/nginx/settings" >/dev/null
 get /api/nginx/objects/domain/linux.test/linux.test | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["settings"]["client_max_body_size"] == "3M" and x["settings"]["enable_lanonly"] is False and "include snippets/restrict.conf;" not in x["content"], x'
 # The bundle intentionally drops scanner user agents, including curl's default.
-code=$(curl --silent --show-error --insecure --noproxy '*' \
-    --user-agent 'Maestro-Linux-Smoke/1.0' \
-    --resolve "linux.test:$nginx_tls_port:127.0.0.1" \
-    --output /dev/null --write-out '%{http_code}' "https://linux.test:$nginx_tls_port/")
-[[ "$code" == 404 ]] || { echo "Expected managed site HTTP 404, got $code" >&2; exit 1; }
+# nginx acknowledges reload before the new workers serve the managed TLS host.
+for attempt in {1..50}; do
+    if code=$(curl --silent --show-error --insecure --noproxy '*' \
+        --connect-timeout 1 --max-time 2 \
+        --user-agent 'Maestro-Linux-Smoke/1.0' \
+        --resolve "linux.test:$nginx_tls_port:127.0.0.1" \
+        --output /dev/null --write-out '%{http_code}' "https://linux.test:$nginx_tls_port/" \
+        2>"$lab/managed-tls-error.log") && [[ "$code" == 404 ]]; then
+        break
+    fi
+    sleep 0.1
+done
+[[ "$code" == 404 ]] || { cat "$lab/managed-tls-error.log" >&2; echo "Expected managed site HTTP 404, got $code" >&2; exit 1; }
 curl --silent --show-error --fail-with-body -X DELETE \
     -H "Authorization: Bearer $token" "$api/api/nginx/objects/domain/linux.test/linux.test" >/dev/null
 [[ ! -e "$lab/nginx/domains-available/linux.test/root.conf" ]]

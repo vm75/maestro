@@ -137,13 +137,21 @@ init_helper() {
     printf 'Restart with make run-linux and check Agent access > Capabilities.\n'
 }
 
+build_linux_ui() {
+    check_node || fail 'Run make init-linux to install a compatible Node.js and npm.'
+    node_command npm --prefix "$repo_root/linux-web" run build
+}
+
 main() {
-    [[ $# == 1 && ( $1 == init || $1 == run || $1 == init-helper || $1 == remove-helper ) ]] || fail 'Usage: scripts/linux-dev.sh init|run|init-helper|remove-helper'
+    [[ $# == 1 && ( $1 == init || $1 == run || $1 == build-ui || $1 == init-helper || $1 == remove-helper ) ]] || fail 'Usage: scripts/linux-dev.sh init|run|build-ui|init-helper|remove-helper'
     [[ $(id -u) != 0 ]] || fail 'Run Linux development targets as your non-root development account; privileged installation uses sudo.'
     # Shared by initialization and runtime, including the Python nginx renderer.
     export PATH="$tools_dir/python/bin:$tools_dir/node/bin:${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
     cd "$repo_root"
     case "$1" in
+        build-ui)
+            build_linux_ui
+            ;;
         init-helper)
             init_helper
             ;;
@@ -169,8 +177,7 @@ main() {
                 export RUSTUP_TOOLCHAIN=stable
             fi
             check_rust || fail 'Run make init-linux to install Rust 1.85+.'
-            check_node || fail 'Run make init-linux to install a compatible Node.js and npm.'
-            node_command npm --prefix "$repo_root/linux-web" run build
+            build_linux_ui
             rust_command cargo run --bin maestro --no-default-features --features linux-ui -- --config "$repo_root/data/linux/maestro.yaml" --linux-mode serve
             ;;
     esac

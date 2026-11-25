@@ -343,6 +343,21 @@ pub async fn update_config(
     State(state): State<AppState>,
     Json(req): Json<UpdateAdGuardRequest>,
 ) -> Result<Json<ApiMessage>, ApiError> {
+    if state.config.platform == crate::config::Platform::Linux && req.enabled {
+        let endpoint = url::Url::parse(&req.api_endpoint)
+            .map_err(|_| ApiError::bad_request("Invalid AdGuard API endpoint"))?;
+        if !matches!(endpoint.scheme(), "http" | "https")
+            || endpoint.host_str().is_none()
+            || !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+        {
+            return Err(ApiError::bad_request(
+                "AdGuard requires an HTTP(S) endpoint without embedded credentials, query or fragment",
+            ));
+        }
+    }
     let mut current = get_effective_config(&state).await;
     current.enabled = req.enabled;
     current.api_endpoint = req.api_endpoint;
@@ -478,11 +493,17 @@ pub async fn get_adguard_status(
     }
 
     let client = AdGuardClient::new(&cfg).map_err(ApiError::internal)?;
-    let status = client.get_status().await.unwrap_or(AdGuardHomeStatus {
-        protection_enabled: false,
-        protection_disabled_duration_ms: 0,
-        filtering_enabled: false,
-    });
+    let status = match client.get_status().await {
+        Ok(status) => status,
+        Err(error) if state.config.platform == crate::config::Platform::Linux => {
+            return Err(ApiError::internal(error));
+        }
+        Err(_) => AdGuardHomeStatus {
+            protection_enabled: false,
+            protection_disabled_duration_ms: 0,
+            filtering_enabled: false,
+        },
+    };
 
     let now = Utc::now();
 
