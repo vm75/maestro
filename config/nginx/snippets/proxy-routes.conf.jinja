@@ -4,6 +4,11 @@
 {% set match = route.match | default('prefix') %}
 location {% if match == 'exact' %}= {% elif match == 'regex' %}~ ^{% elif match == 'regex_i' %}~* ^{% elif match == 'prefix' %}^~ {% endif %}{{ proxy_mount }}{{ route.path }} {
     {% if policy.rh_deny %}
+    {# A denied mount root may differ from its enclosing server's frame policy. #}
+    {% if route_id == 'root' %}
+    {% set frame_options = policy.frame_options %}
+    {% include 'snippets/security-headers.conf.jinja' %}
+    {% endif %}
     return 403;
     {% else %}
     {% if policy.rh_access_checks is not none %}

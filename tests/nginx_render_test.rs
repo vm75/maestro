@@ -147,6 +147,11 @@ async fn native_jinja_output_passes_real_nginx_validation() {
                 "cache_policy".into(),
                 (if bits & 32 != 0 { "pwa" } else { "inherit" }).into(),
             );
+            if bits % 3 == 1 {
+                settings.insert("x_frame_options".into(), json!("upstream"));
+            } else if bits % 3 == 2 {
+                settings.insert("x_frame_options".into(), json!("deny"));
+            }
             if bits == 63 {
                 settings.insert("limit_policy".into(), json!("assets"));
                 settings.insert("routes".into(), json!([{"path":"/admin","limit_policy":"api","rate_limit":{"zone":"wplogin","burst":3},"enable_lanonly":true,"spa_fallback":"","children":[{"path":"/admin/quiet","access_log":false}]},{"path":"/events","proxy_transport":"sse"}]));

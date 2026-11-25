@@ -24,6 +24,7 @@
 {% set backend_auth = backend_auth | default(false) %}
 {% set forwarded_for = forwarded_for | default('replace') %}
 {% set hide_etag = hide_etag | default(false) %}
+{% set frame_options = x_frame_options | default('sameorigin') %}
 {% set disable_proxy_redirect = disable_proxy_redirect | default(false) %}
 {% set spa_fallback = spa_fallback | default('') %}
 {% set rewrite_to = rewrite_to | default('') %}
