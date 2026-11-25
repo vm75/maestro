@@ -203,8 +203,9 @@ pub async fn update_config(
         .to_string_lossy()
         .to_string();
 
-    let temporary = crate::util::PrivateTemp::new(&state.config.paths.runtime_dir, content.as_bytes())
-        .map_err(ApiError::internal)?;
+    let temporary =
+        crate::util::PrivateTemp::new(&state.config.paths.runtime_dir, content.as_bytes())
+            .map_err(ApiError::internal)?;
     crate::util::write_trusted_file(path, content.as_bytes(), Some(0o600))
         .map_err(ApiError::internal)?;
 

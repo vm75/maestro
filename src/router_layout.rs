@@ -55,10 +55,12 @@ fn regular(path: &Path) -> Result<Option<Metadata>> {
 
 // Compare directory-entry identity without following the final link.
 fn same_entry(a: &Path, b: &Path) -> bool {
-    a == b || (a.file_name() == b.file_name()
-        && a.parent().and_then(|p| p.canonicalize().ok())
-            .zip(b.parent().and_then(|p| p.canonicalize().ok()))
-            .is_some_and(|(a,b)| a == b))
+    a == b
+        || (a.file_name() == b.file_name()
+            && a.parent()
+                .and_then(|p| p.canonicalize().ok())
+                .zip(b.parent().and_then(|p| p.canonicalize().ok()))
+                .is_some_and(|(a, b)| a == b))
 }
 
 fn source_file(path: &Path) -> Result<Option<Metadata>> {
@@ -68,7 +70,11 @@ fn source_file(path: &Path) -> Result<Option<Metadata>> {
             Ok(Some(metadata))
         }
         Ok(metadata) => {
-            ensure!(metadata.is_file(), "not a regular migration file: {}", path.display());
+            ensure!(
+                metadata.is_file(),
+                "not a regular migration file: {}",
+                path.display()
+            );
             Ok(Some(metadata))
         }
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
@@ -150,8 +156,12 @@ fn archive(source: &Path, directory: &Path, name: &str) -> Result<()> {
         let link_record = directory.join(format!("{name}.link"));
         use std::os::unix::ffi::OsStrExt;
         if !link_record.exists() {
-            write_file(&link_record, target.as_os_str().as_bytes(),
-                &fs::metadata(source)?, false)?;
+            write_file(
+                &link_record,
+                target.as_os_str().as_bytes(),
+                &fs::metadata(source)?,
+                false,
+            )?;
         }
         let resolved = crate::util::trusted_file_path(source)?;
         return archive(&resolved, directory, name);
@@ -193,11 +203,19 @@ fn plan(
             // A relocated link must still point to the same existing target.
             // On retry, allow only a matching link, not a different file.
             let target = crate::util::trusted_file_path(&source)?;
-            ensure!(!same_entry(&target, &destination),
-                "migration would replace the source link's target: {}", destination.display());
+            ensure!(
+                !same_entry(&target, &destination),
+                "migration would replace the source link's target: {}",
+                destination.display()
+            );
             if let Some(existing) = source_file(&destination)? {
-                ensure!(existing.is_symlink() && crate::util::trusted_file_path(&destination)? == target,
-                    "layout migration conflict: {} differs from {}", source.display(), destination.display());
+                ensure!(
+                    existing.is_symlink()
+                        && crate::util::trusted_file_path(&destination)? == target,
+                    "layout migration conflict: {} differs from {}",
+                    source.display(),
+                    destination.display()
+                );
             }
         } else if regular(&destination)?.is_some() {
             ensure!(
@@ -207,7 +225,12 @@ fn plan(
                 destination.display()
             );
         }
-        transfers.push(Transfer { source, destination, label, preserve_link });
+        transfers.push(Transfer {
+            source,
+            destination,
+            label,
+            preserve_link,
+        });
     }
     Ok(())
 }
@@ -385,18 +408,31 @@ fn migrate_with_defaults(
         if transfer.preserve_link && fs::symlink_metadata(&transfer.source)?.is_symlink() {
             let target = crate::util::trusted_file_path(&transfer.source)?;
             // Do not retire another file that a migrated link depends on.
-            ensure!(!transfers.iter().any(|other| same_entry(&other.source, &target))
-                && !retired.iter().any(|(source, _)| same_entry(source, &target)),
-                "migration link target is also being retired: {}", target.display());
+            ensure!(
+                !transfers
+                    .iter()
+                    .any(|other| same_entry(&other.source, &target))
+                    && !retired
+                        .iter()
+                        .any(|(source, _)| same_entry(source, &target)),
+                "migration link target is also being retired: {}",
+                target.display()
+            );
             if source_file(&transfer.destination)?.is_none() {
                 fs::create_dir_all(parent(&transfer.destination)?)?;
                 std::os::unix::fs::symlink(&target, &transfer.destination)?;
                 sync_parent(&transfer.destination)?;
             }
-            ensure!(crate::util::trusted_file_path(&transfer.destination)? == target,
-                "migration link target changed: {}", transfer.destination.display());
+            ensure!(
+                crate::util::trusted_file_path(&transfer.destination)? == target,
+                "migration link target changed: {}",
+                transfer.destination.display()
+            );
         } else {
-            copy_checked(&crate::util::trusted_file_path(&transfer.source)?, &transfer.destination)?;
+            copy_checked(
+                &crate::util::trusted_file_path(&transfer.source)?,
+                &transfer.destination,
+            )?;
         }
         archive(&transfer.source, &backup, &transfer.label)?;
     }
@@ -448,9 +484,11 @@ fn migrate_with_defaults(
         sync_parent(&nested)?;
     }
     if let Some((resolved, encoded, metadata, raw)) = yaml_update {
-        ensure!(crate::util::trusted_file_path(config_path)? == resolved
-            && crate::config_yaml::read(&resolved)? == raw,
-            "router YAML changed during migration; stop Maestro and retry");
+        ensure!(
+            crate::util::trusted_file_path(config_path)? == resolved
+                && crate::config_yaml::read(&resolved)? == raw,
+            "router YAML changed during migration; stop Maestro and retry"
+        );
         write_file(&resolved, encoded.as_bytes(), &metadata, true)?;
     }
     println!("previous router layout saved in {}", backup.display());
@@ -589,10 +627,20 @@ mod tests {
         symlink(&http, config.nginx.inputs_dir.join("http01-wan-owner.json")).unwrap();
         migrate_with_defaults(&path, &config, &old, &new).unwrap();
         assert_eq!(fs::read_link(&path).unwrap(), yaml);
-        assert_eq!(fs::read(new.join("nginx/http01-wan-owner.json")).unwrap(), b"recovery");
-        assert!(!fs::symlink_metadata(new.join("nginx/http01-wan-owner.json")).unwrap().is_symlink());
+        assert_eq!(
+            fs::read(new.join("nginx/http01-wan-owner.json")).unwrap(),
+            b"recovery"
+        );
+        assert!(
+            !fs::symlink_metadata(new.join("nginx/http01-wan-owner.json"))
+                .unwrap()
+                .is_symlink()
+        );
         assert_eq!(fs::read(&http).unwrap(), b"recovery");
-        assert_eq!(fs::read_link(new.join("certificates.json")).unwrap(), target);
+        assert_eq!(
+            fs::read_link(new.join("certificates.json")).unwrap(),
+            target
+        );
         assert_eq!(fs::read(&target).unwrap(), b"saved");
         assert!(!old.join("certificates.json").exists());
         let updated = AppConfig::load(&path).unwrap();

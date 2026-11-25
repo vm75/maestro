@@ -209,12 +209,17 @@ fn object_entry(
     let link = enabled_path(config, kind, domain, name)?;
     let enabled = if config.platform == crate::config::Platform::Asuswrt {
         let expected = if kind == NginxObjectKind::Domain {
-            path.parent().context("domain configuration has no parent")?
+            path.parent()
+                .context("domain configuration has no parent")?
         } else {
             path
         };
         fs::symlink_metadata(&link).is_ok_and(|m| m.is_symlink())
-            && link.canonicalize().ok().zip(expected.canonicalize().ok()).is_some_and(|(a,b)| a == b)
+            && link
+                .canonicalize()
+                .ok()
+                .zip(expected.canonicalize().ok())
+                .is_some_and(|(a, b)| a == b)
     } else {
         symlink_exists(&link)
     };
@@ -385,8 +390,11 @@ pub fn set_enabled(
                     } else {
                         &available
                     };
-                    anyhow::ensure!(link.canonicalize()? == expected.canonicalize()?,
-                        "enabled path points to the wrong site: {}", link.display());
+                    anyhow::ensure!(
+                        link.canonicalize()? == expected.canonicalize()?,
+                        "enabled path points to the wrong site: {}",
+                        link.display()
+                    );
                 }
                 return Ok(());
             }
@@ -410,7 +418,9 @@ pub fn set_enabled(
             } else {
                 &available
             };
-            if link.parent().unwrap().join(&target).canonicalize().ok() == Some(expected.canonicalize()?) {
+            if link.parent().unwrap().join(&target).canonicalize().ok()
+                == Some(expected.canonicalize()?)
+            {
                 target
             } else {
                 expected.canonicalize()?
@@ -980,12 +990,28 @@ mod tests {
         let site = config.nginx.domains_available_dir.join("example.test");
         fs::create_dir_all(&site).unwrap();
         fs::write(site.join("root.conf"), "server {}").unwrap();
-        set_enabled(&config, NginxObjectKind::Domain, "example.test", "example.test", true).unwrap();
+        set_enabled(
+            &config,
+            NginxObjectKind::Domain,
+            "example.test",
+            "example.test",
+            true,
+        )
+        .unwrap();
         let link = config.nginx.domains_enabled_dir.join("example.test");
         assert_eq!(link.canonicalize().unwrap(), site.canonicalize().unwrap());
         fs::remove_file(&link).unwrap();
         unix_fs::symlink("missing", &link).unwrap();
-        assert!(set_enabled(&config, NginxObjectKind::Domain, "example.test", "example.test", true).is_err());
+        assert!(
+            set_enabled(
+                &config,
+                NginxObjectKind::Domain,
+                "example.test",
+                "example.test",
+                true
+            )
+            .is_err()
+        );
         assert_eq!(fs::read_link(&link).unwrap(), Path::new("missing"));
     }
 

@@ -35,7 +35,11 @@ impl Stores {
         let data_dir = Arc::new(config.paths.data_dir.clone());
         let router = config.platform == crate::config::Platform::Asuswrt;
         let resolve = |path: PathBuf| -> Result<PathBuf> {
-            if router { crate::util::trusted_file_path(&path) } else { Ok(path) }
+            if router {
+                crate::util::trusted_file_path(&path)
+            } else {
+                Ok(path)
+            }
         };
         let certificates_path = resolve(data_dir.join("certificates.json"))?;
         let mut certificates: Vec<CertificateSpec> = load_json(&certificates_path).await?;
@@ -55,7 +59,11 @@ impl Stores {
         }
         if imported > 0 {
             if router {
-                crate::util::write_trusted_file(&data_dir.join("certificates.json"), &serde_json::to_vec_pretty(&certificates)?, Some(0o600))?;
+                crate::util::write_trusted_file(
+                    &data_dir.join("certificates.json"),
+                    &serde_json::to_vec_pretty(&certificates)?,
+                    Some(0o600),
+                )?;
             } else {
                 save_json(&certificates_path, &certificates).await?;
             }
@@ -184,8 +192,11 @@ async fn discover_deployed_certificates(config: &AppConfig) -> Result<Vec<Certif
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         let kind = entry.file_type().await?;
-        if !kind.is_dir() && !(config.platform == crate::config::Platform::Asuswrt
-            && kind.is_symlink() && fs::metadata(&path).await.is_ok_and(|m| m.is_dir())) {
+        if !kind.is_dir()
+            && !(config.platform == crate::config::Platform::Asuswrt
+                && kind.is_symlink()
+                && fs::metadata(&path).await.is_ok_and(|m| m.is_dir()))
+        {
             continue;
         }
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
@@ -752,7 +763,11 @@ mod tests {
         config.nginx.root_dir = temp.path().join("nginx");
         std::fs::create_dir_all(&config.paths.data_dir).unwrap();
         let target = temp.path().join("policy.json");
-        std::fs::write(&target, serde_json::to_vec(&FirewallPolicy::default()).unwrap()).unwrap();
+        std::fs::write(
+            &target,
+            serde_json::to_vec(&FirewallPolicy::default()).unwrap(),
+        )
+        .unwrap();
         let policy = config.firewall_policy_path();
         symlink(&target, &policy).unwrap();
         let stores = Stores::load(&config).await.unwrap();

@@ -459,9 +459,13 @@ impl AppState {
             let source_root = source.canonicalize()?;
             for path in files.keys() {
                 let resolved = crate::util::trusted_file_path(path)?;
-                let input = crate::util::trusted_file_path(&source.join(path.file_name().unwrap()))?;
-                anyhow::ensure!(!resolved.starts_with(&source_root) || resolved == input,
-                    "certificate destination refers to a different dehydrated generation: {}", path.display());
+                let input =
+                    crate::util::trusted_file_path(&source.join(path.file_name().unwrap()))?;
+                anyhow::ensure!(
+                    !resolved.starts_with(&source_root) || resolved == input,
+                    "certificate destination refers to a different dehydrated generation: {}",
+                    path.display()
+                );
             }
             crate::nginx_render::FileTransaction::apply_router_certificates(files)?
         } else {

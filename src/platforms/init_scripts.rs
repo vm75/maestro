@@ -67,15 +67,17 @@ pub async fn collect_services(state: &AppState) -> AnyResult<Vec<ServiceInfo>> {
                 (filename, true)
             };
             let kind = entry.file_type()?;
-            let metadata = if kind.is_symlink() && state.config.platform == crate::config::Platform::Asuswrt {
-                match fs::metadata(&path) {
-                    Ok(metadata) => metadata,
-                    Err(_) => continue,
-                }
-            } else {
-                entry.metadata()?
-            };
-            if !(kind.is_file() || (kind.is_symlink() && state.config.platform == crate::config::Platform::Asuswrt))
+            let metadata =
+                if kind.is_symlink() && state.config.platform == crate::config::Platform::Asuswrt {
+                    match fs::metadata(&path) {
+                        Ok(metadata) => metadata,
+                        Err(_) => continue,
+                    }
+                } else {
+                    entry.metadata()?
+                };
+            if !(kind.is_file()
+                || (kind.is_symlink() && state.config.platform == crate::config::Platform::Asuswrt))
                 || !metadata.is_file()
                 || metadata.permissions().mode() & 0o111 == 0
                 || name.starts_with("rc.")
@@ -320,7 +322,13 @@ fn service_path(
         fs::symlink_metadata(&path).map_err(|_| ApiError::not_found("service script not found"))?;
     if state.config.platform == crate::config::Platform::Asuswrt && metadata.is_symlink() {
         let resolved = crate::util::trusted_file_path(&path).map_err(ApiError::internal)?;
-        if fs::metadata(&resolved).map_err(ApiError::internal)?.permissions().mode() & 0o111 == 0 {
+        if fs::metadata(&resolved)
+            .map_err(ApiError::internal)?
+            .permissions()
+            .mode()
+            & 0o111
+            == 0
+        {
             return Err(ApiError::not_found("service script is not executable"));
         }
         // Rename the directory entry, not the target. Relative links retain

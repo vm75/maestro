@@ -75,7 +75,10 @@ impl AppConfig {
         let document: serde_yaml::Value = crate::config_yaml::decode(&raw)?;
         if document.get("version").is_some() {
             // Native Linux retains its existing no-follow YAML authority policy.
-            anyhow::ensure!(!fs::symlink_metadata(path)?.is_symlink(), "Linux configuration must not be a symlink");
+            anyhow::ensure!(
+                !fs::symlink_metadata(path)?.is_symlink(),
+                "Linux configuration must not be a symlink"
+            );
             #[cfg(feature = "linux")]
             return crate::core::linux_config::load(path);
             #[cfg(not(feature = "linux"))]

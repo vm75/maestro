@@ -62,7 +62,11 @@ pub fn render_ui_file(config: &AppConfig) -> Result<std::path::PathBuf> {
     }
     let content = render_asus_ui(config);
     let result = if config.platform == crate::config::Platform::Asuswrt {
-        crate::util::write_trusted_file(&config.asus_ui.rendered_page, content.as_bytes(), Some(0o644))
+        crate::util::write_trusted_file(
+            &config.asus_ui.rendered_page,
+            content.as_bytes(),
+            Some(0o644),
+        )
     } else {
         fs::write(&config.asus_ui.rendered_page, content).map_err(Into::into)
     };

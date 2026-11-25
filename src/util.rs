@@ -56,9 +56,14 @@ pub(crate) fn trusted_file_path(path: &Path) -> Result<PathBuf> {
 
     match fs::symlink_metadata(path) {
         Ok(_) => {
-            let target = path.canonicalize()
+            let target = path
+                .canonicalize()
                 .with_context(|| format!("cannot resolve configured file {}", path.display()))?;
-            ensure!(fs::metadata(&target)?.is_file(), "not a regular file: {}", path.display());
+            ensure!(
+                fs::metadata(&target)?.is_file(),
+                "not a regular file: {}",
+                path.display()
+            );
             Ok(target)
         }
         Err(error) if error.kind() == ErrorKind::NotFound => {
@@ -72,7 +77,9 @@ pub(crate) fn trusted_file_path(path: &Path) -> Result<PathBuf> {
                         Ok(resolved)
                     }
                     Err(error) if error.kind() == ErrorKind::NotFound => {
-                        let parent = path.parent().filter(|p| !p.as_os_str().is_empty())
+                        let parent = path
+                            .parent()
+                            .filter(|p| !p.as_os_str().is_empty())
                             .unwrap_or_else(|| Path::new("."));
                         let name = path.file_name().context("missing directory name")?;
                         Ok(directory(parent)?.join(name))
@@ -80,7 +87,9 @@ pub(crate) fn trusted_file_path(path: &Path) -> Result<PathBuf> {
                     Err(error) => Err(error.into()),
                 }
             }
-            let parent = path.parent().filter(|p| !p.as_os_str().is_empty())
+            let parent = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
                 .unwrap_or_else(|| Path::new("."));
             Ok(directory(parent)?.join(path.file_name().context("missing file name")?))
         }
@@ -102,7 +111,11 @@ pub(crate) fn write_trusted_file(path: &Path, bytes: &[u8], mode: Option<u32>) -
     fs::create_dir_all(parent)?;
     let existing = match fs::symlink_metadata(&target) {
         Ok(metadata) => {
-            ensure!(metadata.is_file(), "not a regular file: {}", target.display());
+            ensure!(
+                metadata.is_file(),
+                "not a regular file: {}",
+                target.display()
+            );
             Some(metadata)
         }
         Err(error) if error.kind() == ErrorKind::NotFound => None,
@@ -110,20 +123,29 @@ pub(crate) fn write_trusted_file(path: &Path, bytes: &[u8], mode: Option<u32>) -
     };
     let temp = parent.join(format!(".maestro-write-{}", uuid::Uuid::new_v4().simple()));
     let result = (|| -> Result<()> {
-        let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW).open(&temp)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&temp)?;
         if let Some(metadata) = &existing {
             let current = file.metadata()?;
             if current.uid() != metadata.uid() || current.gid() != metadata.gid() {
                 chown(&temp, Some(metadata.uid()), Some(metadata.gid()))?;
             }
         }
-        let permissions = mode.or_else(|| existing.as_ref().map(|m| m.permissions().mode()))
+        let permissions = mode
+            .or_else(|| existing.as_ref().map(|m| m.permissions().mode()))
             .unwrap_or(0o600);
         file.set_permissions(fs::Permissions::from_mode(permissions))?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        ensure!(trusted_file_path(path)? == target, "configured file changed during write: {}", path.display());
+        ensure!(
+            trusted_file_path(path)? == target,
+            "configured file changed during write: {}",
+            path.display()
+        );
         fs::rename(&temp, &target)?;
         File::open(parent)?.sync_all()?;
         Ok(())
@@ -142,8 +164,12 @@ impl PrivateTemp {
         use std::{fs, io::Write, os::unix::fs::OpenOptionsExt};
         fs::create_dir_all(directory)?;
         let path = directory.join(format!(".maestro-sync-{}", uuid::Uuid::new_v4().simple()));
-        let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW).open(&path)?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&path)?;
         let temporary = Self(path);
         file.write_all(bytes)?;
         Ok(temporary)
@@ -195,7 +221,10 @@ mod tests {
         let first = PrivateTemp::new(temp.path(), b"secret").unwrap();
         let second = PrivateTemp::new(temp.path(), b"other").unwrap();
         assert_ne!(first.0, second.0);
-        assert_eq!(fs::metadata(&first.0).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&first.0).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         let path = first.0.clone();
         drop(first);
         assert!(!path.exists());

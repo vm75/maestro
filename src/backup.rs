@@ -50,8 +50,11 @@ fn inputs(config: &AppConfig, config_path: &Path) -> Result<Vec<PathBuf>> {
         "backup requires an existing configuration file: {}",
         config_path.display()
     );
-    let logical_config_dir = config_path.parent().filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let logical_config_dir = config_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
     let config_path = absolute(config_path)?;
     let mut candidates = vec![
         config_path.parent().unwrap().to_path_buf(),
@@ -90,27 +93,35 @@ fn inputs(config: &AppConfig, config_path: &Path) -> Result<Vec<PathBuf>> {
         ]);
         // Known certificate roots and PEM aliases are durable data, unlike
         // arbitrary nested links elsewhere in the configuration tree.
-        for directory in [config.nginx.root_dir.join("certs"), config.certificates.certs_dir.join("certs")] {
+        for directory in [
+            config.nginx.root_dir.join("certs"),
+            config.certificates.certs_dir.join("certs"),
+        ] {
             candidates.push(directory.clone());
             match fs::read_dir(&directory) {
-                Ok(entries) => for entry in entries {
-                    let entry = entry?;
-                    let path = entry.path();
-                    if path.is_dir() {
-                        candidates.push(path.clone());
-                        for name in ["privkey.pem", "cert.pem", "fullchain.pem", "chain.pem"] {
-                            candidates.push(path.join(name));
+                Ok(entries) => {
+                    for entry in entries {
+                        let entry = entry?;
+                        let path = entry.path();
+                        if path.is_dir() {
+                            candidates.push(path.clone());
+                            for name in ["privkey.pem", "cert.pem", "fullchain.pem", "chain.pem"] {
+                                candidates.push(path.join(name));
+                            }
                         }
                     }
-                },
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
         }
         if let Ok(entries) = fs::read_dir(&config.certificates.certs_dir) {
             for entry in entries {
                 let path = entry?.path();
-                if matches!(path.extension().and_then(|ext| ext.to_str()), Some("cfg" | "txt")) {
+                if matches!(
+                    path.extension().and_then(|ext| ext.to_str()),
+                    Some("cfg" | "txt")
+                ) {
                     candidates.push(path);
                 }
             }

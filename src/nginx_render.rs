@@ -701,10 +701,13 @@ pub(crate) fn ensure_managed_path(
     } else {
         &config.nginx.root_dir
     };
-    if std::fs::symlink_metadata(base).is_ok_and(|m| m.file_type().is_symlink()) {
-        if config.platform == crate::config::Platform::Linux || !base.canonicalize()?.is_dir() {
-            bail!("managed nginx root is not a supported directory alias: {}", base.display());
-        }
+    if std::fs::symlink_metadata(base).is_ok_and(|m| m.file_type().is_symlink())
+        && (config.platform == crate::config::Platform::Linux || !base.canonicalize()?.is_dir())
+    {
+        bail!(
+            "managed nginx root is not a supported directory alias: {}",
+            base.display()
+        );
     }
     nginx::ensure_no_symlink_ancestors(base, path)
 }
@@ -998,12 +1001,22 @@ struct FileBackup {
 }
 
 fn backup_file(path: &std::path::Path) -> Result<Option<FileBackup>> {
-    use std::{io::Read, os::unix::fs::{MetadataExt, OpenOptionsExt}};
-    match std::fs::OpenOptions::new().read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path) {
+    use std::{
+        io::Read,
+        os::unix::fs::{MetadataExt, OpenOptionsExt},
+    };
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
         Ok(mut file) => {
             let metadata = file.metadata()?;
-            anyhow::ensure!(metadata.is_file(), "managed file is not regular: {}", path.display());
+            anyhow::ensure!(
+                metadata.is_file(),
+                "managed file is not regular: {}",
+                path.display()
+            );
             let mut bytes = Vec::new();
             file.read_to_end(&mut bytes)?;
             Ok(Some(FileBackup {
@@ -1060,28 +1073,42 @@ impl FileTransaction {
         let mut resolved = BTreeMap::new();
         for (path, content) in files {
             let target = crate::util::trusted_file_path(&path)?;
-            anyhow::ensure!(resolved.insert(target, (path, content)).is_none(),
-                "multiple certificate files resolve to the same target");
+            anyhow::ensure!(
+                resolved.insert(target, (path, content)).is_none(),
+                "multiple certificate files resolve to the same target"
+            );
         }
         let mut previous = Vec::new();
         for (target, (_, content)) in &resolved {
             let backup = backup_file(target)?;
             use std::os::unix::fs::PermissionsExt;
-            let private = resolved[target].0.file_name().and_then(|n| n.to_str()) == Some("privkey.pem");
-            if backup.as_ref().is_some_and(|old| old.bytes == content.as_bytes()
-                && (!private || old.permissions.mode() & 0o777 == 0o600)) {
+            let private =
+                resolved[target].0.file_name().and_then(|n| n.to_str()) == Some("privkey.pem");
+            if backup.as_ref().is_some_and(|old| {
+                old.bytes == content.as_bytes()
+                    && (!private || old.permissions.mode() & 0o777 == 0o600)
+            }) {
                 continue;
             }
             previous.push((target.clone(), backup));
         }
-        let mut transaction = Self { previous: Vec::new(), committed: false };
+        let mut transaction = Self {
+            previous: Vec::new(),
+            committed: false,
+        };
         for (target, backup) in previous {
             let (path, content) = &resolved[&target];
-            anyhow::ensure!(crate::util::trusted_file_path(path)? == target,
-                "certificate destination changed: {}", path.display());
+            anyhow::ensure!(
+                crate::util::trusted_file_path(path)? == target,
+                "certificate destination changed: {}",
+                path.display()
+            );
             transaction.previous.push((target, backup));
-            let mode = path.file_name().and_then(|name| name.to_str())
-                .filter(|name| *name == "privkey.pem").map(|_| 0o600);
+            let mode = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| *name == "privkey.pem")
+                .map(|_| 0o600);
             crate::util::write_trusted_file(path, content.as_bytes(), mode)?;
         }
         Ok(transaction)
@@ -1493,10 +1520,14 @@ mod tests {
         let alias = temp.path().join("certs");
         symlink(&store, &alias).unwrap();
         let link = alias.join("fullchain.pem");
-        let mut transaction = FileTransaction::apply_router_certificates(
-            [(link.clone(), "new".into())].into()).unwrap();
+        let mut transaction =
+            FileTransaction::apply_router_certificates([(link.clone(), "new".into())].into())
+                .unwrap();
         assert_eq!(fs::read(&certificate).unwrap(), b"new");
-        assert_eq!(fs::read_link(&link).unwrap(), std::path::Path::new("version.pem"));
+        assert_eq!(
+            fs::read_link(&link).unwrap(),
+            std::path::Path::new("version.pem")
+        );
         transaction.rollback().unwrap();
         assert_eq!(fs::read(&certificate).unwrap(), b"old");
         assert!(fs::symlink_metadata(&alias).unwrap().is_symlink());
@@ -1533,9 +1564,15 @@ mod tests {
         symlink(&inputs, &config.nginx.inputs_dir).unwrap();
         symlink(&runtime, &config.nginx.root_dir).unwrap();
         let file = config.nginx.root_dir.join("managed.conf");
-        FileTransaction::apply(&config, [(file, "content".into())].into()).unwrap().commit();
+        FileTransaction::apply(&config, [(file, "content".into())].into())
+            .unwrap()
+            .commit();
         assert_eq!(fs::read(runtime.join("managed.conf")).unwrap(), b"content");
-        assert!(fs::symlink_metadata(&config.nginx.root_dir).unwrap().is_symlink());
+        assert!(
+            fs::symlink_metadata(&config.nginx.root_dir)
+                .unwrap()
+                .is_symlink()
+        );
     }
 
     #[test]
