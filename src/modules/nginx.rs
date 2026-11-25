@@ -329,8 +329,9 @@ pub fn delete_object(
     domain: &str,
     name: &str,
 ) -> Result<()> {
-    set_enabled(config, kind, domain, name, false)?;
     let path = available_path(config, kind, domain, name)?;
+    ensure_no_symlink_ancestors(&config.nginx.domains_available_dir, &path)?;
+    set_enabled(config, kind, domain, name, false)?;
     if kind == NginxObjectKind::Domain {
         let domain_dir = path
             .parent()
@@ -357,10 +358,25 @@ pub fn set_enabled(
         ensure_regular_file(&available, "nginx object")?;
     }
     let link = enabled_path(config, kind, domain, name)?;
+    let base = if kind == NginxObjectKind::Domain {
+        &config.nginx.domains_enabled_dir
+    } else {
+        &config.nginx.domains_available_dir
+    };
+    ensure_no_symlink_ancestors(base, link.parent().context("enabled path has no parent")?)?;
     if enabled {
         if symlink_exists(&link) {
             let metadata = fs::symlink_metadata(&link)?;
             if metadata.file_type().is_symlink() {
+                if config.platform == crate::config::Platform::Asuswrt {
+                    let expected = if kind == NginxObjectKind::Domain {
+                        available.parent().context("domain path has no parent")?
+                    } else {
+                        &available
+                    };
+                    anyhow::ensure!(link.canonicalize()? == expected.canonicalize()?,
+                        "enabled path points to the wrong site: {}", link.display());
+                }
                 return Ok(());
             }
             bail!("enabled path exists and is not a symlink");
@@ -376,6 +392,20 @@ pub fn set_enabled(
             NginxObjectKind::Subfolder => {
                 PathBuf::from("../subfolders-available").join(config_file_name(name)?)
             }
+        };
+        let target = if config.platform == crate::config::Platform::Asuswrt {
+            let expected = if kind == NginxObjectKind::Domain {
+                available.parent().context("domain path has no parent")?
+            } else {
+                &available
+            };
+            if link.parent().unwrap().join(&target).canonicalize().ok() == Some(expected.canonicalize()?) {
+                target
+            } else {
+                expected.canonicalize()?
+            }
+        } else {
+            target
         };
         unix_fs::symlink(target, link)?;
     } else if symlink_exists(&link) {

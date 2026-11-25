@@ -53,6 +53,29 @@ fn regular(path: &Path) -> Result<Option<Metadata>> {
     }
 }
 
+// Compare directory-entry identity without following the final link.
+fn same_entry(a: &Path, b: &Path) -> bool {
+    a == b || (a.file_name() == b.file_name()
+        && a.parent().and_then(|p| p.canonicalize().ok())
+            .zip(b.parent().and_then(|p| p.canonicalize().ok()))
+            .is_some_and(|(a,b)| a == b))
+}
+
+fn source_file(path: &Path) -> Result<Option<Metadata>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_symlink() => {
+            crate::util::trusted_file_path(path)?;
+            Ok(Some(metadata))
+        }
+        Ok(metadata) => {
+            ensure!(metadata.is_file(), "not a regular migration file: {}", path.display());
+            Ok(Some(metadata))
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn same_path(a: &Path, b: &Path) -> bool {
     a == b
         || a.canonicalize()
@@ -120,6 +143,19 @@ fn copy_checked(source: &Path, destination: &Path) -> Result<()> {
 }
 
 fn archive(source: &Path, directory: &Path, name: &str) -> Result<()> {
+    // Archive the resolved bytes, not a dangling link into the old layout.
+    // Retain the original link text separately for manual rollback.
+    if fs::symlink_metadata(source)?.is_symlink() {
+        let target = fs::read_link(source)?;
+        let link_record = directory.join(format!("{name}.link"));
+        use std::os::unix::ffi::OsStrExt;
+        if !link_record.exists() {
+            write_file(&link_record, target.as_os_str().as_bytes(),
+                &fs::metadata(source)?, false)?;
+        }
+        let resolved = crate::util::trusted_file_path(source)?;
+        return archive(&resolved, directory, name);
+    }
     let mut destination = directory.join(name);
     if regular(&destination)?.is_some() && fs::read(&destination)? != fs::read(source)? {
         destination = directory.join(format!("{name}-{}", Uuid::new_v4().simple()));
@@ -144,15 +180,21 @@ fn plan(
     destination: PathBuf,
     label: String,
 ) -> Result<()> {
-    if regular(&source)?.is_some() {
-        // Reject destination symlinks before comparing canonical paths: a
-        // symlink to the source is not a safe destination for a migration.
-        let destination_exists = regular(&destination)?.is_some();
-        if same_path(&source, &destination) {
+    if let Some(metadata) = source_file(&source)? {
+        if same_entry(&source, &destination) {
             return Ok(());
         }
-        // Validate existing destinations before copying anything.
-        if destination_exists {
+        if metadata.is_symlink() {
+            // A relocated link must still point to the same existing target.
+            // On retry, allow only a matching link, not a different file.
+            let target = crate::util::trusted_file_path(&source)?;
+            ensure!(!same_entry(&target, &destination),
+                "migration would replace the source link's target: {}", destination.display());
+            if let Some(existing) = source_file(&destination)? {
+                ensure!(existing.is_symlink() && crate::util::trusted_file_path(&destination)? == target,
+                    "layout migration conflict: {} differs from {}", source.display(), destination.display());
+            }
+        } else if regular(&destination)?.is_some() {
             ensure!(
                 fs::read(&source)? == fs::read(&destination)?,
                 "layout migration conflict: {} differs from {}",
@@ -160,17 +202,13 @@ fn plan(
                 destination.display()
             );
         }
-        transfers.push(Transfer {
-            source,
-            destination,
-            label,
-        });
+        transfers.push(Transfer { source, destination, label });
     }
     Ok(())
 }
 
 fn retire(files: &mut Vec<(PathBuf, String)>, source: PathBuf, label: String) -> Result<()> {
-    if regular(&source)?.is_some() {
+    if source_file(&source)?.is_some() {
         files.push((source, label));
     }
     Ok(())
@@ -208,18 +246,18 @@ pub fn require_current(config: &AppConfig) -> Result<()> {
     let legacy_policy = data.join(POLICY);
     let policy = config.firewall_policy_path();
     let mut pending = data == Path::new(OLD_DATA)
-        || (regular(&legacy_policy)?.is_some() && !same_path(&legacy_policy, &policy));
+        || (source_file(&legacy_policy)?.is_some() && !same_entry(&legacy_policy, &policy));
     for name in HTTP_FILES {
         let source = inputs.join(name);
-        if regular(&source)?.is_some() {
-            pending |= !same_path(&source, &config.http_state_dir().join(name));
+        if source_file(&source)?.is_some() {
+            pending |= !same_entry(&source, &config.http_state_dir().join(name));
         }
     }
     for name in AUTHORED.iter().chain(DERIVED) {
-        pending |= regular(&inputs.join("settings").join(name))?.is_some();
+        pending |= source_file(&inputs.join("settings").join(name))?.is_some();
     }
     for name in DERIVED {
-        pending |= regular(&inputs.join(name))?.is_some();
+        pending |= source_file(&inputs.join(name))?.is_some();
     }
     ensure!(
         !pending,
@@ -250,7 +288,7 @@ fn migrate_with_defaults(
     let policy = config.firewall_policy_path();
     let old_policy = old_data.join(POLICY);
     check_roots(config, data)?;
-    regular(&policy)?;
+    source_file(&policy)?;
 
     let mut transfers = Vec::new();
     let mut retired = Vec::new();
@@ -267,9 +305,9 @@ fn migrate_with_defaults(
         // when the active data directory was OLD_DATA. Preserve it for audit,
         // but never let it take precedence over the effective old policy.
         let unused_policy = data.join(POLICY);
-        if regular(&unused_policy)?.is_some()
-            && !same_path(&unused_policy, &old_policy)
-            && !same_path(&unused_policy, &policy)
+        if source_file(&unused_policy)?.is_some()
+            && !same_entry(&unused_policy, &old_policy)
+            && !same_entry(&unused_policy, &policy)
         {
             retire(
                 &mut retired,
@@ -313,12 +351,12 @@ fn migrate_with_defaults(
     // A custom YAML could previously rely on the fixed global policy fallback.
     // Copy it only if neither the previous primary nor new authority exists.
     let fallback = old_default.join(POLICY);
-    let import_fallback = regular(&policy)?.is_none()
+    let import_fallback = source_file(&policy)?.is_none()
         && !transfers
             .iter()
             .any(|transfer| transfer.destination == policy)
         && !same_path(&fallback, &policy)
-        && regular(&fallback)?.is_some();
+        && source_file(&fallback)?.is_some();
 
     if !change_data && transfers.is_empty() && retired.is_empty() && !import_fallback {
         return Ok(());
@@ -338,14 +376,29 @@ fn migrate_with_defaults(
     );
 
     for transfer in &transfers {
-        copy_checked(&transfer.source, &transfer.destination)?;
+        if fs::symlink_metadata(&transfer.source)?.is_symlink() {
+            let target = crate::util::trusted_file_path(&transfer.source)?;
+            // Do not retire another file that a migrated link depends on.
+            ensure!(!transfers.iter().any(|other| same_entry(&other.source, &target))
+                && !retired.iter().any(|(source, _)| same_entry(source, &target)),
+                "migration link target is also being retired: {}", target.display());
+            if source_file(&transfer.destination)?.is_none() {
+                fs::create_dir_all(parent(&transfer.destination)?)?;
+                std::os::unix::fs::symlink(&target, &transfer.destination)?;
+                sync_parent(&transfer.destination)?;
+            }
+            ensure!(crate::util::trusted_file_path(&transfer.destination)? == target,
+                "migration link target changed: {}", transfer.destination.display());
+        } else {
+            copy_checked(&transfer.source, &transfer.destination)?;
+        }
         archive(&transfer.source, &backup, &transfer.label)?;
     }
     for (source, label) in &retired {
         archive(source, &backup, label)?;
     }
     if import_fallback {
-        copy_checked(&fallback, &policy)?;
+        copy_checked(&crate::util::trusted_file_path(&fallback)?, &policy)?;
     }
 
     // A flattened YAML tree must validate before retiring its former inputs.
@@ -354,8 +407,9 @@ fn migrate_with_defaults(
     crate::nginx_ingress::validate_tree(&global, &sites)?;
 
     if change_data {
-        let metadata = regular(config_path)?.context("router YAML disappeared")?;
-        let raw = crate::config_yaml::read(config_path)?;
+        let resolved = crate::util::trusted_file_path(config_path)?;
+        let metadata = regular(&resolved)?.context("router YAML disappeared")?;
+        let raw = crate::config_yaml::read(&resolved)?;
         let mut document: serde_yaml::Value = crate::config_yaml::decode(&raw)?;
         document["paths"]["data_dir"] = serde_yaml::to_value(data)?;
         let encoded = serde_yaml::to_string(&document)?;
@@ -363,10 +417,11 @@ fn migrate_with_defaults(
         let _: AppConfig = crate::config_yaml::decode(&encoded)?;
         archive(config_path, &backup, "maestro.yaml.before-layout")?;
         ensure!(
-            crate::config_yaml::read(config_path)? == raw,
+            crate::util::trusted_file_path(config_path)? == resolved
+                && crate::config_yaml::read(&resolved)? == raw,
             "router YAML changed during migration; stop Maestro and retry"
         );
-        write_file(config_path, encoded.as_bytes(), &metadata, true)?;
+        write_file(&resolved, encoded.as_bytes(), &metadata, true)?;
     }
 
     // Old paths are retired only after all durable copies and the new YAML
@@ -500,6 +555,27 @@ mod tests {
             fs::read_link(new.join("certificates.json")).unwrap(),
             old.join("certificates.json")
         );
+    }
+
+    #[test]
+    fn migration_preserves_linked_state_and_yaml() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, old, new, _) = fixture(temp.path(), false);
+        let target = temp.path().join("external-state.json");
+        fs::write(&target, b"saved").unwrap();
+        symlink(&target, old.join("certificates.json")).unwrap();
+        let yaml = temp.path().join("router.yaml");
+        fs::rename(&path, &yaml).unwrap();
+        symlink(&yaml, &path).unwrap();
+        let config = AppConfig::load(&path).unwrap();
+        migrate_with_defaults(&path, &config, &old, &new).unwrap();
+        assert_eq!(fs::read_link(&path).unwrap(), yaml);
+        assert_eq!(fs::read_link(new.join("certificates.json")).unwrap(), target);
+        assert_eq!(fs::read(&target).unwrap(), b"saved");
+        assert!(!old.join("certificates.json").exists());
+        let updated = AppConfig::load(&path).unwrap();
+        assert_eq!(updated.paths.data_dir, new);
+        migrate_with_defaults(&path, &updated, &old, &new).unwrap();
     }
 
     #[test]

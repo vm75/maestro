@@ -702,7 +702,9 @@ pub(crate) fn ensure_managed_path(
         &config.nginx.root_dir
     };
     if std::fs::symlink_metadata(base).is_ok_and(|m| m.file_type().is_symlink()) {
-        bail!("managed nginx root is a symlink");
+        if config.platform == crate::config::Platform::Linux || !base.canonicalize()?.is_dir() {
+            bail!("managed nginx root is not a supported directory alias: {}", base.display());
+        }
     }
     nginx::ensure_no_symlink_ancestors(base, path)
 }
@@ -1050,16 +1052,17 @@ impl FileTransaction {
         files: BTreeMap<std::path::PathBuf, String>,
         removals: &[std::path::PathBuf],
     ) -> Result<Self> {
-        let mut transaction = Self {
-            previous: Vec::new(),
-            committed: false,
-        };
-        // Preflight every path before writing any file.
+        // Preflight before arming rollback: a rejected later path must not
+        // rewrite earlier files that were never modified.
+        let mut previous = Vec::new();
         for path in files.keys().chain(removals) {
             ensure_managed_path(config, path)?;
-            let previous = backup_file(path)?;
-            transaction.previous.push((path.clone(), previous));
+            previous.push((path.clone(), backup_file(path)?));
         }
+        let transaction = Self {
+            previous,
+            committed: false,
+        };
         if let Some(content) = files.get(&global_path(config)) {
             let settings: NginxSettings = crate::config_yaml::decode(content)?;
             GlobalSettings {

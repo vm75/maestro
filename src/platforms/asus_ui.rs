@@ -133,7 +133,8 @@ pub fn install_menu_entry(config: &AppConfig) -> Result<()> {
     );
     menu_tree.replace_range(start..end, &entry);
     let result = if config.platform == crate::config::Platform::Asuswrt {
-        crate::util::write_trusted_file(&config.asus_ui.menu_tree, menu_tree.as_bytes(), None)
+        crate::util::trusted_file_path(&config.asus_ui.menu_tree)
+            .and_then(|target| fs::write(target, &menu_tree).map_err(Into::into))
     } else {
         fs::write(&config.asus_ui.menu_tree, menu_tree).map_err(Into::into)
     };
