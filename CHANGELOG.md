@@ -4,6 +4,13 @@
 
 - Separate router configuration from durable operational state, consolidate firewall policy, migrate YAML-era HTTP-01 recovery records, and stop storing derived Nginx lists in the router input directory.
 
+## 0.13.1
+
+### Fixed
+
+- Install the router DNS-01 hook using BusyBox-compatible `cp` and `chmod` instead of requiring `install`, preserving existing hooks and symlinks.
+- Exercise packaged hook setup with a restricted runtime PATH in IPK tests.
+
 ## 0.13.0
 
 ### Fixed
