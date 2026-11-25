@@ -59,9 +59,6 @@ if [[ ! -e "$lab/nginx/nginx.conf" && ! -L "$lab/nginx/nginx.conf" ]]; then
         --error-log-path "$lab/logs/nginx/error.log" \
         --acme-directory "$lab/certificates/acme-challenge" \
         --http-port "$nginx_port" --https-port "$nginx_tls_port"
-    openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=localhost \
-        -keyout "$lab/nginx/certs/default/privkey.pem" \
-        -out "$lab/nginx/certs/default/fullchain.pem" >/dev/null 2>&1
     cat > "$lab/nginx/conf.d/00-linux-default.conf" <<EOF
 server {
     server_name 127.0.0.1;

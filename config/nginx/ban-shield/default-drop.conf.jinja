@@ -1,4 +1,3 @@
-{% import 'settings/tls.jinja' as tls with context %}
 # =============================================================================
 # DEFAULT DROP SERVER — catches all requests to unknown/unregistered hostnames
 # =============================================================================
@@ -12,11 +11,8 @@ server {
     listen {{ router_ip | default('127.0.0.1') }}:{{ http_port | default(80) }} default_server;
     listen {{ router_ip | default('127.0.0.1') }}:{{ https_port | default(443) }} ssl default_server;
 
-    # Use a self-signed / dummy cert for the default SSL context.
-    # Without this, Nginx won't start the default_server SSL block.
-    # Supply a parseable fallback certificate for this installation.
-    ssl_certificate     {{ tls.default_certificate_dir }}/fullchain.pem;
-    ssl_certificate_key {{ tls.default_certificate_dir }}/privkey.pem;
+    # Reject unknown TLS names without loading a certificate.
+    ssl_reject_handshake on;
 
     access_log {{ var_dir | default('/opt/var') }}/log/nginx/unknown-host.log f2b_trap;
     return 444;

@@ -260,7 +260,7 @@ class Templates(unittest.TestCase):
                 acme_challenge_dir=str(dest / 'acme'),
             )
             for directory in ('var/log/nginx', 'var/run', 'module.d', 'acme',
-                              'certs/default', 'certs/example_test'):
+                              'certs/example_test'):
                 (dest / directory).mkdir(parents=True, exist_ok=True)
             # Render runtime includes separately; proxy aspects are expanded by Jinja
             # into each site and must never be rendered as shared runtime files.
@@ -288,12 +288,10 @@ class Templates(unittest.TestCase):
                     )
             subprocess.run([
                 'openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
-                '-keyout', str(dest / 'certs/default/privkey.pem'),
-                '-out', str(dest / 'certs/default/fullchain.pem'),
+                '-keyout', str(dest / 'certs/example_test/privkey.pem'),
+                '-out', str(dest / 'certs/example_test/fullchain.pem'),
                 '-days', '1', '-subj', '/CN=example.test',
             ], check=True, capture_output=True)
-            for name in ('privkey.pem', 'fullchain.pem'):
-                shutil.copy(dest / 'certs/default' / name, dest / 'certs/example_test' / name)
             # One root and subdomain per combination, each with a mounted subfolder.
             for index, bits in enumerate(itertools.product((False, True), repeat=len(FLAGS))):
                 options = dict(context, **dict(zip(FLAGS, bits)), disable_root=False,

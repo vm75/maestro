@@ -898,7 +898,7 @@ async fn live_nginx_separates_ingress_and_blocks_paths_before_upstream() {
     )
     .unwrap()
     .commit();
-    for dir in ["certs/default", "certs/example_test", "module.d", "logs"] {
+    for dir in ["certs/example_test", "module.d", "logs"] {
         fs::create_dir_all(config.nginx.root_dir.join(dir)).unwrap();
     }
     let output = std::process::Command::new("openssl")
@@ -914,19 +914,12 @@ async fn live_nginx_separates_ingress_and_blocks_paths_before_upstream() {
             "/CN=example.test",
             "-keyout",
         ])
-        .arg(config.nginx.root_dir.join("certs/default/privkey.pem"))
+        .arg(config.nginx.root_dir.join("certs/example_test/privkey.pem"))
         .arg("-out")
-        .arg(config.nginx.root_dir.join("certs/default/fullchain.pem"))
+        .arg(config.nginx.root_dir.join("certs/example_test/fullchain.pem"))
         .output()
         .unwrap();
     assert!(output.status.success());
-    for file in ["privkey.pem", "fullchain.pem"] {
-        fs::copy(
-            config.nginx.root_dir.join("certs/default").join(file),
-            config.nginx.root_dir.join("certs/example_test").join(file),
-        )
-        .unwrap();
-    }
     let bundle = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/nginx");
     for file in ["mime.types", "dhparams.pem"] {
         fs::copy(bundle.join(file), config.nginx.root_dir.join(file)).unwrap();
@@ -993,6 +986,28 @@ async fn live_nginx_separates_ingress_and_blocks_paths_before_upstream() {
             .unwrap()
     };
     let local = client(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    assert!(!config.nginx.root_dir.join("certs/default").exists());
+    let unknown = reqwest::Client::builder()
+        .no_proxy()
+        .danger_accept_invalid_certs(true)
+        .resolve("unknown.example.test", ([127, 0, 0, 1], ports[2]).into())
+        .timeout(Duration::from_secs(3))
+        .build()
+        .unwrap();
+    assert!(
+        unknown
+            .get(format!("https://unknown.example.test:{}/", ports[2]))
+            .send()
+            .await
+            .is_err()
+    );
+    assert!(
+        unknown
+            .get(format!("https://127.0.0.1:{}/", ports[2]))
+            .send()
+            .await
+            .is_err()
+    );
     let response = local
         .get(format!("https://app.example.test:{}/", ports[2]))
         .send()

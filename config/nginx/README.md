@@ -259,7 +259,7 @@ table holds shared nginx options, `site_defaults` holds inherited site policy,
 and root-level `allowed_ips` and `free_subdomains` arrays hold the allowlists.
 API/UI saves update this file atomically with generated runtime output; failed
 validation or reload restores the previous YAML. Allowlist fragments are
-generated from YAML. Relative fallback certificate directories resolve below the nginx root.
+generated from YAML. The legacy `default_certificate_dir` setting is ignored.
 Runtime options `nginx_daemon`, `nginx_user`,
 and `temp_dir` are validated and rendered by the same policy as listener settings.
 `nginx_daemon` defaults to `true` on Asuswrt-Merlin, Linux, and in test mode.
@@ -467,8 +467,7 @@ Shared render parameters retain their defaults: `router_ip=127.0.0.1`,
 `http_port=80`, `https_port=443`, `var_dir=/opt/var`, `worker_processes=2`,
 `worker_connections=64`, `resolver_addr=127.0.0.1`, `resolver_validity=30s`, and
 `acme_challenge_dir=/opt/acme-challenge`. Both ACME listeners use that directory.
-The fallback server's `default_certificate_dir` defaults to `certs/default` via
-`settings/tls.jinja`; pass the actual certificate directory in deployment context.
+The default HTTPS server rejects TLS handshakes without a certificate (NGINX 1.19.4 or newer). Each managed hostname still uses its domain certificate.
 Re-render the HTTP redirect when its server list changes. Supply certificates,
 modules and writable runtime/log paths appropriate to the installation.
 The bundle tests never install or reload configuration on a deployment router.

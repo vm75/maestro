@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.13.0
+
+### Fixed
+
+- Reject unknown HTTPS hosts without requiring a fallback certificate, preserving domain-specific certificate selection on router and Linux. Retire `default_certificate_dir` while accepting existing YAML, and stop creating dummy certificates during NGINX initialization.
+
 ## 0.12.2
 
 ### Added

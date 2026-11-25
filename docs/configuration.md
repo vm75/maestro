@@ -131,14 +131,11 @@ An empty LAN allowlist denies all clients for LAN-only locations.
 `nginx.yaml` under that directory is the single source of global inputs: `global` contains
 shared nginx options, `site_defaults` contains inherited site policies, and
 root-level `allowed_ips` and `free_subdomains` arrays contain the allowlists.
-Text allowlist fragments are generated from YAML. Relative fallback
-certificate directories resolve beneath the configured nginx root; traversal
-is rejected. `init-nginx` accepts existing fallback certificate pairs through
-directory or file symlinks when both targets are regular files. Existing
-certificate contents and permissions are preserved. Generating a missing pair
-still requires paths without symlinks beneath the managed nginx root; incomplete
-pairs and non-file targets are rejected. A missing pair is generated even when
-`nginx.conf` already matches the bundled configuration. Global settings also save `nginx_daemon`,
+Text allowlist fragments are generated from YAML. NGINX 1.19.4 or newer rejects
+unknown TLS hostnames without a fallback certificate. The retired
+`default_certificate_dir` setting is ignored on load and omitted on save.
+`init-nginx` refreshes the managed rejection server without touching certificate
+files, including existing symlinked domain certificate stores. Global settings also save `nginx_daemon`,
 `nginx_user`, and `temp_dir`. When Maestro runs as non-root, generated nginx configuration omits
 `user`. When it runs as root, nginx uses `nginx_user`, falling back to `nobody`
 when blank or unset. Only the temporary parent folder is configurable: nginx

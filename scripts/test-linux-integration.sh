@@ -71,9 +71,6 @@ python3 "$repo_root/scripts/render-nginx-config.py" \
     --error-log-path "$lab/logs/nginx/error.log" \
     --acme-directory "$lab/certificates/acme-challenge" \
     --http-port "$nginx_port" --https-port "$nginx_tls_port"
-openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=localhost \
-    -keyout "$lab/nginx/certs/default/privkey.pem" \
-    -out "$lab/nginx/certs/default/fullchain.pem" >/dev/null 2>&1
 mkdir -p "$lab/tmp"
 cat > "$lab/nginx/conf.d/00-linux-default.conf" <<EOF
 server {
@@ -242,7 +239,10 @@ post /api/nginx/test | real_result
 # Exercise the settings-only managed-site workflow against real nginx.
 # Managed hosts use their own certificate folder; keep this entirely self-signed.
 mkdir -p "$lab/nginx/certs/linux_test"
-cp "$lab/nginx/certs/default/fullchain.pem" "$lab/nginx/certs/default/privkey.pem" "$lab/nginx/certs/linux_test/"
+openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=linux.test \
+    -keyout "$lab/nginx/certs/linux_test/privkey.pem" \
+    -out "$lab/nginx/certs/linux_test/fullchain.pem" >/dev/null 2>&1
+[[ ! -e "$lab/nginx/certs/default" ]]
 curl --silent --show-error --fail-with-body -X POST \
     -H "Authorization: Bearer $token" \
     -H "Content-Type: application/json" \

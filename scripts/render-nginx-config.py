@@ -29,7 +29,7 @@ settings = dict(router_ip='127.0.0.1', http_port=args.http_port,
 Path(settings['temp_dir']).mkdir(parents=True, exist_ok=True)
 context = dict(settings, nginx_is_root=os.geteuid() == 0, pid_path=args.pid_path, error_log_path=args.error_log_path)
 root = args.output
-for directory in ('module.d', 'domains-available', 'domains-enabled', 'certs/default'):
+for directory in ('module.d', 'domains-available', 'domains-enabled', 'certs'):
     (root / directory).mkdir(parents=True, exist_ok=True)
 for directory in ('log/nginx', 'run'):
     (Path(args.var_dir) / directory).mkdir(parents=True, exist_ok=True)
