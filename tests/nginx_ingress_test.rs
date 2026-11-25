@@ -916,7 +916,12 @@ async fn live_nginx_separates_ingress_and_blocks_paths_before_upstream() {
         ])
         .arg(config.nginx.root_dir.join("certs/example_test/privkey.pem"))
         .arg("-out")
-        .arg(config.nginx.root_dir.join("certs/example_test/fullchain.pem"))
+        .arg(
+            config
+                .nginx
+                .root_dir
+                .join("certs/example_test/fullchain.pem"),
+        )
         .output()
         .unwrap();
     assert!(output.status.success());

@@ -1144,9 +1144,7 @@ pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
     let root = &config.nginx.root_dir;
     nginx::ensure_no_symlink_ancestors(root, &config.nginx.config_path)?;
     if config.test_mode {
-        bail!(
-            "init-nginx requires a real deployment; use an isolated Linux config for testing"
-        );
+        bail!("init-nginx requires a real deployment; use an isolated Linux config for testing");
     }
     let mut global = load_global(config)?;
     let var_dir = config
@@ -1178,7 +1176,8 @@ pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
             return !main_unchanged;
         }
         match fs::symlink_metadata(path) {
-            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+            // Let the transaction report inaccessible paths or blocked parents.
+            Err(_) => true,
             Ok(metadata) if path == &default_drop && metadata.is_file() => {
                 fs::read_to_string(path).is_ok_and(|old| {
                     (old.starts_with("# Managed ingress defaults.")

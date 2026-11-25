@@ -35,12 +35,7 @@ async fn native_jinja_output_passes_real_nginx_validation() {
     config.nginx.subfolder_upstream_map_path = root.join("conf.d/04_subfolder_upstream_map.conf");
     config.nginx.http_forwarder_path = root.join("conf.d/05-http-to-https.conf");
     config.certificates.certs_dir = root.join("certificates");
-    for dir in [
-        "var/log/nginx",
-        "var/run",
-        "certs/example_test",
-        "module.d",
-    ] {
+    for dir in ["var/log/nginx", "var/run", "certs/example_test", "module.d"] {
         fs::create_dir_all(root.join(dir)).unwrap();
     }
     let runner = CommandRunner::new(false);
@@ -58,9 +53,13 @@ async fn native_jinja_output_passes_real_nginx_validation() {
                 "-subj",
                 "/CN=example.test",
                 "-keyout",
-                root.join("certs/example_test/privkey.pem").to_str().unwrap(),
+                root.join("certs/example_test/privkey.pem")
+                    .to_str()
+                    .unwrap(),
                 "-out",
-                root.join("certs/example_test/fullchain.pem").to_str().unwrap(),
+                root.join("certs/example_test/fullchain.pem")
+                    .to_str()
+                    .unwrap(),
             ],
             Duration::from_secs(30),
         )

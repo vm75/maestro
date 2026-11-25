@@ -37,7 +37,7 @@ node scripts/test-web-ui.mjs
 ```
 
 Useful repository shortcuts are `make check`, `make test`, `make help`,
-`make fmt`, `make clippy`, `make test-nginx`, `make test-router`, and `make release`.
+`make fmt`, `make clippy`, `make fix`, `make test-nginx`, `make test-router`, and `make release`.
 `make test-nginx` needs Python 3.11+, Jinja2, PyYAML, nginx, and OpenSSL and uses temporary
 files and loopback servers. `make run-simulated` (`make run`) starts x64 test mode
 with `test-fixtures/etc/maestro/maestro.yaml`; it does not execute router commands or send
@@ -81,7 +81,10 @@ firmware. Legacy MIPS support is not promised.
 
 ## Release workflow
 
-CI runs on every push to main and opt-in `ci/**` branches. Other PRs are
+CI runs on every push to main and opt-in `ci/**` branches. Opt-in branch CI
+applies Rust 1.85.0 Clippy fixes and formatting, commits tracked Rust changes
+without force-pushing, and explicitly dispatches strict CI on the corrected head.
+Main and manual proposed-merge checks remain read-only. Other PRs are
 manual: workflow_dispatch accepts an open PR number to check its proposed merge,
 or no number to check the selected branch. Successful push CI on current main
 automatically tags a new stable version matching `Cargo.toml` and `Cargo.lock`.

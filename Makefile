@@ -3,7 +3,7 @@
 # Reuse the Python environment prepared by make init-linux for test targets.
 PYTHON ?= $(if $(wildcard .dev-tools/python/bin/python3),$(CURDIR)/.dev-tools/python/bin/python3,python3)
 
-.PHONY: help check test test-linux test-podman test-quadlet test-nginx test-ipk test-ui test-router test-lab run run-linux run-router run-simulated init-linux init-linux-helper remove-linux-helper init-router fmt clippy release ipk init-lab run-lab
+.PHONY: help check test test-linux test-podman test-quadlet test-nginx test-ipk test-ui test-router test-lab run run-linux run-router run-simulated init-linux init-linux-helper remove-linux-helper init-router fmt clippy fix release ipk init-lab run-lab
 
 help:
 	@echo 'Development environments (run one at a time; all use API port 3030):'
@@ -15,6 +15,7 @@ help:
 	@echo '  make init-router   Build the IPK and install the AArch64 QEMU router guest'
 	@echo '  make run-router    Boot the installed QEMU router guest'
 	@echo '  make test-router   Check router guest scripts with mocked QEMU'
+	@echo '  make fix           Apply baseline Clippy fixes and Rust formatting'
 	@echo 'See docs/development.md for prerequisites and browser access.'
 
 check:
@@ -75,6 +76,10 @@ fmt:
 
 clippy:
 	cargo clippy --all-targets -- -D warnings
+
+fix:
+	@status=0; cargo +1.85.0 clippy --fix --all-targets --locked --allow-dirty --allow-staged || status=$?; \
+		cargo +1.85.0 fmt --all || exit $?; exit $status
 
 release:
 	./scripts/build-release.sh aarch64-unknown-linux-musl
