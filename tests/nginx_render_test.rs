@@ -284,7 +284,10 @@ async fn bootstrap_installs_current_format_and_backs_up_existing_main_configurat
     assert!(nginx_render::global_path(&config).is_file());
     assert!(!root.join("settings/nginx.yaml").exists());
     assert!(!root.join("settings/allowed_ips.txt").exists());
-    assert!(config.nginx.inputs_dir.join("allowed_ips.txt").is_file());
+    for name in ["allowed_ips.txt", "free_subdomains.txt", "servers.conf"] {
+        assert!(!config.nginx.inputs_dir.join(name).exists());
+    }
+    assert!(root.join("settings/servers.conf").is_file());
     let paths = ["client_body", "proxy", "fastcgi", "uwsgi", "scgi"]
         .iter()
         .map(|name| format!("{name}_temp_path {}/{}-temp;", root.display(), name))

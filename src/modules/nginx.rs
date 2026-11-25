@@ -634,9 +634,7 @@ pub(crate) fn has_enabled_managed_hostname(config: &AppConfig, host: &str) -> Re
     Ok(false)
 }
 
-pub fn http_forwarder_files(
-    config: &AppConfig,
-) -> Result<std::collections::BTreeMap<PathBuf, String>> {
+pub(crate) fn server_names_fragment(config: &AppConfig) -> Result<String> {
     let mut names = BTreeSet::new();
     for object in list_objects(config, false)? {
         if !object.enabled {
@@ -692,12 +690,18 @@ pub fn http_forwarder_files(
         }
     }
 
-    let global = crate::nginx_render::load_global(config)?;
-    let servers = if names.is_empty() {
+    Ok(if names.is_empty() {
         "\"\";".into()
     } else {
         format!("{};", names.into_iter().collect::<Vec<_>>().join(" "))
-    };
+    })
+}
+
+pub fn http_forwarder_files(
+    config: &AppConfig,
+) -> Result<std::collections::BTreeMap<PathBuf, String>> {
+    let global = crate::nginx_render::load_global(config)?;
+    let servers = server_names_fragment(config)?;
     let data = [("settings/servers.conf".into(), servers.clone())]
         .into_iter()
         .collect();
@@ -715,16 +719,13 @@ pub fn http_forwarder_files(
     let rendered = env
         .get_template("conf.d/05-http-to-https.conf.jinja")?
         .render(minijinja::value::Serde(context))?;
-    let mut files: std::collections::BTreeMap<std::path::PathBuf, String> = [
-        (
-            config.nginx.inputs_dir.join("servers.conf"),
-            servers.clone(),
-        ),
-        (config.nginx.root_dir.join("settings/servers.conf"), servers),
+    let mut files = std::collections::BTreeMap::from([
+        (config.nginx.root_dir.join("settings/servers.conf"), servers.clone()),
         (config.nginx.http_forwarder_path.clone(), rendered),
-    ]
-    .into_iter()
-    .collect();
+    ]);
+    if config.platform == crate::config::Platform::Linux {
+        files.insert(config.nginx.inputs_dir.join("servers.conf"), servers);
+    }
     files.extend(crate::nginx_ingress::runtime_files(
         config,
         &crate::nginx_render::with_path_defaults(global, config),

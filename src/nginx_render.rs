@@ -800,8 +800,17 @@ pub fn shared_files(
     settings.validate()?;
     crate::nginx_ingress::validate_tree(&settings, &crate::nginx_sites::load(config)?)?;
     let mut data = BTreeMap::new();
+    let router = config.platform == crate::config::Platform::Asuswrt;
     for &(name, source) in BUNDLE {
         if name.starts_with("settings/") && !name.ends_with(".jinja") {
+            if router
+                && matches!(
+                    name,
+                    "settings/allowed_ips.txt" | "settings/free_subdomains.txt" | "settings/servers.conf"
+                )
+            {
+                continue;
+            }
             let path = config
                 .nginx
                 .inputs_dir
@@ -871,6 +880,12 @@ pub fn shared_files(
         "settings/free_subdomains.txt".into(),
         settings.free_subdomains.join("\n"),
     );
+    if router {
+        data.insert(
+            "settings/servers.conf".into(),
+            nginx::server_names_fragment(config)?,
+        );
+    }
     let env = environment(&data)?;
     // SAFETY: geteuid has no arguments or memory safety requirements.
     let mut context = runtime_context(&settings, unsafe { libc::geteuid() == 0 });
@@ -939,14 +954,21 @@ pub fn shared_files(
         files.insert(path, content);
     }
     for (name, content) in data {
-        files.insert(
-            config
-                .nginx
-                .inputs_dir
-                .join(name.strip_prefix("settings/").unwrap()),
-            content.clone(),
-        );
-        // These are concrete nginx includes; text lists and YAML stay in inputs_dir.
+        if !router
+            || !matches!(
+                name.as_str(),
+                "settings/allowed_ips.txt" | "settings/free_subdomains.txt" | "settings/servers.conf"
+            )
+        {
+            files.insert(
+                config
+                    .nginx
+                    .inputs_dir
+                    .join(name.strip_prefix("settings/").unwrap()),
+                content.clone(),
+            );
+        }
+        // Only concrete native includes are deployed to the nginx runtime tree.
         if name.ends_with(".conf") {
             files.insert(config.nginx.root_dir.join(name), content);
         }
