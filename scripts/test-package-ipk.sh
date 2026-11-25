@@ -48,6 +48,43 @@ tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/libexec/maestro/setup-merlin.sh'
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/share/maestro/dehydrated-dns01-hook.sh'
 ! tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/var/lib/maestro/dehydrated/dehydrated-dns01-hook.sh'
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/share/maestro/maestro.example.yaml'
+# Exercise the actual packaged hook setup with no install utility in PATH.
+hook_test="$TMP/hook-test"
+mkdir -p "$hook_test/bin" "$hook_test/examples" "$hook_test/scripts"
+for tool in cp chmod mkdir dirname; do
+    ln -s "$(command -v "$tool")" "$hook_test/bin/$tool"
+done
+tar -xzOf "$TMP/data.tar.gz" ./opt/libexec/maestro/setup-merlin.sh |
+    sed -n '/^if .* -L .*HOOK/,/^# The application updater/p' > "$hook_test/setup"
+test -s "$hook_test/setup"
+tar -xzOf "$TMP/data.tar.gz" ./opt/share/maestro/dehydrated-dns01-hook.sh > "$hook_test/examples/dehydrated-dns01-hook.sh"
+run_hook_setup() {
+    PATH="$hook_test/bin" HOOK="$1" EXAMPLES_DIR="$hook_test/examples" \
+        /bin/sh -eu "$hook_test/setup"
+}
+hook="$hook_test/state/hook.sh"
+run_hook_setup "$hook"
+cmp "$hook_test/examples/dehydrated-dns01-hook.sh" "$hook"
+test "$(stat -c '%a' "$hook")" = 755
+# Existing custom hooks and symlinks are not overwritten.
+printf 'custom hook\n' > "$hook"
+run_hook_setup "$hook"
+grep -Fx 'custom hook' "$hook"
+ln -s "$hook" "$hook_test/existing-link"
+run_hook_setup "$hook_test/existing-link"
+test -L "$hook_test/existing-link"
+grep -Fx 'custom hook' "$hook"
+ln -s "$hook_test/missing-target" "$hook_test/dangling-link"
+run_hook_setup "$hook_test/dangling-link"
+test -L "$hook_test/dangling-link"
+test ! -e "$hook_test/missing-target"
+# Tarball fallback source and a symlinked destination directory.
+mv "$hook_test/examples/dehydrated-dns01-hook.sh" "$hook_test/scripts/"
+ln -s "$hook_test/state" "$hook_test/linked-state"
+run_hook_setup "$hook_test/linked-state/fallback.sh"
+test -L "$hook_test/linked-state"
+cmp "$hook_test/scripts/dehydrated-dns01-hook.sh" "$hook_test/state/fallback.sh"
+test "$(stat -c '%a' "$hook_test/state/fallback.sh")" = 755
 # Exercise the packaged init script without touching host services or /opt.
 mkdir -p "$TMP/bin"
 tar -xzOf "$TMP/data.tar.gz" ./opt/etc/init.d/S99maestro | \
