@@ -97,63 +97,133 @@ pub(crate) fn trusted_file_path(path: &Path) -> Result<PathBuf> {
     }
 }
 
-/// Atomic publication to the resolved regular file, not over its symlink.
-/// Call only for trusted configured paths, never for arbitrary API paths.
-pub(crate) fn write_trusted_file(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<()> {
+/// Open a physical absolute directory without following any new symlinks.
+/// Callers resolve explicitly trusted aliases before entering this boundary.
+fn physical_directory(path: &Path, create: bool) -> Result<std::os::fd::OwnedFd> {
     use anyhow::{Context, ensure};
-    use std::{
-        fs::{self, File, OpenOptions},
-        io::{ErrorKind, Write},
-        os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt, chown},
-    };
+    use rustix::fs::{self as rfs, Mode, OFlags};
+    use rustix::io::Errno;
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    ensure!(path.is_absolute(), "physical directory must be absolute");
+    let mut directory = rfs::open("/", flags, Mode::empty())?;
+    for part in path.components().skip(1) {
+        let Component::Normal(name) = part else {
+            bail!("invalid physical directory {}", path.display());
+        };
+        directory = match rfs::openat(&directory, name, flags, Mode::empty()) {
+            Ok(fd) => fd,
+            Err(Errno::NOENT) if create => {
+                match rfs::mkdirat(&directory, name, Mode::from_raw_mode(0o755)) {
+                    Ok(()) | Err(Errno::EXIST) => {}
+                    Err(error) => return Err(error.into()),
+                }
+                rfs::openat(&directory, name, flags, Mode::empty())?
+            }
+            Err(error) => return Err(error).with_context(|| format!("open {}", path.display())),
+        };
+    }
+    Ok(directory)
+}
+
+pub(crate) fn open_physical_file(path: &Path) -> Result<std::fs::File> {
+    use anyhow::{Context, ensure};
+    use rustix::fs::{self as rfs, Mode, OFlags};
+    let directory = physical_directory(path.parent().context("missing parent")?, false)?;
+    let file = std::fs::File::from(rfs::openat(&directory,
+        path.file_name().context("missing filename")?,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty())?);
+    ensure!(file.metadata()?.is_file(), "not a regular file: {}", path.display());
+    Ok(file)
+}
+
+/// Resolve a log only inside administrator-approved roots, including its
+/// final symlink. Open the physical path with no-follow directory traversal.
+pub(crate) fn open_contained_log(path: &Path, roots: &[PathBuf]) -> std::io::Result<std::fs::File> {
+    let resolved = path.canonicalize()?;
+    if !roots.iter().any(|root| root.canonicalize().is_ok_and(|root| resolved.starts_with(root))) {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied,
+            format!("log target is outside configured roots: {}", path.display())));
+    }
+    open_physical_file(&resolved).map_err(|error| std::io::Error::other(error.to_string()))
+}
+
+/// Atomic publication in a pinned physical directory. With replace=false,
+/// linkat publishes only if the destination does not exist.
+pub(crate) fn publish_physical_file(
+    target: &Path, bytes: &[u8], mode: u32, owner: Option<(u32,u32)>, replace: bool,
+) -> Result<()> {
+    use anyhow::{Context, ensure};
+    use rustix::fs::{self as rfs, AtFlags, FileType, Mode, OFlags};
+    use rustix::io::Errno;
+    use std::{fs::File, io::Write, os::fd::AsRawFd};
+    let directory = physical_directory(target.parent().context("missing parent")?, true)?;
+    let name = target.file_name().context("missing filename")?;
+    match rfs::statat(&directory, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) => ensure!(replace && FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile,
+            "refusing to replace non-regular or existing file: {}", target.display()),
+        Err(Errno::NOENT) => {}
+        Err(error) => return Err(error.into()),
+    }
+    let temporary = format!(".maestro-write-{}", uuid::Uuid::new_v4().simple());
+    let mut file = File::from(rfs::openat(&directory, &temporary,
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::from_raw_mode(0o600))?);
+    let result = (|| -> Result<()> {
+        if let Some((uid,gid)) = owner {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = file.metadata()?;
+            if metadata.uid() != uid || metadata.gid() != gid {
+                // SAFETY: file owns the descriptor for the exclusively created file.
+                if unsafe { libc::fchown(file.as_raw_fd(), uid, gid) } != 0 {
+                    return Err(std::io::Error::last_os_error().into());
+                }
+            }
+        }
+        rfs::fchmod(&file, Mode::from_raw_mode(mode))?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        if replace {
+            rfs::renameat(&directory, &temporary, &directory, name)?;
+        } else {
+            rfs::linkat(&directory, &temporary, &directory, name, AtFlags::empty())?;
+            rfs::unlinkat(&directory, &temporary, AtFlags::empty())?;
+        }
+        rfs::fsync(&directory)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = rfs::unlinkat(&directory, &temporary, AtFlags::empty());
+    }
+    result
+}
+
+/// Atomic publication to the resolved regular file, not over its symlink.
+pub(crate) fn write_trusted_file(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<()> {
+    use std::{fs, io::ErrorKind, os::unix::fs::{MetadataExt, PermissionsExt}};
     let target = trusted_file_path(path)?;
-    let parent = target.parent().context("missing file parent")?;
-    fs::create_dir_all(parent)?;
     let existing = match fs::symlink_metadata(&target) {
         Ok(metadata) => {
-            ensure!(
-                metadata.is_file(),
-                "not a regular file: {}",
-                target.display()
-            );
+            anyhow::ensure!(metadata.is_file(), "not a regular file: {}", target.display());
             Some(metadata)
         }
         Err(error) if error.kind() == ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
-    let temp = parent.join(format!(".maestro-write-{}", uuid::Uuid::new_v4().simple()));
-    let result = (|| -> Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&temp)?;
-        if let Some(metadata) = &existing {
-            let current = file.metadata()?;
-            if current.uid() != metadata.uid() || current.gid() != metadata.gid() {
-                chown(&temp, Some(metadata.uid()), Some(metadata.gid()))?;
-            }
-        }
-        let permissions = mode
-            .or_else(|| existing.as_ref().map(|m| m.permissions().mode()))
-            .unwrap_or(0o600);
-        file.set_permissions(fs::Permissions::from_mode(permissions))?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        ensure!(
-            trusted_file_path(path)? == target,
-            "configured file changed during write: {}",
-            path.display()
-        );
-        fs::rename(&temp, &target)?;
-        File::open(parent)?.sync_all()?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
-    }
-    result
+    let permissions = mode.or_else(|| existing.as_ref().map(|m| m.permissions().mode())).unwrap_or(0o600);
+    let owner = existing.as_ref().map(|m| (m.uid(),m.gid()));
+    publish_physical_file(&target, bytes, permissions, owner, true)
+}
+
+/// Resolve only the parent; never follow the final directory entry on removal.
+pub(crate) fn unlink_trusted_entry(path: &Path) -> Result<()> {
+    use anyhow::Context;
+    use rustix::fs::{self as rfs, AtFlags};
+    let parent = path.parent().context("missing parent")?.canonicalize()?;
+    let directory = physical_directory(&parent, false)?;
+    rfs::unlinkat(&directory, path.file_name().context("missing filename")?, AtFlags::empty())?;
+    rfs::fsync(&directory)?;
+    Ok(())
 }
 
 /// A private temporary file, removed even if the caller returns early.

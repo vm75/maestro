@@ -851,10 +851,18 @@ pub fn list_logs(config: &AppConfig) -> Result<Vec<NginxLogEntry>> {
     }
     for entry in WalkDir::new(&config.nginx.log_dir).follow_links(false) {
         let entry = entry?;
-        if !entry.file_type().is_file() {
+        let metadata = if entry.file_type().is_file() {
+            entry.metadata()?
+        } else if config.platform == crate::config::Platform::Asuswrt && entry.file_type().is_symlink() {
+            let mut roots = config.firewall.log_dirs.clone();
+            roots.push(config.nginx.log_dir.clone());
+            match crate::util::open_contained_log(entry.path(), &roots) {
+                Ok(file) => file.metadata()?,
+                Err(_) => continue,
+            }
+        } else {
             continue;
-        }
-        let metadata = entry.metadata()?;
+        };
         logs.push(NginxLogEntry {
             path: entry
                 .path()
@@ -873,13 +881,19 @@ pub fn read_log(config: &AppConfig, path: &str) -> Result<String> {
     let relative = safe_relative_path(path)?;
     validate_relative_characters(&relative)?;
     let target = config.nginx.log_dir.join(relative);
-    ensure_no_symlink_ancestors(&config.nginx.log_dir, &target)?;
-    let metadata = fs::symlink_metadata(&target)
-        .with_context(|| format!("failed to inspect {}", target.display()))?;
-    if !metadata.file_type().is_file() {
-        bail!("log path is not a regular file");
-    }
-    let mut file = fs::File::open(&target)?;
+    let mut file = if config.platform == crate::config::Platform::Asuswrt {
+        let mut roots = config.firewall.log_dirs.clone();
+        roots.push(config.nginx.log_dir.clone());
+        crate::util::open_contained_log(&target, &roots)?
+    } else {
+        ensure_no_symlink_ancestors(&config.nginx.log_dir, &target)?;
+        let metadata = fs::symlink_metadata(&target)?;
+        if !metadata.file_type().is_file() {
+            bail!("log path is not a regular file");
+        }
+        fs::File::open(&target)?
+    };
+    let metadata = file.metadata()?;
     let limit = config.nginx.log_read_bytes as u64;
     let start = metadata.len().saturating_sub(limit);
     file.seek(SeekFrom::Start(start))?;

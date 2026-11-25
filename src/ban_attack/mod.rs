@@ -29,3 +29,7 @@ pub use error::{BackendError, Error};
 pub(crate) fn validate_config(config: Config) -> Result<(), Error> {
     compiled::CompiledConfig::compile(config).map(|_| ())
 }
+
+pub(crate) fn validate_router_config(config: Config) -> Result<(), Error> {
+    compiled::CompiledConfig::compile_with_links(config, true).map(|_| ())
+}

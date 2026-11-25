@@ -32,11 +32,16 @@ pub(crate) struct CompiledFile {
     pub path: PathBuf,
     pub start_at: StartAt,
     pub rules: Vec<CompiledRule>,
+    pub linked_log_roots: Vec<PathBuf>,
 }
 
 impl CompiledConfig {
     pub fn compile(config: Config) -> Result<Self, Error> {
-        validate(&config)?;
+        Self::compile_with_links(config, false)
+    }
+
+    pub(crate) fn compile_with_links(config: Config, allow_links: bool) -> Result<Self, Error> {
+        validate(&config, allow_links)?;
 
         let mut files = Vec::with_capacity(config.files.len());
         for file in &config.files {
@@ -52,6 +57,7 @@ impl CompiledConfig {
                 path: file.path.clone(),
                 start_at: file.start_at,
                 rules,
+                linked_log_roots: if allow_links { config.log_dirs.clone() } else { Vec::new() },
             });
         }
 
@@ -77,7 +83,7 @@ impl CompiledConfig {
     }
 }
 
-fn validate(config: &Config) -> Result<(), Error> {
+fn validate(config: &Config, allow_links: bool) -> Result<(), Error> {
     if config.poll_interval_ms < 10 {
         return Err(Error::Config(
             "poll_interval_ms must be at least 10".to_owned(),
@@ -173,7 +179,7 @@ fn validate(config: &Config) -> Result<(), Error> {
 
     let mut paths = HashSet::new();
     for file in &config.files {
-        validate_log_path(&file.path, &config.log_dirs)?;
+        validate_log_path_with_links(&file.path, &config.log_dirs, allow_links)?;
         if !paths.insert(file.path.clone()) {
             return Err(Error::Config(format!(
                 "duplicate file path `{}`",
@@ -200,7 +206,12 @@ fn validate(config: &Config) -> Result<(), Error> {
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_log_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<(), Error> {
+    validate_log_path_with_links(path, allowed_roots, false)
+}
+
+fn validate_log_path_with_links(path: &Path, allowed_roots: &[PathBuf], allow_links: bool) -> Result<(), Error> {
     if !path.is_absolute() {
         return Err(Error::Config(format!(
             "log path `{}` must be absolute",
@@ -256,6 +267,11 @@ fn validate_log_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<(), Error
                 path.display()
             ))
         })?;
+        if metadata.file_type().is_symlink() && allow_links {
+            crate::util::open_contained_log(path, allowed_roots)
+                .map_err(|error| Error::Config(error.to_string()))?;
+            return Ok(());
+        }
         if metadata.file_type().is_symlink() {
             return Err(Error::Config(format!(
                 "log path `{}` is a symlink",

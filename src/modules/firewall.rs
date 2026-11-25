@@ -199,7 +199,11 @@ impl FirewallManager {
         }
         let candidate_config = self.build_ban_attack_config(&candidate)?;
         if !candidate_config.files.is_empty() {
-            crate::ban_attack::validate_config(candidate_config)?;
+            if self.config.platform == crate::config::Platform::Asuswrt {
+                crate::ban_attack::validate_router_config(candidate_config)?;
+            } else {
+                crate::ban_attack::validate_config(candidate_config)?;
+            }
         }
         let previous = self.stores.firewall_policy.read().await.clone();
         self.update_policy(&candidate).await?;
@@ -407,7 +411,7 @@ impl FirewallManager {
                 "Linux helper unavailable".into(),
             ));
         } else {
-            BanEngine::start(config)
+            BanEngine::start_router(config)
         }
     }
 

@@ -1987,12 +1987,17 @@ mod tests {
         fs::create_dir(&outside).unwrap();
         std::fs::create_dir_all(config.nginx.inputs_dir.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&outside, &config.nginx.inputs_dir).unwrap();
+        assert!(load_global(&config).is_ok());
+        let external_file = temp.path().join("external.yaml");
+        fs::write(&external_file, "untouched").unwrap();
+        std::os::unix::fs::symlink(&external_file, outside.join("nginx.yaml")).unwrap();
         assert!(load_global(&config).is_err());
         let files = [(global_path(&config), "bad write".into())]
             .into_iter()
             .collect();
         assert!(FileTransaction::apply(&config, files).is_err());
-        assert!(!outside.join("nginx.yaml").exists());
+        assert_eq!(fs::read(&external_file).unwrap(), b"untouched");
+        assert!(fs::symlink_metadata(outside.join("nginx.yaml")).unwrap().is_symlink());
     }
     #[test]
     fn deployment_globals_preserve_linux_runtime_options_and_ignore_retired_fallback() {

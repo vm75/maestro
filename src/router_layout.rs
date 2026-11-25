@@ -2,9 +2,9 @@
 //! The active YAML is published last; source files are retired only after
 //! their destinations and private backup copies have been durably published.
 use std::{
-    fs::{self, DirBuilder, File, Metadata, OpenOptions},
-    io::{ErrorKind, Write},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt, chown},
+    fs::{self, DirBuilder, File, Metadata},
+    io::ErrorKind,
+    os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -103,34 +103,9 @@ fn sync_parent(path: &Path) -> Result<()> {
 }
 
 fn write_file(path: &Path, bytes: &[u8], metadata: &Metadata, replace: bool) -> Result<()> {
-    let directory = parent(path)?;
-    fs::create_dir_all(directory)?;
-    let temporary = directory.join(format!(".maestro-layout-{}", Uuid::new_v4().simple()));
-    let result = (|| -> Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary)?;
-        let current = file.metadata()?;
-        if current.uid() != metadata.uid() || current.gid() != metadata.gid() {
-            chown(&temporary, Some(metadata.uid()), Some(metadata.gid()))?;
-        }
-        file.set_permissions(metadata.permissions())?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        if replace {
-            fs::rename(&temporary, path)?;
-        } else {
-            // Publish without overwriting a destination, even if it appeared
-            // after the initial conflict check.
-            fs::hard_link(&temporary, path)?;
-            fs::remove_file(&temporary)?;
-        }
-        sync_parent(path)
-    })();
-    let _ = fs::remove_file(&temporary);
-    result.with_context(|| format!("publish {}", path.display()))
+    let target = crate::util::trusted_file_path(path)?;
+    crate::util::publish_physical_file(&target, bytes, metadata.permissions().mode(),
+        Some((metadata.uid(),metadata.gid())), replace)
 }
 
 fn copy_checked(source: &Path, destination: &Path) -> Result<()> {
@@ -174,8 +149,7 @@ fn archive(source: &Path, directory: &Path, name: &str) -> Result<()> {
 }
 
 fn remove(source: &Path) -> Result<()> {
-    fs::remove_file(source)?;
-    sync_parent(source)
+    crate::util::unlink_trusted_entry(source)
 }
 
 struct Transfer {
