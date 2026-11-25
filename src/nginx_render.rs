@@ -2,7 +2,7 @@
 //! Policy templates are compiled into the binary; deployment data cannot shadow them.
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use minijinja::{Environment, UndefinedBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
