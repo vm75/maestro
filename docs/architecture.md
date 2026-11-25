@@ -453,10 +453,10 @@ offenders are not restored. Restored subnets are processed before contained IP
 bans, and all restored targets are reconciled into the backend before
 allowlist exceptions are applied.
 
-On Asuswrt only, firewall policy persistence retains the fallback/mirror
-at `/opt/etc/maestro/firewall-policy.json`. The Linux platform only
-loads and saves `data_dir/firewall-policy.json` to avoid touching host
-or router data.
+On Asuswrt, firewall policy has one authoritative path beside the selected
+router YAML (normally `/opt/etc/maestro/firewall-policy.json`). The router's
+persistent data directory holds HTTP-01 recovery records under `nginx/`.
+The Linux platform retains its existing data directory layout.
 
 The engine reads only version-1 `ban-attack-state.json`. A malformed state file or unsupported
 schema is logged and leaves the worker running in `degraded` state.

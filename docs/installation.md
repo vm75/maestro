@@ -49,7 +49,8 @@ before an upgrade or removal; it does not delete persistent data.
 ### Upgrade from Maestro 0.11.0
 
 The router must be prepared offline before installing the new package. Maestro
-does not convert TOML or import earlier layouts at runtime or during install. The router installer refuses to create a fresh YAML if its existing TOML configuration is still present.
+does not convert TOML at runtime or during install. The router installer refuses
+to create a fresh YAML if its existing TOML configuration is still present.
 Linux is a fresh installation and has no migration procedure.
 
 1. Make an independent backup using the installed version and separately copy
@@ -75,6 +76,30 @@ Linux is a fresh installation and has no migration procedure.
 
 Do not start a fresh configuration over an existing deployment. The installer
 does not delete administrator-created state.
+
+### Upgrade an existing YAML-based router layout
+
+Create and copy an independent backup off the router before upgrading. Stop
+Maestro and ensure no certificate operation is running before migrating.
+The router installer invokes `migrate-router-layout` before nginx initialization.
+For a manual binary upgrade, run:
+
+```sh
+/opt/etc/init.d/S99maestro stop
+/opt/bin/maestro --config /opt/etc/maestro/maestro.yaml migrate-router-layout
+/opt/bin/maestro --config /opt/etc/maestro/maestro.yaml check-config
+/opt/sbin/nginx -t
+/opt/etc/init.d/S99maestro start
+```
+
+The migration changes the former default data directory to
+`/opt/var/lib/maestro`, preserves explicitly different data paths, consolidates
+firewall policy beside the router YAML, relocates HTTP-01 recovery records, and
+flattens known nested input fragments. The original YAML and retired files are
+archived under the persistent data directory in `layout-v13-backup/`.
+Conflicting destinations stop migration rather than overwrite existing data.
+Unknown files, certificate stores, custom Nginx sites and configured command
+paths are not moved. Retain the independent backup for rollback.
 
 ### Backups
 

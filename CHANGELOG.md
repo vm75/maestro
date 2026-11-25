@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Separate router configuration from durable operational state, consolidate firewall policy, migrate YAML-era HTTP-01 recovery records, and stop storing derived Nginx lists in the router input directory.
+
 ## 0.13.0
 
 ### Fixed

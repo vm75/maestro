@@ -58,9 +58,11 @@ subnet ban 30 days, and keeps repeat-offender reputation for a year. Use a
 less aggressive profile when legitimate users commonly share public source
 subnets (carrier NAT, corporate egress, large hosting networks, or similar).
 
-Persistent JSON is stored below `paths.data_dir` and written atomically. It
-contains certificate definitions, Wake-on-LAN machines, firewall policy and
-state, and AdGuard overrides. Nginx objects remain represented by nginx files
+Persistent JSON is written atomically. On routers, `paths.data_dir` defaults
+to `/opt/var/lib/maestro` and holds certificate definitions, Wake-on-LAN
+machines, Ban Shield state, AdGuard overrides and HTTP-01 recovery records.
+Firewall policy is stored beside the selected router YAML. Linux retains its
+existing storage layout. Nginx objects remain represented by nginx files
 and relative symlinks rather than a second database. Existing dehydrated
 definitions and deployed nginx certificates can be imported at startup.
 
@@ -131,7 +133,10 @@ An empty LAN allowlist denies all clients for LAN-only locations.
 `nginx.yaml` under that directory is the single source of global inputs: `global` contains
 shared nginx options, `site_defaults` contains inherited site policies, and
 root-level `allowed_ips` and `free_subdomains` arrays contain the allowlists.
-Text allowlist fragments are generated from YAML. NGINX 1.19.4 or newer rejects
+On routers, allowlist fragments are rendered in memory from YAML, and
+`servers.conf` is deployed only under the native Nginx settings directory.
+HTTP-01 session, status and WAN ownership JSON records remain persistent in
+`<paths.data_dir>/nginx/`. NGINX 1.19.4 or newer rejects
 unknown TLS hostnames without a fallback certificate. The retired
 `default_certificate_dir` setting is ignored on load and omitted on save.
 `init-nginx` refreshes the managed rejection server without touching certificate
