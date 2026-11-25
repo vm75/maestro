@@ -149,7 +149,7 @@
 
 <div class="connection-tabs">
   {#each availableTabs as tab}<button class:active={section === tab.id} disabled={busy} onclick={() => switchTab(tab.id)}>{tab.label}</button>{/each}
-  <button disabled={busy || loading} onclick={refresh}>{loading ? 'Refreshing…' : 'Refresh'}</button>
+  <button disabled={busy || loading || rewriteLoading} onclick={refresh}>{loading ? 'Refreshing…' : 'Refresh'}</button>
 </div>
 {#each Object.entries(errors) as [key, error]}<p class="form-error" role="alert">{key}: {error}</p>{/each}
 {#if message}<p role="status">{message}</p>{/if}
@@ -203,7 +203,7 @@
   </section>{/if}
   {#if ad?.enabled && !errors['DNS rewrites'] && !loading}<section class="panel"><h2>DNS rewrites</h2><p>{rewrites.length} editable rewrites. Nginx-managed names are excluded.</p>
     <div class="shared-table"><table><thead><tr>{#each ['domain','answer'] as key}<th aria-sort={rewriteSort===key?(rewriteDirection===1?'ascending':'descending'):'none'}><button type="button" onclick={()=>sortRewrites(key as typeof rewriteSort)}>{key==='domain'?'Domain':'Answer'} {rewriteSort===key?(rewriteDirection===1?'↑':'↓'):'↕'}</button></th>{/each}<th>Action</th></tr></thead><tbody>
-      {#each sortedRewrites as {rewrite,index}}<tr><td>{rewrite.domain}</td><td>{rewrite.answer}</td><td><button disabled={!allowWrites || busy || !!rewriteDraft} onclick={() => { if (confirm('Remove this DNS rewrite?')) void mutate('adguard/rewrites', 'PUT', rewrites.filter((_, i) => i !== index)) }}>Remove</button></td></tr>{/each}
+      {#each sortedRewrites as {rewrite,index}}<tr><td>{rewrite.domain}</td><td>{rewrite.answer}</td><td><button disabled={!allowWrites || busy || !!rewriteDraft || rewriteLoading} onclick={() => { if (confirm('Remove this DNS rewrite?')) void mutate('adguard/rewrites', 'PUT', rewrites.filter((_, i) => i !== index)) }}>Remove</button></td></tr>{/each}
     </tbody></table></div>
     {#if allowWrites}
       {#if rewriteDraft}
