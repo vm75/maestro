@@ -1062,7 +1062,10 @@ impl FileTransaction {
         let mut previous = Vec::new();
         for (target, (_, content)) in &resolved {
             let backup = backup_file(target)?;
-            if backup.as_ref().is_some_and(|old| old.bytes == content.as_bytes()) {
+            use std::os::unix::fs::PermissionsExt;
+            let private = resolved[target].0.file_name().and_then(|n| n.to_str()) == Some("privkey.pem");
+            if backup.as_ref().is_some_and(|old| old.bytes == content.as_bytes()
+                && (!private || old.permissions.mode() & 0o777 == 0o600)) {
                 continue;
             }
             previous.push((target.clone(), backup));
@@ -1501,6 +1504,25 @@ mod tests {
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[test]
+    fn router_transaction_accepts_explicit_root_aliases() {
+        use std::{fs, os::unix::fs::symlink};
+        let temp = tempfile::tempdir().unwrap();
+        let config = transaction_config(temp.path());
+        let physical = temp.path().join("physical");
+        let inputs = physical.join("inputs");
+        let runtime = physical.join("runtime");
+        fs::create_dir_all(&inputs).unwrap();
+        fs::create_dir_all(&runtime).unwrap();
+        fs::create_dir_all(config.nginx.inputs_dir.parent().unwrap()).unwrap();
+        symlink(&inputs, &config.nginx.inputs_dir).unwrap();
+        symlink(&runtime, &config.nginx.root_dir).unwrap();
+        let file = config.nginx.root_dir.join("managed.conf");
+        FileTransaction::apply(&config, [(file, "content".into())].into()).unwrap().commit();
+        assert_eq!(fs::read(runtime.join("managed.conf")).unwrap(), b"content");
+        assert!(fs::symlink_metadata(&config.nginx.root_dir).unwrap().is_symlink());
     }
 
     #[test]

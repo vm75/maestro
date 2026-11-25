@@ -190,8 +190,10 @@ Maestro configuration is YAML on all platforms. Router and native Linux use sepa
 Entware mount aliases and explicitly configured directory symlinks are supported.
 Router YAML, fixed JSON stores, WireGuard configuration and Dehydrated files
 retain valid file symlinks during writes. Broken/cyclic links are errors rather
-than empty configuration. Migrated linked state keeps its resolved target;
-its original link text and contents are saved in the private migration backup.
+than empty configuration. Migrated linked persistent state keeps its resolved target. Managed NGINX
+inputs and HTTP-01 recovery records are materialized as regular files during
+relocation; original link text and contents are saved in the private migration
+backup.
 NGINX site activation accepts matching relative or absolute links, and deployed
 certificate aliases retain their targets. Unexpected links in managed NGINX
 inputs and temporary paths are rejected. Ban Shield continues to reject linked

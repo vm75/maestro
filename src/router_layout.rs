@@ -172,6 +172,7 @@ struct Transfer {
     source: PathBuf,
     destination: PathBuf,
     label: String,
+    preserve_link: bool,
 }
 
 fn plan(
@@ -180,11 +181,15 @@ fn plan(
     destination: PathBuf,
     label: String,
 ) -> Result<()> {
+    // Operational session records are deleted during normal recovery and
+    // managed nginx inputs reject leaf symlinks. Materialize their contents
+    // rather than introducing links those consumers cannot safely manage.
+    let preserve_link = !label.starts_with("http-") && !label.starts_with("settings-");
     if let Some(metadata) = source_file(&source)? {
         if same_entry(&source, &destination) {
             return Ok(());
         }
-        if metadata.is_symlink() {
+        if metadata.is_symlink() && preserve_link {
             // A relocated link must still point to the same existing target.
             // On retry, allow only a matching link, not a different file.
             let target = crate::util::trusted_file_path(&source)?;
@@ -202,7 +207,7 @@ fn plan(
                 destination.display()
             );
         }
-        transfers.push(Transfer { source, destination, label });
+        transfers.push(Transfer { source, destination, label, preserve_link });
     }
     Ok(())
 }
@@ -377,7 +382,7 @@ fn migrate_with_defaults(
     );
 
     for transfer in &transfers {
-        if fs::symlink_metadata(&transfer.source)?.is_symlink() {
+        if transfer.preserve_link && fs::symlink_metadata(&transfer.source)?.is_symlink() {
             let target = crate::util::trusted_file_path(&transfer.source)?;
             // Do not retire another file that a migrated link depends on.
             ensure!(!transfers.iter().any(|other| same_entry(&other.source, &target))
@@ -391,7 +396,7 @@ fn migrate_with_defaults(
             ensure!(crate::util::trusted_file_path(&transfer.destination)? == target,
                 "migration link target changed: {}", transfer.destination.display());
         } else {
-            copy_checked(&transfer.source, &transfer.destination)?;
+            copy_checked(&crate::util::trusted_file_path(&transfer.source)?, &transfer.destination)?;
         }
         archive(&transfer.source, &backup, &transfer.label)?;
     }
@@ -407,7 +412,7 @@ fn migrate_with_defaults(
     let sites = crate::nginx_sites::load(config)?;
     crate::nginx_ingress::validate_tree(&global, &sites)?;
 
-    if change_data {
+    let yaml_update = if change_data {
         let resolved = crate::util::trusted_file_path(config_path)?;
         let metadata = regular(&resolved)?.context("router YAML disappeared")?;
         let raw = crate::config_yaml::read(&resolved)?;
@@ -422,11 +427,15 @@ fn migrate_with_defaults(
                 && crate::config_yaml::read(&resolved)? == raw,
             "router YAML changed during migration; stop Maestro and retry"
         );
-        write_file(&resolved, encoded.as_bytes(), &metadata, true)?;
-    }
+        Some((resolved, encoded, metadata, raw))
+    } else {
+        None
+    };
 
-    // Old paths are retired only after all durable copies and the new YAML
-    // have been published. Interrupted runs can retry identical copies.
+    // Destinations and private backups are already durable. Retire old
+    // entries before publishing the YAML so a crash still leaves the old
+    // configuration selecting the migration on retry. Startup refuses that
+    // old layout until migration finishes.
     for transfer in &transfers {
         remove(&transfer.source)?;
     }
@@ -437,6 +446,12 @@ fn migrate_with_defaults(
     if nested.is_dir() && fs::read_dir(&nested)?.next().is_none() {
         fs::remove_dir(&nested)?;
         sync_parent(&nested)?;
+    }
+    if let Some((resolved, encoded, metadata, raw)) = yaml_update {
+        ensure!(crate::util::trusted_file_path(config_path)? == resolved
+            && crate::config_yaml::read(&resolved)? == raw,
+            "router YAML changed during migration; stop Maestro and retry");
+        write_file(&resolved, encoded.as_bytes(), &metadata, true)?;
     }
     println!("previous router layout saved in {}", backup.display());
     Ok(())
@@ -569,8 +584,14 @@ mod tests {
         fs::rename(&path, &yaml).unwrap();
         symlink(&yaml, &path).unwrap();
         let config = AppConfig::load(&path).unwrap();
+        let http = temp.path().join("external-http.json");
+        fs::write(&http, b"recovery").unwrap();
+        symlink(&http, config.nginx.inputs_dir.join("http01-wan-owner.json")).unwrap();
         migrate_with_defaults(&path, &config, &old, &new).unwrap();
         assert_eq!(fs::read_link(&path).unwrap(), yaml);
+        assert_eq!(fs::read(new.join("nginx/http01-wan-owner.json")).unwrap(), b"recovery");
+        assert!(!fs::symlink_metadata(new.join("nginx/http01-wan-owner.json")).unwrap().is_symlink());
+        assert_eq!(fs::read(&http).unwrap(), b"recovery");
         assert_eq!(fs::read_link(new.join("certificates.json")).unwrap(), target);
         assert_eq!(fs::read(&target).unwrap(), b"saved");
         assert!(!old.join("certificates.json").exists());

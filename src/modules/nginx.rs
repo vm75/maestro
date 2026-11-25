@@ -971,6 +971,24 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[test]
+    fn router_enabled_links_validate_target_and_support_custom_layout() {
+        let temp = tempdir().unwrap();
+        let mut config = test_config(temp.path());
+        config.nginx.domains_available_dir = temp.path().join("sites");
+        config.nginx.domains_enabled_dir = temp.path().join("active");
+        let site = config.nginx.domains_available_dir.join("example.test");
+        fs::create_dir_all(&site).unwrap();
+        fs::write(site.join("root.conf"), "server {}").unwrap();
+        set_enabled(&config, NginxObjectKind::Domain, "example.test", "example.test", true).unwrap();
+        let link = config.nginx.domains_enabled_dir.join("example.test");
+        assert_eq!(link.canonicalize().unwrap(), site.canonicalize().unwrap());
+        fs::remove_file(&link).unwrap();
+        unix_fs::symlink("missing", &link).unwrap();
+        assert!(set_enabled(&config, NginxObjectKind::Domain, "example.test", "example.test", true).is_err());
+        assert_eq!(fs::read_link(&link).unwrap(), Path::new("missing"));
+    }
+
     fn test_config(root: &Path) -> AppConfig {
         let mut config = AppConfig::default();
         config.nginx.root_dir = root.to_path_buf();
