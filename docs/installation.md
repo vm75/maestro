@@ -253,14 +253,25 @@ Toolbox packages.
 
 ```sh
 /opt/bin/maestro toolbox list
-/opt/bin/maestro toolbox install toolbox-nginx-entware-1.30.8-99_aarch64
-/opt/bin/maestro toolbox install toolbox-nginx-entware-1.30.8-99_aarch64 --download-only
+/opt/bin/maestro toolbox list --all
+/opt/bin/maestro toolbox install btop
+/opt/bin/maestro toolbox install nginx-1.30.8-99
+/opt/bin/maestro toolbox install nginx-1.30.8-99 --download-only
 ```
 
-List shows published, non-prerelease Entware releases containing a complete
-compatible `aarch64-3.10` IPK bundle and SHA256SUMS, up to ten API pages.
-Android releases and incompatible or mixed-architecture bundles are omitted.
-Select the exact tag shown; no tool-specific build or version selector is needed.
+List prints one `tool-version` per tool, showing the highest package version.
+Use `--all` to see every distinct version, grouped by tool in ascending version
+order. Versions come from the primary IPK (nginx-ssl for NGINX), not the release
+tag or publication date. For repeated builds of one version, the first release
+in GitHub's release ordering is selected. Install accepts a bare tool name,
+a displayed `tool-version`, or an exact release tag for compatibility and
+specific rebuilds.
+
+Only published, non-prerelease Entware releases with a complete compatible
+`aarch64-3.10` IPK bundle, a primary tool package and SHA256SUMS appear in the
+catalog. Android and incompatible or mixed-architecture bundles are omitted.
+Catalog operations report an error if the ten-page API limit is reached;
+exact release tags remain usable.
 The old `upgrade-nginx` / `update-nginx` commands are replaced by Toolbox.
 
 Installation verifies every IPK against the release SHA256SUMS manifest and
