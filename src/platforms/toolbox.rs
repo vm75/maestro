@@ -2,6 +2,7 @@
 //! No HTTP route exposes package installation.
 
 use std::{
+    cmp::Ordering,
     collections::HashMap,
     ffi::CString,
     fs,
@@ -51,12 +52,17 @@ const NGINX_PACKAGES: [&str; 4] = [
 
 #[derive(Debug, clap::Subcommand)]
 pub enum ToolboxCommand {
-    /// List published Toolbox releases compatible with this router.
-    List,
-    /// Verify and install every IPK in the selected release.
+    /// List the latest version of each compatible tool.
+    List {
+        /// Show every available version.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Install a tool and all of its packages.
     Install {
-        /// Exact release tag shown by toolbox list.
-        tag: String,
+        /// Tool name or exact name-version (see toolbox list --all).
+        #[arg(value_name = "TOOL")]
+        selector: String,
         /// Stage the verified bundle without installing.
         #[arg(long)]
         download_only: bool,
@@ -751,8 +757,149 @@ fn client() -> Result<reqwest::Client> {
         .build()?)
 }
 
-async fn list(client: &reqwest::Client) -> Result<()> {
-    let mut found = false;
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToolRelease {
+    name: String,
+    version: String,
+    tag: String,
+}
+
+impl ToolRelease {
+    fn label(&self) -> String {
+        format!("{}-{}", self.name, self.version)
+    }
+}
+
+/// Tags identify tools; the primary IPK supplies the actual package version.
+/// A multi-package NGINX release is represented by its nginx-ssl version.
+fn tool_release(release: &Release) -> Result<ToolRelease> {
+    let packages = bundle(release)?;
+    let (name, _) = release
+        .tag_name
+        .strip_prefix("toolbox-")
+        .and_then(|tag| tag.split_once("-entware-"))
+        .context("invalid Toolbox tool name")?;
+    ensure!(!name.is_empty(), "empty Toolbox tool name");
+    let primary = if name == "nginx" { "nginx-ssl" } else { name };
+    let version = packages
+        .iter()
+        .filter_map(|asset| package_parts(&asset.name).ok())
+        .find_map(|(package, version)| (package == primary).then_some(version))
+        .context("release has no primary tool package")?;
+    Ok(ToolRelease {
+        name: name.into(),
+        version: version.into(),
+        tag: release.tag_name.clone(),
+    })
+}
+
+/// Compare package version parts by alternating non-digit and numeric runs.
+/// Numeric runs are compared without integer conversion, so 1.10 > 1.9
+/// and even arbitrarily large build revisions compare correctly.
+fn compare_version_part(mut left: &[u8], mut right: &[u8]) -> Ordering {
+    fn order(c: Option<u8>) -> i32 {
+        match c {
+            Some(b'~') => -1,
+            None => 0,
+            Some(c) if c.is_ascii_digit() => 0,
+            Some(c) if c.is_ascii_alphabetic() => i32::from(c),
+            Some(c) => i32::from(c) + 256,
+        }
+    }
+
+    while !left.is_empty() || !right.is_empty() {
+        while left.first().is_some_and(|c| !c.is_ascii_digit())
+            || right.first().is_some_and(|c| !c.is_ascii_digit())
+        {
+            let cmp = order(left.first().copied()).cmp(&order(right.first().copied()));
+            if cmp != Ordering::Equal {
+                return cmp;
+            }
+            if left.first().is_some_and(|c| !c.is_ascii_digit()) {
+                left = &left[1..];
+            }
+            if right.first().is_some_and(|c| !c.is_ascii_digit()) {
+                right = &right[1..];
+            }
+        }
+
+        let ln = left.iter().take_while(|c| c.is_ascii_digit()).count();
+        let rn = right.iter().take_while(|c| c.is_ascii_digit()).count();
+        let l = &left[..ln];
+        let r = &right[..rn];
+        let l = &l[l.iter().take_while(|&&c| c == b'0').count()..];
+        let r = &r[r.iter().take_while(|&&c| c == b'0').count()..];
+        let cmp = l.len().cmp(&r.len()).then_with(|| l.cmp(r));
+        if cmp != Ordering::Equal {
+            return cmp;
+        }
+        left = &left[ln..];
+        right = &right[rn..];
+    }
+    Ordering::Equal
+}
+
+fn compare_versions(left: &str, right: &str) -> Ordering {
+    // The supported IPK filename format excludes epoch separators.
+    let (lu, lr) = left.rsplit_once('-').unwrap_or((left, "0"));
+    let (ru, rr) = right.rsplit_once('-').unwrap_or((right, "0"));
+    compare_version_part(lu.as_bytes(), ru.as_bytes())
+        .then_with(|| compare_version_part(lr.as_bytes(), rr.as_bytes()))
+}
+
+type Catalog = Vec<Vec<ToolRelease>>;
+
+fn add_to_catalog(catalog: &mut Catalog, release: &Release) {
+    let Ok(tool) = tool_release(release) else {
+        return;
+    };
+    if let Some(group) = catalog.iter_mut().find(|group| group[0].name == tool.name) {
+        // GitHub lists newer releases first. Keep the first build of a
+        // particular version so listing and installation resolve identically.
+        if !group.iter().any(|entry| entry.version == tool.version) {
+            group.push(tool);
+        }
+    } else {
+        catalog.push(vec![tool]);
+    }
+}
+
+fn sort_catalog(catalog: &mut Catalog) {
+    for group in catalog {
+        group.sort_by(|a, b| {
+            compare_versions(&a.version, &b.version).then_with(|| a.version.cmp(&b.version))
+        });
+    }
+}
+
+fn catalog_labels(catalog: &Catalog, all: bool) -> Vec<String> {
+    catalog
+        .iter()
+        .flat_map(|group| {
+            let first = if all { 0 } else { group.len() - 1 };
+            group[first..].iter().map(ToolRelease::label)
+        })
+        .collect()
+}
+
+fn select_tool<'a>(catalog: &'a Catalog, selector: &str) -> Result<&'a ToolRelease> {
+    let mut matches = catalog.iter().flat_map(|group| {
+        group.iter().filter(move |entry| {
+            entry.label() == selector || (entry.name == selector && group.last() == Some(*entry))
+        })
+    });
+    let selected = matches.next().with_context(|| {
+        format!("Tool or version '{selector}' not found. Run maestro toolbox list --all.")
+    })?;
+    ensure!(
+        matches.next().is_none(),
+        "Ambiguous tool or version '{selector}'. Select an exact release tag instead."
+    );
+    Ok(selected)
+}
+
+async fn fetch_catalog(client: &reqwest::Client) -> Result<Catalog> {
+    let mut catalog = Vec::new();
     for page in 1..=MAX_RELEASE_PAGES {
         let bytes = request_bytes(
             client,
@@ -763,22 +910,26 @@ async fn list(client: &reqwest::Client) -> Result<()> {
         let releases: Vec<Release> = serde_json::from_slice(&bytes)?;
         let count = releases.len();
         for release in releases {
-            if let Ok(packages) = bundle(&release) {
-                found = true;
-                println!("{} ({} IPKs)", release.tag_name, packages.len());
-                for asset in packages {
-                    println!("  {}", asset.name);
-                }
-            }
+            add_to_catalog(&mut catalog, &release);
         }
         if count < 100 {
-            if !found {
-                println!("No compatible published Toolbox Entware releases found.");
-            }
-            return Ok(());
+            sort_catalog(&mut catalog);
+            return Ok(catalog);
         }
     }
-    println!("Listing limited to {MAX_RELEASE_PAGES} pages; older tags can be selected directly.");
+    bail!(
+        "Toolbox release catalog exceeds {MAX_RELEASE_PAGES} pages; cannot determine all versions. Select an exact release tag instead."
+    )
+}
+
+async fn list(client: &reqwest::Client, all: bool) -> Result<()> {
+    let catalog = fetch_catalog(client).await?;
+    if catalog.is_empty() {
+        println!("No compatible Toolbox tools found.");
+    }
+    for label in catalog_labels(&catalog, all) {
+        println!("{label}");
+    }
     Ok(())
 }
 
@@ -837,9 +988,9 @@ pub async fn run(config: &AppConfig, config_path: &Path, command: ToolboxCommand
     require_router(config.platform, config.test_mode)?;
     let client = client()?;
     match command {
-        ToolboxCommand::List => list(&client).await,
+        ToolboxCommand::List { all } => list(&client, all).await,
         ToolboxCommand::Install {
-            tag,
+            selector,
             download_only,
             no_backup,
             allow_downgrade,
@@ -848,7 +999,7 @@ pub async fn run(config: &AppConfig, config_path: &Path, command: ToolboxCommand
                 config,
                 config_path,
                 &client,
-                &tag,
+                &selector,
                 download_only,
                 no_backup,
                 allow_downgrade,
@@ -862,12 +1013,22 @@ async fn install(
     config: &AppConfig,
     config_path: &Path,
     client: &reqwest::Client,
-    tag: &str,
+    selector: &str,
     download_only: bool,
     no_backup: bool,
     allow_downgrade: bool,
 ) -> Result<()> {
-    ensure!(entware_tag(tag), "invalid Toolbox Entware release tag");
+    validate_asset_name(selector).context("invalid Toolbox tool or version")?;
+    // Preserve exact tag selection for existing scripts and specific rebuilds.
+    let selected = if entware_tag(selector) {
+        None
+    } else {
+        let catalog = fetch_catalog(client).await?;
+        Some(select_tool(&catalog, selector)?.clone())
+    };
+    let tag = selected
+        .as_ref()
+        .map_or(selector, |entry| entry.tag.as_str());
     let opkg_available = check_opkg_architecture()?;
     let automatic = !download_only && opkg_available && unsafe { libc::geteuid() } == 0;
     let _lock = if automatic {
@@ -879,6 +1040,14 @@ async fn install(
     let release: Release = serde_json::from_slice(&bytes)?;
     ensure!(release.tag_name == tag, "release tag mismatch");
     let packages = bundle(&release)?;
+    let identity = tool_release(&release);
+    if let Some(expected) = &selected {
+        ensure!(
+            identity.as_ref().is_ok_and(|actual| actual == expected),
+            "Selected Toolbox release changed; run toolbox list again"
+        );
+    }
+    let label = identity.map_or_else(|_| tag.to_string(), |entry| entry.label());
     let nginx = packages
         .iter()
         .any(|asset| package_parts(&asset.name).is_ok_and(|(name, _)| name == "nginx-ssl"));
@@ -932,7 +1101,7 @@ async fn install(
         let _ = fs::remove_dir_all(&staging_dir);
         return Err(error);
     }
-    let final_dir = PathBuf::from("/tmp").join(format!("{tag}-{}", Uuid::new_v4()));
+    let final_dir = PathBuf::from("/tmp").join(format!("{label}-{}", Uuid::new_v4()));
     if let Err(error) = fs::rename(&staging_dir, &final_dir) {
         let _ = fs::remove_dir_all(&staging_dir);
         return Err(error).context("unable to publish verified IPKs");
@@ -942,8 +1111,7 @@ async fn install(
         .map(|asset| final_dir.join(&asset.name))
         .collect();
     println!(
-        "Verified {} IPKs for {tag}: {}",
-        packages.len(),
+        "Verified {label}. Packages saved to {}",
         final_dir.display()
     );
 
@@ -976,7 +1144,8 @@ async fn install(
         return Ok(());
     }
 
-    println!("Installing all IPKs. Manual retry command: {manual_cmd}");
+    println!("Installing {label}...");
+    println!("Manual retry command: {manual_cmd}");
     let mut opkg_cmd = AsyncCommand::new(OPKG);
     opkg_cmd
         .args(&opkg_options)
@@ -998,10 +1167,7 @@ async fn install(
         );
         verify_installed(&packages).await?;
     }
-    println!(
-        "Successfully installed all {} IPKs from {tag}.",
-        packages.len()
-    );
+    println!("Successfully installed {label}.");
     Ok(())
 }
 
@@ -1180,6 +1346,95 @@ mod tests {
         other.tag_name = "toolbox-btop-android-arm64".into();
         assert!(bundle(&other).is_err());
         assert!(!entware_tag("toolbox-x-entware-../x"));
+    }
+
+    #[test]
+    fn friendly_catalog_and_selection() {
+        let mut catalog = Vec::new();
+        for (tag, package) in [
+            (
+                "toolbox-vaultwarden-entware-aarch64-r100-a1",
+                "vaultwarden_1.0.0-1_aarch64-3.10.ipk",
+            ),
+            (
+                "toolbox-btop-entware-aarch64-r200-a1",
+                "btop_1.4.10-1_aarch64-3.10.ipk",
+            ),
+            (
+                "toolbox-btop-entware-aarch64-r199-a1",
+                "btop_1.4.10-1_aarch64-3.10.ipk",
+            ),
+            (
+                "toolbox-btop-entware-aarch64-r198-a1",
+                "btop_1.4.9-10_aarch64-3.10.ipk",
+            ),
+            (
+                "toolbox-vaultwarden-entware-aarch64-r99-a1",
+                "vaultwarden_1.0.0-2_aarch64-3.10.ipk",
+            ),
+            (
+                "toolbox-btop-entware-aarch64-r98-a1",
+                "btop_1.5.0-1_armv7-3.2.ipk",
+            ),
+        ] {
+            add_to_catalog(&mut catalog, &release(tag, &[package]));
+        }
+        let nginx = release(
+            "toolbox-nginx-entware-1.30.8-99_aarch64",
+            &[
+                "nginx-ssl_1.30.8-99_aarch64-3.10.ipk",
+                "nginx-mod-brotli_1.30.8-99_aarch64-3.10.ipk",
+                "nginx-mod-stream_1.30.8-99_aarch64-3.10.ipk",
+                "nginx-mod-headers-more_1.30.8-99_aarch64-3.10.ipk",
+            ],
+        );
+        add_to_catalog(&mut catalog, &nginx);
+        let mut draft = nginx.clone();
+        draft.draft = true;
+        assert!(tool_release(&draft).is_err());
+        sort_catalog(&mut catalog);
+        assert_eq!(
+            catalog_labels(&catalog, false),
+            ["vaultwarden-1.0.0-2", "btop-1.4.10-1", "nginx-1.30.8-99"]
+        );
+        assert_eq!(
+            catalog_labels(&catalog, true),
+            [
+                "vaultwarden-1.0.0-1",
+                "vaultwarden-1.0.0-2",
+                "btop-1.4.9-10",
+                "btop-1.4.10-1",
+                "nginx-1.30.8-99",
+            ]
+        );
+        assert_eq!(
+            select_tool(&catalog, "btop").unwrap().tag,
+            "toolbox-btop-entware-aarch64-r200-a1"
+        );
+        assert_eq!(
+            select_tool(&catalog, "vaultwarden-1.0.0-1")
+                .unwrap()
+                .version,
+            "1.0.0-1"
+        );
+        assert_eq!(select_tool(&catalog, "nginx").unwrap().tag, nginx.tag_name);
+        assert!(select_tool(&catalog, "btop-1.5.0-1").is_err());
+        assert!(select_tool(&catalog, "unknown").is_err());
+    }
+
+    #[test]
+    fn package_versions_compare_numerically() {
+        for (older, newer) in [
+            ("1.4.9-99", "1.4.10-1"),
+            ("1.0.0-2", "1.0.0-10"),
+            ("1.0.0-9", "1.0.0-100000000000000000000000"),
+            ("1.0.0-1", "1.0.1-1"),
+            ("1.0.0~rc1-1", "1.0.0-1"),
+        ] {
+            assert_eq!(compare_versions(older, newer), Ordering::Less);
+            assert_eq!(compare_versions(newer, older), Ordering::Greater);
+        }
+        assert_eq!(compare_versions("1.0-01", "1.0-1"), Ordering::Equal);
     }
 
     #[test]

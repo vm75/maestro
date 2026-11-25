@@ -544,14 +544,34 @@ mod cli_tests {
         assert!(matches!(
             cli.command,
             Some(Command::Toolbox {
-                command: toolbox::ToolboxCommand::List,
+                command: toolbox::ToolboxCommand::List { all: false },
             })
         ));
+        let cli = Cli::try_parse_from(["maestro", "toolbox", "list", "--all"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Toolbox {
+                command: toolbox::ToolboxCommand::List { all: true },
+            })
+        ));
+        for expected in [
+            "btop",
+            "vaultwarden-1.0.0-2",
+            "toolbox-nginx-entware-1.30.8-99_aarch64",
+        ] {
+            let cli = Cli::try_parse_from(["maestro", "toolbox", "install", expected]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Some(Command::Toolbox {
+                    command: toolbox::ToolboxCommand::Install { selector, .. },
+                }) if selector == expected
+            ));
+        }
         let cli = Cli::try_parse_from([
             "maestro",
             "toolbox",
             "install",
-            "toolbox-nginx-entware-1.30.8-99_aarch64",
+            "nginx-1.30.8-99",
             "--download-only",
             "--allow-downgrade",
         ])

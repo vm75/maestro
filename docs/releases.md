@@ -98,8 +98,10 @@ requires nginx 1.25.1+ with the HTTP/2 module; the setup checks both before test
 NGINX and other manually built Entware tools are maintained and published in
 [vm75/toolbox](https://github.com/vm75/toolbox). Maestro no longer contains
 the NGINX builder, build workflow or dedicated Entware toolchain image workflow.
-On the router, `maestro toolbox list` discovers compatible releases and
-`maestro toolbox install TAG` verifies and installs the complete IPK bundle.
+On the router, `maestro toolbox list` shows the latest compatible version of
+each tool; `maestro toolbox list --all` lists all distinct versions.
+`maestro toolbox install TOOL` or `maestro toolbox install TOOL-VERSION`
+verifies and installs the complete IPK bundle. Exact release tags also work.
 See [installation](installation.md#router-only-toolbox-packages).
 Maestro CI still installs upstream nginx for configuration/integration tests.
 

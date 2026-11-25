@@ -77,11 +77,13 @@ Use `--download-only` to stage a verified package under `/tmp` and print a
 manual install command. Upgrade is unavailable in Linux and test modes.
 
 Toolbox builds and publishes custom Entware packages separately. On a live
-router, list compatible releases and select an exact release tag:
+router, list compatible tools and install the latest or a specific version:
 
 ```sh
 /opt/bin/maestro toolbox list
-/opt/bin/maestro toolbox install toolbox-nginx-entware-1.30.8-99_aarch64
+/opt/bin/maestro toolbox list --all
+/opt/bin/maestro toolbox install btop
+/opt/bin/maestro toolbox install nginx-1.30.8-99
 ```
 
 The installer verifies and installs **every IPK** in the selected release,
