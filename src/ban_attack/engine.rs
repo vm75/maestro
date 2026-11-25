@@ -51,6 +51,7 @@ pub enum EngineEvent {
 pub struct EngineHandle {
     commands: SyncSender<Command>,
     timeout: Duration,
+    allow_links: bool,
 }
 
 pub struct BanEngine {
@@ -91,19 +92,29 @@ pub struct EngineStatus {
 }
 
 impl BanEngine {
+    /// Start the native router backend with contained log-link support.
+    /// Linux uses the separately selected backend and strict log policy.
     pub fn start(config: Config) -> Result<Self, Error> {
         let backend = Arc::new(CommandIpSet::new_with_options(
             config.ipset.clone(),
             config.firewall.clone(),
             config.test_mode,
         ));
-        Self::start_with_backend(config, backend)
+        Self::start_with_links(config, backend, true)
     }
 
     pub fn start_with_backend(config: Config, backend: Arc<dyn BanBackend>) -> Result<Self, Error> {
+        Self::start_with_links(config, backend, false)
+    }
+
+    fn start_with_links(
+        config: Config,
+        backend: Arc<dyn BanBackend>,
+        allow_links: bool,
+    ) -> Result<Self, Error> {
         let command_queue_capacity = config.command_queue_capacity;
         let command_timeout = Duration::from_secs(config.command_timeout_seconds);
-        let compiled = CompiledConfig::compile(config)?;
+        let compiled = CompiledConfig::compile_with_links(config, allow_links)?;
         backend.ensure()?;
 
         let (command_tx, command_rx) = mpsc::sync_channel(command_queue_capacity);
@@ -131,6 +142,7 @@ impl BanEngine {
             handle: EngineHandle {
                 commands: command_tx,
                 timeout: command_timeout,
+                allow_links,
             },
             join: Some(join),
         })
@@ -177,7 +189,7 @@ impl Drop for BanEngine {
 
 impl EngineHandle {
     pub fn update_config(&self, config: Config) -> Result<(), Error> {
-        let compiled = CompiledConfig::compile(config)?;
+        let compiled = CompiledConfig::compile_with_links(config, self.allow_links)?;
         self.request(|reply| Command::Update(Box::new(compiled), reply))
     }
 

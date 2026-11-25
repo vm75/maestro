@@ -35,13 +35,7 @@ async fn native_jinja_output_passes_real_nginx_validation() {
     config.nginx.subfolder_upstream_map_path = root.join("conf.d/04_subfolder_upstream_map.conf");
     config.nginx.http_forwarder_path = root.join("conf.d/05-http-to-https.conf");
     config.certificates.certs_dir = root.join("certificates");
-    for dir in [
-        "var/log/nginx",
-        "var/run",
-        "certs/default",
-        "certs/example_test",
-        "module.d",
-    ] {
+    for dir in ["var/log/nginx", "var/run", "certs/example_test", "module.d"] {
         fs::create_dir_all(root.join(dir)).unwrap();
     }
     let runner = CommandRunner::new(false);
@@ -59,22 +53,19 @@ async fn native_jinja_output_passes_real_nginx_validation() {
                 "-subj",
                 "/CN=example.test",
                 "-keyout",
-                root.join("certs/default/privkey.pem").to_str().unwrap(),
+                root.join("certs/example_test/privkey.pem")
+                    .to_str()
+                    .unwrap(),
                 "-out",
-                root.join("certs/default/fullchain.pem").to_str().unwrap(),
+                root.join("certs/example_test/fullchain.pem")
+                    .to_str()
+                    .unwrap(),
             ],
             Duration::from_secs(30),
         )
         .await
         .unwrap();
     assert!(result.success, "{}", result.stderr);
-    for file in ["privkey.pem", "fullchain.pem"] {
-        fs::copy(
-            root.join("certs/default").join(file),
-            root.join("certs/example_test").join(file),
-        )
-        .unwrap();
-    }
     let bundle = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/nginx");
     for file in ["mime.types", "dhparams.pem"] {
         fs::copy(bundle.join(file), root.join(file)).unwrap();
@@ -253,7 +244,7 @@ async fn native_jinja_output_passes_real_nginx_validation() {
 
 #[tokio::test]
 async fn bootstrap_installs_current_format_and_backs_up_existing_main_configuration() {
-    let (Some(nginx_bin), Some(openssl)) = (program("nginx"), program("openssl")) else {
+    let Some(nginx_bin) = program("nginx") else {
         return;
     };
     let temp = tempfile::tempdir().unwrap();
@@ -271,7 +262,7 @@ async fn bootstrap_installs_current_format_and_backs_up_existing_main_configurat
     config.nginx.subfolder_upstream_map_path = root.join("conf.d/04_subfolder_upstream_map.conf");
     config.nginx.http_forwarder_path = root.join("conf.d/05-http-to-https.conf");
     config.certificates.certs_dir = root.join("certificates");
-    config.commands.openssl = openssl;
+    config.commands.openssl = root.join("unused-openssl");
     fs::create_dir_all(&config.nginx.inputs_dir).unwrap();
     fs::write(
         nginx_render::global_path(&config),
@@ -284,21 +275,19 @@ async fn bootstrap_installs_current_format_and_backs_up_existing_main_configurat
     let main = fs::read_to_string(&config.nginx.config_path).unwrap();
     assert!(main.contains("daemon on;"));
     assert!(!main.contains("{{"));
-    assert!(root.join("certs/default/fullchain.pem").is_file());
-    // A current nginx.conf must not prevent repairing a missing fallback pair.
-    fs::remove_file(root.join("certs/default/fullchain.pem")).unwrap();
-    fs::remove_file(root.join("certs/default/privkey.pem")).unwrap();
-    assert!(nginx_render::bootstrap(&config).await.unwrap());
-    assert_eq!(fs::read_to_string(&config.nginx.config_path).unwrap(), main);
-    assert!(root.join("certs/default/fullchain.pem").is_file());
-    assert!(root.join("certs/default/privkey.pem").is_file());
-    assert!(!nginx_render::bootstrap(&config).await.unwrap());
+    assert!(!root.join("certs/default").exists());
+    let rejection = fs::read_to_string(root.join("ban-shield/default-drop.conf")).unwrap();
+    assert!(rejection.contains("ssl_reject_handshake on;"));
+    assert!(!rejection.contains("ssl_certificate"));
     assert!(root.join("mime.types").is_file());
     assert!(!root.join("templates").exists());
     assert!(nginx_render::global_path(&config).is_file());
     assert!(!root.join("settings/nginx.yaml").exists());
     assert!(!root.join("settings/allowed_ips.txt").exists());
-    assert!(config.nginx.inputs_dir.join("allowed_ips.txt").is_file());
+    for name in ["allowed_ips.txt", "free_subdomains.txt", "servers.conf"] {
+        assert!(!config.nginx.inputs_dir.join(name).exists());
+    }
+    assert!(root.join("settings/servers.conf").is_file());
     let paths = ["client_body", "proxy", "fastcgi", "uwsgi", "scgi"]
         .iter()
         .map(|name| format!("{name}_temp_path {}/{}-temp;", root.display(), name))

@@ -16,6 +16,7 @@ mod nginx_mutation;
 mod nginx_render;
 pub mod platforms;
 mod restore;
+mod router_layout;
 mod state;
 mod storage;
 mod system;
@@ -76,6 +77,8 @@ enum Command {
     InitLinuxConfig,
     Serve,
     CheckConfig,
+    /// Migrate persistent router YAML state to the current layout while stopped.
+    MigrateRouterLayout,
     /// Install the bundled nginx configuration, backing up a different nginx.conf.
     InitNginx,
     /// Download or update the official dehydrated executable.
@@ -96,6 +99,9 @@ enum Command {
         /// Restore beneath this existing directory instead of /.
         #[arg(long, default_value = "/")]
         root: PathBuf,
+        /// Map an external archived router root to a destination (SOURCE=DESTINATION).
+        #[arg(long = "map")]
+        mappings: Vec<String>,
     },
     /// Download the newest stable Entware IPK and optionally install it (router only).
     Upgrade {
@@ -124,8 +130,16 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
     // Recovery must remain available when the installed configuration is corrupt.
-    if let Some(Command::Restore { archive, root }) = &cli.command {
-        return restore::run(archive, root, cli.test_mode);
+    if let Some(Command::Restore {
+        archive,
+        root,
+        mappings,
+    }) = &cli.command
+    {
+        if mappings.is_empty() {
+            return restore::run(archive, root, cli.test_mode);
+        }
+        return restore::run_with_mappings(archive, root, cli.test_mode, mappings);
     }
     #[cfg(feature = "linux")]
     if matches!(cli.command, Some(Command::InitLinuxConfig)) {
@@ -162,7 +176,26 @@ fn main() -> Result<()> {
         );
     }
 
+    if config.platform == Platform::Asuswrt
+        && !config.test_mode
+        && matches!(
+            &cli.command,
+            None | Some(Command::Serve | Command::InitNginx | Command::CheckConfig)
+        )
+    {
+        router_layout::require_current(&config)?;
+    }
+
     match cli.command.unwrap_or(Command::Serve) {
+        Command::MigrateRouterLayout => {
+            anyhow::ensure!(
+                config.platform == Platform::Asuswrt && !config.test_mode,
+                "router layout migration requires a real router YAML configuration"
+            );
+            router_layout::migrate(&cli.config, &config)?;
+            println!("router configuration layout is current");
+            Ok(())
+        }
         #[cfg(feature = "linux")]
         Command::InitLinuxConfig => unreachable!("initialization precedes configuration loading"),
         Command::Restore { .. } => unreachable!("restore is handled before configuration loading"),
@@ -504,7 +537,7 @@ mod cli_tests {
         ])
         .unwrap();
         assert!(
-            matches!(cli.command, Some(Command::Restore { archive, root }) if archive == Path::new("/tmp/backup.tar.gz") && root == Path::new("/tmp/recovery"))
+            matches!(cli.command, Some(Command::Restore { archive, root, .. }) if archive == Path::new("/tmp/backup.tar.gz") && root == Path::new("/tmp/recovery"))
         );
 
         let cli = Cli::try_parse_from(["maestro", "toolbox", "list"]).unwrap();

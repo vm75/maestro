@@ -98,7 +98,7 @@ def fixture(empty_filter=False, limits=False):
                 'delayed': dict(rate='2r/s', burst=2, nodelay=False, connections=30),
                 'concurrent': dict(rate='100r/s', burst=100, nodelay=True, connections=2),
             }
-        for folder in ('var/log/nginx' , 'var/run', 'certs/default', 'acme', 'module.d', 'conf.d', 'snippets', 'settings', 'ban-shield'):
+        for folder in ('var/log/nginx' , 'var/run', 'acme', 'module.d', 'conf.d', 'snippets', 'settings', 'ban-shield'):
             (dest / folder).mkdir(parents=True, exist_ok=True)
         for name in ('nginx.conf.jinja', 'resolver.conf.jinja', 'mime.types', 'dhparams.pem'):
             (dest / name.removesuffix('.jinja')).write_text(env.get_template(name).render(**context))
@@ -116,10 +116,6 @@ def fixture(empty_filter=False, limits=False):
                 (dest / folder / source.name.removesuffix('.jinja')).write_text(
                     env.get_template(f'{folder}/{source.name}').render(**context)
                 )
-        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
-                        '-keyout', str(dest / 'certs/default/privkey.pem'),
-                        '-out', str(dest / 'certs/default/fullchain.pem'),
-                        '-days', '1', '-subj', '/CN=fixture'], check=True, capture_output=True)
         enabled = dest / 'domains-enabled'
         enabled.mkdir()
         for index, site in enumerate(sites.values()):
@@ -216,7 +212,7 @@ def request(port, path, host='policy.example.test', method='GET', ua='TestClient
         connection.close()
 
 
-@unittest.skipUnless(shutil.which('nginx') and shutil.which('openssl'), 'nginx and openssl required')
+@unittest.skipUnless(shutil.which('nginx'), 'nginx required')
 class Policies(unittest.TestCase):
     def test_named_budgets_and_guards(self):
         with fixture(limits=True) as (dest, port):

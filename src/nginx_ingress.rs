@@ -851,11 +851,6 @@ pub fn runtime_files(
 ) -> Result<BTreeMap<std::path::PathBuf, String>> {
     let profiles = profiles(global);
     let mode = mode(global);
-    let fallback = global
-        .shared
-        .get("default_certificate_dir")
-        .and_then(Value::as_str)
-        .unwrap_or("certs/default");
     let var_dir = global
         .shared
         .get("var_dir")
@@ -864,7 +859,7 @@ pub fn runtime_files(
     let mut defaults = String::from("# Managed ingress defaults.\n");
     for profile in profiles.values() {
         for endpoint in &profile.https {
-            defaults.push_str(&format!("server {{\n listen {} ssl default_server;\n server_name _;\n ssl_certificate {fallback}/fullchain.pem;\n ssl_certificate_key {fallback}/privkey.pem;\n ssl_reject_handshake on;\n access_log {var_dir}/log/nginx/unknown-host.log f2b_trap;\n return 444;\n}}\n", endpoint.socket()));
+            defaults.push_str(&format!("server {{\n listen {} ssl default_server;\n server_name _;\n ssl_reject_handshake on;\n access_log {var_dir}/log/nginx/unknown-host.log f2b_trap;\n return 444;\n}}\n", endpoint.socket()));
         }
         if mode == HttpMode::Always {
             for endpoint in &profile.http {

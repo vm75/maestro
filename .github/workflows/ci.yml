@@ -13,6 +13,11 @@ on:
         required: false
         type: number
         default: 0
+      auto_fix:
+        description: "Automatically fix Rust code on the selected ci/** branch"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -63,9 +68,87 @@ jobs:
 
           printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
 
+  autofix:
+    name: Fix Rust formatting and safe Clippy suggestions
+    needs: source
+    # Never write to main, tags, fork PRs or proposed-merge checkouts.
+    if: ${{ startsWith(github.ref, 'refs/heads/ci/') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.pr_number == 0 && inputs.auto_fix)) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: write
+    outputs:
+      changed: ${{ steps.publish.outputs.changed }}
+    steps:
+      - name: Check out branch revision without credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.ref }}
+          persist-credentials: false
+
+      - name: Install baseline Rust
+        run: rustup toolchain install 1.85.0 --profile minimal --component rustfmt,clippy
+
+      - name: Cache Cargo dependencies and build artifacts
+        uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3 # v2.7.7
+
+      - name: Apply machine-applicable Clippy fixes
+        # The strict CI job reports any remaining warnings or compilation errors.
+        continue-on-error: true
+        run: cargo +1.85.0 clippy --fix --all-targets --locked
+
+      - name: Format Rust sources
+        run: cargo +1.85.0 fmt --all
+
+      - name: Commit corrections and dispatch strict CI on the new head
+        id: publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+          EXPECTED_SHA: ${{ needs.source.outputs.ref }}
+        run: |
+          set -euo pipefail
+          [[ "$BRANCH" == ci/* && "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          if git diff --quiet HEAD --; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Only commit modifications to existing tracked Rust sources.
+          # Refuse unexpected changes rather than publishing build side effects.
+          while IFS= read -r -d '' path; do
+            if [[ "$path" != *.rs || ! -f "$path" || -L "$path" ]]; then
+              echo "::error::Unexpected auto-fix change: $path"
+              exit 1
+            fi
+            git add -- "$path"
+          done < <(git diff --name-only --no-renames -z HEAD --)
+          git diff --cached --check
+
+          gh auth setup-git --hostname github.com
+          remote_sha=$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)
+          if [[ "$remote_sha" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Branch advanced; run CI on its latest revision."
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'ci: apply Rust formatting and Clippy fixes'
+          # A normal, non-force push also protects against concurrent updates.
+          git push origin "HEAD:refs/heads/$BRANCH"
+
+          # GITHUB_TOKEN pushes do not trigger push workflows. Dispatch explicitly
+          # so required checks attach to the corrected commit, not the old SHA.
+          # Disable auto-fix for that run to avoid loops and repeated edits.
+          gh workflow run ci.yml --ref "$BRANCH" -f pr_number=0 -f auto_fix=false
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+
   full:
     name: Full CI (Rust 1.85)
-    needs: source
+    needs: [source, autofix]
+    if: ${{ !cancelled() && needs.source.result == 'success' && (needs.autofix.result == 'skipped' || (needs.autofix.result == 'success' && needs.autofix.outputs.changed == 'false')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -113,7 +196,8 @@ jobs:
 
   linux-ui:
     name: Linux UI parity
-    needs: source
+    needs: [source, autofix]
+    if: ${{ !cancelled() && needs.source.result == 'success' && (needs.autofix.result == 'skipped' || (needs.autofix.result == 'success' && needs.autofix.outputs.changed == 'false')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -143,7 +227,8 @@ jobs:
 
   linux-native:
     name: Native Linux integration
-    needs: source
+    needs: [source, autofix]
+    if: ${{ !cancelled() && needs.source.result == 'success' && (needs.autofix.result == 'skipped' || (needs.autofix.result == 'success' && needs.autofix.outputs.changed == 'false')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -192,7 +277,8 @@ jobs:
 
   stable:
     name: Stable compatibility
-    needs: source
+    needs: [source, autofix]
+    if: ${{ !cancelled() && needs.source.result == 'success' && (needs.autofix.result == 'skipped' || (needs.autofix.result == 'success' && needs.autofix.outputs.changed == 'false')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

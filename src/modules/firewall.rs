@@ -199,7 +199,11 @@ impl FirewallManager {
         }
         let candidate_config = self.build_ban_attack_config(&candidate)?;
         if !candidate_config.files.is_empty() {
-            crate::ban_attack::validate_config(candidate_config)?;
+            if self.config.platform == crate::config::Platform::Asuswrt {
+                crate::ban_attack::validate_router_config(candidate_config)?;
+            } else {
+                crate::ban_attack::validate_config(candidate_config)?;
+            }
         }
         let previous = self.stores.firewall_policy.read().await.clone();
         self.update_policy(&candidate).await?;
@@ -447,7 +451,14 @@ impl FirewallManager {
 
         // The engine owns its state.  In particular, do not share the old
         // `bans.json` file with Stores: it has a different schema.
-        let persistence_file = Some(self.config.paths.data_dir.join("ban-attack-state.json"));
+        let state_file = self.config.paths.data_dir.join("ban-attack-state.json");
+        let persistence_file = Some(
+            if self.config.platform == crate::config::Platform::Asuswrt {
+                crate::util::trusted_file_path(&state_file)?
+            } else {
+                state_file
+            },
+        );
 
         Ok(BanAttackConfig {
             poll_interval_ms: self.config.firewall.poll_interval_ms,

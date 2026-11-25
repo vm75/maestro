@@ -781,14 +781,9 @@ async fn test_nginx_jinja_settings_objects_actions_and_logs_api() {
             .join("settings/allowed_ips.txt")
             .exists()
     );
-    assert!(
-        state
-            .config
-            .nginx
-            .inputs_dir
-            .join("allowed_ips.txt")
-            .exists()
-    );
+    for name in ["allowed_ips.txt", "free_subdomains.txt", "servers.conf"] {
+        assert!(!state.config.nginx.inputs_dir.join(name).exists());
+    }
     assert_eq!(
         persisted["limit_policies"]["assets"]["burst"].as_i64(),
         Some(500)

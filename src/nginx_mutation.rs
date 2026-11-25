@@ -41,7 +41,9 @@ impl Snapshot {
             "subfolders.conf",
             "servers.conf",
         ] {
-            files.insert(config.nginx.inputs_dir.join(name));
+            if name != "servers.conf" || config.platform == crate::config::Platform::Linux {
+                files.insert(config.nginx.inputs_dir.join(name));
+            }
             files.insert(config.nginx.root_dir.join("settings").join(name));
         }
         for name in [

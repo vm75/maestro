@@ -25,11 +25,13 @@ tar -xOzf "$TMP/control.tar.gz" ./control | grep -Fx 'Conflicts: router-hub'
 tar -xOzf "$TMP/control.tar.gz" ./control | grep -Fx 'Depends: tar'
 tar -tzf "$TMP/control.tar.gz" | grep -Fx './postinst'
 tar -tzf "$TMP/control.tar.gz" | grep -Fx './prerm'
-# Installation consumes YAML only; no transitional migration commands.
+# Installation consumes YAML only; migrate the persistent YAML-era layout first.
 tar -xzOf "$TMP/control.tar.gz" ./postinst | grep -F 'setup-merlin.sh'
 setup=scripts/setup-merlin.sh
 init_line=$(grep -nF 'init-nginx' "$setup" | tail -1 | cut -d: -f1)
 start_line=$(grep -nF '/opt/etc/init.d/S99maestro restart' "$setup" | tail -1 | cut -d: -f1)
+migration_line=$(grep -nF 'migrate-router-layout' "$setup" | cut -d: -f1)
+test -n "$migration_line" && test "$migration_line" -lt "$init_line"
 ! grep -Eq 'migrate-config|migrate-nginx-inputs|--no-check-certificate|curl .* -k ' "$setup"
 test -n "$init_line" && test -n "$start_line" && test "$init_line" -lt "$start_line"
 tar -tzf "$TMP/data.tar.gz" | grep -Fx './opt/bin/maestro'

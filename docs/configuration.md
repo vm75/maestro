@@ -58,9 +58,11 @@ subnet ban 30 days, and keeps repeat-offender reputation for a year. Use a
 less aggressive profile when legitimate users commonly share public source
 subnets (carrier NAT, corporate egress, large hosting networks, or similar).
 
-Persistent JSON is stored below `paths.data_dir` and written atomically. It
-contains certificate definitions, Wake-on-LAN machines, firewall policy and
-state, and AdGuard overrides. Nginx objects remain represented by nginx files
+Persistent JSON is written atomically. On routers, `paths.data_dir` defaults
+to `/opt/var/lib/maestro` and holds certificate definitions, Wake-on-LAN
+machines, Ban Shield state, AdGuard overrides and HTTP-01 recovery records.
+Firewall policy is stored beside the selected router YAML. Linux retains its
+existing storage layout. Nginx objects remain represented by nginx files
 and relative symlinks rather than a second database. Existing dehydrated
 definitions and deployed nginx certificates can be imported at startup.
 
@@ -131,14 +133,14 @@ An empty LAN allowlist denies all clients for LAN-only locations.
 `nginx.yaml` under that directory is the single source of global inputs: `global` contains
 shared nginx options, `site_defaults` contains inherited site policies, and
 root-level `allowed_ips` and `free_subdomains` arrays contain the allowlists.
-Text allowlist fragments are generated from YAML. Relative fallback
-certificate directories resolve beneath the configured nginx root; traversal
-is rejected. `init-nginx` accepts existing fallback certificate pairs through
-directory or file symlinks when both targets are regular files. Existing
-certificate contents and permissions are preserved. Generating a missing pair
-still requires paths without symlinks beneath the managed nginx root; incomplete
-pairs and non-file targets are rejected. A missing pair is generated even when
-`nginx.conf` already matches the bundled configuration. Global settings also save `nginx_daemon`,
+On routers, allowlist fragments are rendered in memory from YAML, and
+`servers.conf` is deployed only under the native Nginx settings directory.
+HTTP-01 session, status and WAN ownership JSON records remain persistent in
+`<paths.data_dir>/nginx/`. NGINX 1.19.4 or newer rejects
+unknown TLS hostnames without a fallback certificate. The retired
+`default_certificate_dir` setting is ignored on load and omitted on save.
+`init-nginx` refreshes the managed rejection server without touching certificate
+files, including existing symlinked domain certificate stores. Global settings also save `nginx_daemon`,
 `nginx_user`, and `temp_dir`. When Maestro runs as non-root, generated nginx configuration omits
 `user`. When it runs as root, nginx uses `nginx_user`, falling back to `nobody`
 when blank or unset. Only the temporary parent folder is configurable: nginx
@@ -182,3 +184,17 @@ Python is needed only for lab setup and bundle tests, not by Maestro at runtime.
 
 
 Maestro configuration is YAML on all platforms. Router and native Linux use separate schemas, and TOML is not accepted. Linux uses a private version: 1 authority and token file; see [Linux configuration](linux.md). State JSON and authored native service files retain their formats.
+
+## Router filesystem aliases
+
+Entware mount aliases and explicitly configured directory symlinks are supported.
+Router YAML, fixed JSON stores, WireGuard configuration and Dehydrated files
+retain valid file symlinks during writes. Broken/cyclic links are errors rather
+than empty configuration. Migrated linked persistent state keeps its resolved target. Managed NGINX
+inputs and HTTP-01 recovery records are materialized as regular files during
+relocation; original link text and contents are saved in the private migration
+backup.
+NGINX site activation accepts matching relative or absolute links, and deployed
+certificate aliases retain their targets. Unexpected links in managed NGINX
+inputs and temporary paths are rejected. Router Ban Shield and the NGINX log viewer allow linked regular log files only within configured log roots; the resolved target is checked on each poll or open.
+Backups include known linked router state and certificate targets. Router backup manifests map physical Entware and JFFS roots to the destination router; other relocated roots require explicit restore mappings. Restore continues to require safe real destination parents.

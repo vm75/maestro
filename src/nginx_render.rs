@@ -2,7 +2,7 @@
 //! Policy templates are compiled into the binary; deployment data cannot shadow them.
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use minijinja::{Environment, UndefinedBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -300,7 +300,9 @@ impl GlobalSettings {
                         || s.bytes()
                             .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
                 }),
-                "var_dir" | "acme_challenge_dir" | "default_certificate_dir" | "temp_dir" => value
+                // Accepted only for compatibility with old YAML/API clients; never rendered.
+                "default_certificate_dir" => true,
+                "var_dir" | "acme_challenge_dir" | "temp_dir" => value
                     .as_str()
                     .is_some_and(|s| s.starts_with('/') && token(s) && !s.contains(' ')),
                 "pwa_shell_cache_control" | "pwa_asset_cache_control" => {
@@ -597,10 +599,6 @@ const BUNDLE: &[(&str, &str)] = &[
         include_str!("../config/nginx/settings/subfolders.conf"),
     ),
     (
-        "settings/tls.jinja",
-        include_str!("../config/nginx/settings/tls.jinja"),
-    ),
-    (
         "snippets/acme-challenge.conf.jinja",
         include_str!("../config/nginx/snippets/acme-challenge.conf.jinja"),
     ),
@@ -703,8 +701,13 @@ pub(crate) fn ensure_managed_path(
     } else {
         &config.nginx.root_dir
     };
-    if std::fs::symlink_metadata(base).is_ok_and(|m| m.file_type().is_symlink()) {
-        bail!("managed nginx root is a symlink");
+    if std::fs::symlink_metadata(base).is_ok_and(|m| m.file_type().is_symlink())
+        && (config.platform == crate::config::Platform::Linux || !base.canonicalize()?.is_dir())
+    {
+        bail!(
+            "managed nginx root is not a supported directory alias: {}",
+            base.display()
+        );
     }
     nginx::ensure_no_symlink_ancestors(base, path)
 }
@@ -739,25 +742,8 @@ pub fn with_path_defaults(
                 .into_owned()
                 .into()
         });
-    if let Some(relative) = settings
-        .shared
-        .get("default_certificate_dir")
-        .and_then(Value::as_str)
-        .filter(|path| !path.starts_with('/'))
-    {
-        if let Ok(relative) = crate::util::safe_relative_path(relative) {
-            settings.shared.insert(
-                "default_certificate_dir".into(),
-                config
-                    .nginx
-                    .root_dir
-                    .join(relative)
-                    .to_string_lossy()
-                    .into_owned()
-                    .into(),
-            );
-        }
-    }
+    // Old installations may still carry this retired setting. Never use it.
+    settings.shared.remove("default_certificate_dir");
     if config.platform == crate::config::Platform::Linux {
         settings.shared.entry("temp_dir").or_insert_with(|| {
             config
@@ -819,8 +805,19 @@ pub fn shared_files(
     settings.validate()?;
     crate::nginx_ingress::validate_tree(&settings, &crate::nginx_sites::load(config)?)?;
     let mut data = BTreeMap::new();
+    let router = config.platform == crate::config::Platform::Asuswrt;
     for &(name, source) in BUNDLE {
         if name.starts_with("settings/") && !name.ends_with(".jinja") {
+            if router
+                && matches!(
+                    name,
+                    "settings/allowed_ips.txt"
+                        | "settings/free_subdomains.txt"
+                        | "settings/servers.conf"
+                )
+            {
+                continue;
+            }
             let path = config
                 .nginx
                 .inputs_dir
@@ -890,6 +887,12 @@ pub fn shared_files(
         "settings/free_subdomains.txt".into(),
         settings.free_subdomains.join("\n"),
     );
+    if router {
+        data.insert(
+            "settings/servers.conf".into(),
+            nginx::server_names_fragment(config)?,
+        );
+    }
     let env = environment(&data)?;
     // SAFETY: geteuid has no arguments or memory safety requirements.
     let mut context = runtime_context(&settings, unsafe { libc::geteuid() == 0 });
@@ -958,14 +961,23 @@ pub fn shared_files(
         files.insert(path, content);
     }
     for (name, content) in data {
-        files.insert(
-            config
-                .nginx
-                .inputs_dir
-                .join(name.strip_prefix("settings/").unwrap()),
-            content.clone(),
-        );
-        // These are concrete nginx includes; text lists and YAML stay in inputs_dir.
+        if !router
+            || !matches!(
+                name.as_str(),
+                "settings/allowed_ips.txt"
+                    | "settings/free_subdomains.txt"
+                    | "settings/servers.conf"
+            )
+        {
+            files.insert(
+                config
+                    .nginx
+                    .inputs_dir
+                    .join(name.strip_prefix("settings/").unwrap()),
+                content.clone(),
+            );
+        }
+        // Only concrete native includes are deployed to the nginx runtime tree.
         if name.ends_with(".conf") {
             files.insert(config.nginx.root_dir.join(name), content);
         }
@@ -989,10 +1001,24 @@ struct FileBackup {
 }
 
 fn backup_file(path: &std::path::Path) -> Result<Option<FileBackup>> {
-    use std::os::unix::fs::MetadataExt;
-    match std::fs::read(path) {
-        Ok(bytes) => {
-            let metadata = std::fs::metadata(path)?;
+    use std::{
+        io::Read,
+        os::unix::fs::{MetadataExt, OpenOptionsExt},
+    };
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(mut file) => {
+            let metadata = file.metadata()?;
+            anyhow::ensure!(
+                metadata.is_file(),
+                "managed file is not regular: {}",
+                path.display()
+            );
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
             Ok(Some(FileBackup {
                 bytes,
                 permissions: metadata.permissions(),
@@ -1038,21 +1064,72 @@ impl FileTransaction {
         Self::apply_with_removals(config, files, &[])
     }
 
+    /// Certificate deployment is a separate trust boundary: the fixed named
+    /// PEM files may be administrator-linked to a shared certificate store.
+    /// Resolve them before taking the rollback snapshot; never replace links.
+    pub(crate) fn apply_router_certificates(
+        files: BTreeMap<std::path::PathBuf, String>,
+    ) -> Result<Self> {
+        let mut resolved = BTreeMap::new();
+        for (path, content) in files {
+            let target = crate::util::trusted_file_path(&path)?;
+            anyhow::ensure!(
+                resolved.insert(target, (path, content)).is_none(),
+                "multiple certificate files resolve to the same target"
+            );
+        }
+        let mut previous = Vec::new();
+        for (target, (_, content)) in &resolved {
+            let backup = backup_file(target)?;
+            use std::os::unix::fs::PermissionsExt;
+            let private =
+                resolved[target].0.file_name().and_then(|n| n.to_str()) == Some("privkey.pem");
+            if backup.as_ref().is_some_and(|old| {
+                old.bytes == content.as_bytes()
+                    && (!private || old.permissions.mode() & 0o777 == 0o600)
+            }) {
+                continue;
+            }
+            previous.push((target.clone(), backup));
+        }
+        let mut transaction = Self {
+            previous: Vec::new(),
+            committed: false,
+        };
+        for (target, backup) in previous {
+            let (path, content) = &resolved[&target];
+            anyhow::ensure!(
+                crate::util::trusted_file_path(path)? == target,
+                "certificate destination changed: {}",
+                path.display()
+            );
+            transaction.previous.push((target, backup));
+            let mode = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| *name == "privkey.pem")
+                .map(|_| 0o600);
+            crate::util::write_trusted_file(path, content.as_bytes(), mode)?;
+        }
+        Ok(transaction)
+    }
+
     fn apply_with_removals(
         config: &crate::config::AppConfig,
         files: BTreeMap<std::path::PathBuf, String>,
         removals: &[std::path::PathBuf],
     ) -> Result<Self> {
+        // Preflight before arming rollback: a rejected later path must not
+        // rewrite earlier files that were never modified.
+        let mut previous = BTreeMap::new();
+        for path in files.keys().chain(removals) {
+            ensure_managed_path(config, path)?;
+            previous.insert(path.clone(), backup_file(path)?);
+        }
         let mut transaction = Self {
             previous: Vec::new(),
             committed: false,
         };
-        // Preflight every path before writing any file.
-        for path in files.keys().chain(removals) {
-            ensure_managed_path(config, path)?;
-            let previous = backup_file(path)?;
-            transaction.previous.push((path.clone(), previous));
-        }
         if let Some(content) = files.get(&global_path(config)) {
             let settings: NginxSettings = crate::config_yaml::decode(content)?;
             GlobalSettings {
@@ -1093,11 +1170,20 @@ impl FileTransaction {
         }
         for (path, content) in files {
             use std::os::unix::fs::PermissionsExt;
+            ensure_managed_path(config, &path)?;
             let private_key = path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with("privkey") && name.ends_with(".pem"));
-            if private_key {
+            if config.platform == crate::config::Platform::Asuswrt {
+                let target = crate::util::trusted_file_path(&path)?;
+                let mode = if private_key {
+                    0o600
+                } else {
+                    std::fs::metadata(&target).map_or(0o644, |m| m.permissions().mode())
+                };
+                crate::util::publish_physical_file(&target, content.as_bytes(), mode, None, true)?;
+            } else if private_key {
                 let permissions = std::fs::Permissions::from_mode(0o600);
                 nginx::atomic_write_with_permissions(
                     &path,
@@ -1107,9 +1193,20 @@ impl FileTransaction {
             } else {
                 nginx::atomic_write(&path, content.as_bytes())?;
             }
+            if let Some(original) = previous.remove(&path) {
+                transaction.previous.push((path, original));
+            }
         }
         for path in removals {
-            std::fs::remove_file(path)?;
+            ensure_managed_path(config, path)?;
+            if config.platform == crate::config::Platform::Asuswrt {
+                crate::util::unlink_trusted_entry(path)?;
+            } else {
+                std::fs::remove_file(path)?;
+            }
+            if let Some(original) = previous.remove(path) {
+                transaction.previous.push((path.clone(), original));
+            }
         }
         Ok(transaction)
     }
@@ -1159,14 +1256,11 @@ pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
         fs,
         io::Write,
         os::unix::fs::{OpenOptionsExt, PermissionsExt},
-        time::Duration,
     };
     let root = &config.nginx.root_dir;
     nginx::ensure_no_symlink_ancestors(root, &config.nginx.config_path)?;
     if config.test_mode {
-        bail!(
-            "init-nginx requires a real openssl invocation; use an isolated Linux config for testing"
-        );
+        bail!("init-nginx requires a real deployment; use an isolated Linux config for testing");
     }
     let mut global = load_global(config)?;
     let var_dir = config
@@ -1190,10 +1284,29 @@ pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
     ] {
         files.insert(root.join(name), content.into());
     }
-    // Take ownership of the main configuration while retaining saved inputs
-    // and administrator-authored shared fragments.
-    files
-        .retain(|path, _| path == &config.nginx.config_path || fs::symlink_metadata(path).is_err());
+    // Refresh the managed rejection server on upgrade, even if nginx.conf is current.
+    // Retain administrator-authored fragments and saved inputs.
+    let default_drop = root.join("ban-shield/default-drop.conf");
+    files.retain(|path, content| {
+        if path == &config.nginx.config_path {
+            return !main_unchanged;
+        }
+        match fs::symlink_metadata(path) {
+            // Let the transaction report inaccessible paths or blocked parents.
+            Err(_) => true,
+            Ok(metadata) if path == &default_drop && metadata.is_file() => {
+                fs::read_to_string(path).is_ok_and(|old| {
+                    (old.starts_with("# Managed ingress defaults.")
+                        || old.contains("# DEFAULT DROP SERVER — catches all requests to unknown/unregistered hostnames"))
+                        && old != *content
+                })
+            }
+            _ => false,
+        }
+    });
+    if files.is_empty() {
+        return Ok(false);
+    }
     for directory in [
         &config.nginx.domains_available_dir,
         &config.nginx.domains_enabled_dir,
@@ -1208,92 +1321,6 @@ pub async fn bootstrap(config: &crate::config::AppConfig) -> Result<bool> {
         &var_dir.join("log/nginx"),
     ] {
         fs::create_dir_all(directory)?;
-    }
-    let certificate_dir = root.join(
-        global
-            .shared
-            .get("default_certificate_dir")
-            .and_then(Value::as_str)
-            .unwrap_or("certs/default"),
-    );
-    let relative = certificate_dir
-        .strip_prefix(root)
-        .context("fallback certificate directory must be inside the nginx root")?;
-    if relative
-        .components()
-        .any(|component| !matches!(component, std::path::Component::Normal(_)))
-    {
-        bail!("fallback certificate directory must not contain path traversal");
-    }
-    let key = certificate_dir.join("privkey.pem");
-    let certificate = certificate_dir.join("fullchain.pem");
-    // Existing certificates are read-only inputs and may live behind directory
-    // or file symlinks (for example, a dehydrated certificate store).
-    let existing_file = |path: &std::path::Path| -> Result<bool> {
-        match fs::metadata(path) {
-            Ok(metadata) if metadata.is_file() => Ok(true),
-            Ok(_) => bail!("certificate path is not a regular file: {}", path.display()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(error)
-                .with_context(|| format!("failed to inspect certificate path {}", path.display())),
-        }
-    };
-    let key_exists = existing_file(&key)?;
-    let certificate_exists = existing_file(&certificate)?;
-    if main_unchanged && key_exists && certificate_exists {
-        return Ok(false);
-    }
-    if !key_exists || !certificate_exists {
-        if key_exists || certificate_exists {
-            bail!("fallback certificate is incomplete; supply both fullchain.pem and privkey.pem");
-        }
-        // Generation still requires paths owned by the managed nginx tree.
-        nginx::ensure_no_symlink_ancestors(root, &key)?;
-        nginx::ensure_no_symlink_ancestors(root, &certificate)?;
-        fs::create_dir_all(&certificate_dir)?;
-        let nonce = uuid::Uuid::new_v4().simple().to_string();
-        let temporary_key = certificate_dir.join(format!(".{nonce}.key"));
-        let temporary_certificate = certificate_dir.join(format!(".{nonce}.crt"));
-        let result = crate::command::CommandRunner::new(false)
-            .run(
-                &config.commands.openssl,
-                [
-                    "req",
-                    "-x509",
-                    "-newkey",
-                    "rsa:2048",
-                    "-nodes",
-                    "-days",
-                    "3650",
-                    "-subj",
-                    "/CN=maestro-default.invalid",
-                    "-keyout",
-                    temporary_key
-                        .to_str()
-                        .ok_or_else(|| anyhow::anyhow!("invalid certificate path"))?,
-                    "-out",
-                    temporary_certificate
-                        .to_str()
-                        .ok_or_else(|| anyhow::anyhow!("invalid certificate path"))?,
-                ],
-                Duration::from_secs(60),
-            )
-            .await;
-        let material = (|| -> Result<(String, String)> {
-            let result = result?;
-            if !result.success {
-                bail!("fallback certificate generation failed: {}", result.stderr);
-            }
-            Ok((
-                fs::read_to_string(&temporary_key)?,
-                fs::read_to_string(&temporary_certificate)?,
-            ))
-        })();
-        let _ = fs::remove_file(temporary_key);
-        let _ = fs::remove_file(temporary_certificate);
-        let (key_content, certificate_content) = material?;
-        files.insert(key.clone(), key_content);
-        files.insert(certificate, certificate_content);
     }
     // Save the original before atomically replacing it. Keeping the original
     // path present also lets FileTransaction roll it back on any write failure.
@@ -1344,12 +1371,7 @@ mod tests {
             .apply_test_mode(&root.join("test-fixtures/etc/maestro/maestro.yaml"))
             .unwrap();
         config.test_mode = false;
-        // Existing certificate material avoids needing an external command in
-        // tests concerned only with filesystem ownership and rollback.
-        let certificates = config.nginx.root_dir.join("certs/default");
-        std::fs::create_dir_all(&certificates).unwrap();
-        std::fs::write(certificates.join("privkey.pem"), "test key").unwrap();
-        std::fs::write(certificates.join("fullchain.pem"), "test certificate").unwrap();
+        std::fs::create_dir_all(&config.nginx.root_dir).unwrap();
         config
     }
 
@@ -1389,6 +1411,9 @@ mod tests {
             let config = bootstrap_config(temp.path());
             let certificates = config.nginx.root_dir.join("certs/default");
             let external = temp.path().join("external-certificates");
+            fs::create_dir_all(&certificates).unwrap();
+            fs::write(certificates.join("privkey.pem"), "test key").unwrap();
+            fs::write(certificates.join("fullchain.pem"), "test certificate").unwrap();
             fs::rename(&certificates, &external).unwrap();
             let key = external.join("privkey.pem");
             fs::set_permissions(&key, fs::Permissions::from_mode(0o640)).unwrap();
@@ -1431,57 +1456,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bootstrap_rejects_certificate_generation_through_symlinks() {
+    async fn bootstrap_ignores_retired_fallback_and_upgrades_managed_rejection_server() {
         use std::{fs, os::unix::fs::symlink};
-        for dangling_file in [false, true] {
-            let temp = tempfile::tempdir().unwrap();
-            let config = bootstrap_config(temp.path());
-            let certificates = config.nginx.root_dir.join("certs/default");
-            fs::remove_dir_all(&certificates).unwrap();
-            let outside = temp.path().join("outside");
-            fs::create_dir(&outside).unwrap();
-            let rejected = if dangling_file {
-                fs::create_dir(&certificates).unwrap();
-                let key = certificates.join("privkey.pem");
-                symlink(outside.join("missing-key.pem"), &key).unwrap();
-                key
-            } else {
-                symlink(&outside, &certificates).unwrap();
-                certificates
-            };
-            let error = bootstrap(&config).await.unwrap_err().to_string();
-            assert!(error.contains("path traverses a symlink"), "{error}");
-            assert!(error.contains(&rejected.display().to_string()), "{error}");
-            assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
-        }
-    }
-
-    #[tokio::test]
-    async fn bootstrap_rejects_incomplete_and_non_regular_certificate_pairs() {
-        use std::fs;
-        for directory in [false, true] {
-            let temp = tempfile::tempdir().unwrap();
-            let config = bootstrap_config(temp.path());
-            let certificate = config.nginx.root_dir.join("certs/default/fullchain.pem");
-            fs::remove_file(&certificate).unwrap();
-            if directory {
-                fs::create_dir(&certificate).unwrap();
-            }
-            let error = bootstrap(&config).await.unwrap_err().to_string();
-            assert!(
-                error.contains(if directory {
-                    "not a regular file"
-                } else {
-                    "incomplete"
-                }),
-                "{error}"
-            );
-            assert_eq!(
-                fs::read_to_string(config.nginx.root_dir.join("certs/default/privkey.pem"))
-                    .unwrap(),
-                "test key"
-            );
-        }
+        let temp = tempfile::tempdir().unwrap();
+        let config = bootstrap_config(temp.path());
+        let store = temp.path().join("certificate-store");
+        fs::create_dir_all(store.join("example_test")).unwrap();
+        fs::write(store.join("example_test/privkey.pem"), "domain key").unwrap();
+        symlink(&store, config.nginx.root_dir.join("certs")).unwrap();
+        fs::create_dir_all(&config.nginx.inputs_dir).unwrap();
+        fs::write(
+            global_path(&config),
+            "global:\n  default_certificate_dir: /missing/fallback\n",
+        )
+        .unwrap();
+        assert!(bootstrap(&config).await.unwrap());
+        let rejection = config.nginx.root_dir.join("ban-shield/default-drop.conf");
+        let generated = fs::read_to_string(&rejection).unwrap();
+        assert!(generated.contains("ssl_reject_handshake on;"));
+        assert!(!generated.contains("ssl_certificate"));
+        assert!(!store.join("default").exists());
+        let old = generated.replace(
+            "ssl_reject_handshake on;",
+            "ssl_certificate /missing/fallback/fullchain.pem;\n ssl_reject_handshake on;",
+        );
+        fs::write(&rejection, old).unwrap();
+        assert!(bootstrap(&config).await.unwrap());
+        assert_eq!(fs::read_to_string(&rejection).unwrap(), generated);
+        assert!(!bootstrap(&config).await.unwrap());
+        assert_eq!(
+            fs::read_to_string(store.join("example_test/privkey.pem")).unwrap(),
+            "domain key"
+        );
+        assert_eq!(fs::read_dir(&store).unwrap().count(), 1);
     }
 
     #[tokio::test]
@@ -1514,6 +1521,32 @@ mod tests {
     }
 
     #[test]
+    fn router_certificate_transaction_preserves_directory_and_file_links() {
+        use std::{fs, os::unix::fs::symlink};
+        let temp = tempfile::tempdir().unwrap();
+        let store = temp.path().join("store");
+        fs::create_dir(&store).unwrap();
+        let certificate = store.join("version.pem");
+        fs::write(&certificate, "old").unwrap();
+        symlink("version.pem", store.join("fullchain.pem")).unwrap();
+        let alias = temp.path().join("certs");
+        symlink(&store, &alias).unwrap();
+        let link = alias.join("fullchain.pem");
+        let mut transaction =
+            FileTransaction::apply_router_certificates([(link.clone(), "new".into())].into())
+                .unwrap();
+        assert_eq!(fs::read(&certificate).unwrap(), b"new");
+        assert_eq!(
+            fs::read_link(&link).unwrap(),
+            std::path::Path::new("version.pem")
+        );
+        transaction.rollback().unwrap();
+        assert_eq!(fs::read(&certificate).unwrap(), b"old");
+        assert!(fs::symlink_metadata(&alias).unwrap().is_symlink());
+        assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
+    }
+
+    #[test]
     fn certificate_transaction_publishes_private_keys_as_owner_only() {
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
@@ -1525,6 +1558,32 @@ mod tests {
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
+        );
+    }
+
+    #[test]
+    fn router_transaction_accepts_explicit_root_aliases() {
+        use std::{fs, os::unix::fs::symlink};
+        let temp = tempfile::tempdir().unwrap();
+        let config = transaction_config(temp.path());
+        let physical = temp.path().join("physical");
+        let inputs = physical.join("inputs");
+        let runtime = physical.join("runtime");
+        fs::create_dir_all(&inputs).unwrap();
+        fs::create_dir_all(&runtime).unwrap();
+        fs::create_dir_all(config.nginx.inputs_dir.parent().unwrap()).unwrap();
+        fs::remove_dir_all(&config.nginx.root_dir).unwrap();
+        symlink(&inputs, &config.nginx.inputs_dir).unwrap();
+        symlink(&runtime, &config.nginx.root_dir).unwrap();
+        let file = config.nginx.root_dir.join("managed.conf");
+        FileTransaction::apply(&config, [(file, "content".into())].into())
+            .unwrap()
+            .commit();
+        assert_eq!(fs::read(runtime.join("managed.conf")).unwrap(), b"content");
+        assert!(
+            fs::symlink_metadata(&config.nginx.root_dir)
+                .unwrap()
+                .is_symlink()
         );
     }
 
@@ -1940,15 +1999,24 @@ mod tests {
         fs::create_dir(&outside).unwrap();
         std::fs::create_dir_all(config.nginx.inputs_dir.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&outside, &config.nginx.inputs_dir).unwrap();
+        assert!(load_global(&config).is_ok());
+        let external_file = temp.path().join("external.yaml");
+        fs::write(&external_file, "untouched").unwrap();
+        std::os::unix::fs::symlink(&external_file, outside.join("nginx.yaml")).unwrap();
         assert!(load_global(&config).is_err());
         let files = [(global_path(&config), "bad write".into())]
             .into_iter()
             .collect();
         assert!(FileTransaction::apply(&config, files).is_err());
-        assert!(!outside.join("nginx.yaml").exists());
+        assert_eq!(fs::read(&external_file).unwrap(), b"untouched");
+        assert!(
+            fs::symlink_metadata(outside.join("nginx.yaml"))
+                .unwrap()
+                .is_symlink()
+        );
     }
     #[test]
-    fn deployment_globals_preserve_linux_runtime_options_and_normalize_certificates() {
+    fn deployment_globals_preserve_linux_runtime_options_and_ignore_retired_fallback() {
         use std::fs;
         let temp = tempfile::tempdir().unwrap();
         let nginx_root = temp.path().join("nginx");
@@ -1976,10 +2044,7 @@ mod tests {
         global.free_subdomains = vec!["shared.example.test".into()];
         assert_eq!(global.shared["http_port"], 19080);
         assert_eq!(global.shared["nginx_daemon"], false);
-        assert_eq!(
-            global.shared["default_certificate_dir"],
-            root.join("certs/example_test").to_string_lossy().as_ref()
-        );
+        assert!(!global.shared.contains_key("default_certificate_dir"));
         assert_eq!(global_path(&config), input);
         let files = shared_files(&config, &global).unwrap();
         let main = &files[&config.nginx.config_path];
@@ -2024,7 +2089,12 @@ mod tests {
             "{\n  \"global\": {\n    \"default_certificate_dir\": \"../outside\"\n  }\n}\n",
         )
         .unwrap();
-        assert!(load_global(&config).is_err());
+        assert!(
+            !load_global(&config)
+                .unwrap()
+                .shared
+                .contains_key("default_certificate_dir")
+        );
         fs::remove_file(&input).unwrap();
         std::os::unix::fs::symlink(root.join("outside"), &input).unwrap();
         assert!(load_global(&config).is_err());

@@ -11,7 +11,7 @@ server:
   - http://192.168.1.1
   max_request_bytes: 1048576
 paths:
-  data_dir: /opt/etc/maestro
+  data_dir: /opt/var/lib/maestro
   runtime_dir: /opt/var/run/maestro
   hosts_add: /jffs/configs/hosts.add
   dnsmasq_conf_add: /jffs/configs/dnsmasq.conf.add

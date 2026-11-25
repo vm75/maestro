@@ -185,13 +185,11 @@ chmod 0644 /www/state.js
 ln -sf /tmp/var/wwwext/user20.asp /www/user20.asp
 
 echo "=== Step 6: Configure Maestro settings ==="
-# Seed disabled firewall policy
-for dir in /opt/etc/maestro /opt/var/lib/maestro; do
-    if [ ! -f "$dir/firewall-policy.json" ]; then
-        cp "$FILES_DIR/firewall-policy.json" "$dir/firewall-policy.json"
-        chmod 0600 "$dir/firewall-policy.json"
-    fi
-done
+# Seed only a fresh configuration; existing data is migrated by the installer.
+if [ ! -e /opt/etc/maestro/firewall-policy.json ] && [ ! -e /opt/var/lib/maestro/firewall-policy.json ]; then
+    cp "$FILES_DIR/firewall-policy.json" /opt/etc/maestro/firewall-policy.json
+    chmod 0600 /opt/etc/maestro/firewall-policy.json
+fi
 
 if [ ! -f /opt/etc/maestro/maestro.yaml ]; then
     OPENSSL_BIN=$(command -v openssl || echo "/usr/bin/openssl")

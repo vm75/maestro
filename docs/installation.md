@@ -49,7 +49,8 @@ before an upgrade or removal; it does not delete persistent data.
 ### Upgrade from Maestro 0.11.0
 
 The router must be prepared offline before installing the new package. Maestro
-does not convert TOML or import earlier layouts at runtime or during install. The router installer refuses to create a fresh YAML if its existing TOML configuration is still present.
+does not convert TOML at runtime or during install. The router installer refuses
+to create a fresh YAML if its existing TOML configuration is still present.
 Linux is a fresh installation and has no migration procedure.
 
 1. Make an independent backup using the installed version and separately copy
@@ -75,6 +76,30 @@ Linux is a fresh installation and has no migration procedure.
 
 Do not start a fresh configuration over an existing deployment. The installer
 does not delete administrator-created state.
+
+### Upgrade an existing YAML-based router layout
+
+Create and copy an independent backup off the router before upgrading. Stop
+Maestro and ensure no certificate operation is running before migrating.
+The router installer invokes `migrate-router-layout` before nginx initialization.
+For a manual binary upgrade, run:
+
+```sh
+/opt/etc/init.d/S99maestro stop
+/opt/bin/maestro --config /opt/etc/maestro/maestro.yaml migrate-router-layout
+/opt/bin/maestro --config /opt/etc/maestro/maestro.yaml check-config
+/opt/sbin/nginx -t
+/opt/etc/init.d/S99maestro start
+```
+
+The migration changes the former default data directory to
+`/opt/var/lib/maestro`, preserves explicitly different data paths, consolidates
+firewall policy beside the router YAML, relocates HTTP-01 recovery records, and
+flattens known nested input fragments. The original YAML and retired files are
+archived under the persistent data directory in `layout-v13-backup/`.
+Conflicting destinations stop migration rather than overwrite existing data.
+Unknown files, certificate stores, custom Nginx sites and configured command
+paths are not moved. Retain the independent backup for rollback.
 
 ### Backups
 
@@ -358,3 +383,25 @@ sudo ./scripts/install-linux.sh --user YOUR_ACCOUNT --config /home/YOUR_ACCOUNT/
 ```
 
 Review the plan and repeat without `--dry-run` to apply. Select `podman,docker,virtualization,incus,samba,nfs` individually or `all`. Omitting `--backends` preserves the minimal deployment behavior. `--skip-packages` verifies existing native packages without upgrading them. On Ubuntu/Debian the installer refreshes APT and installs native packages; on Arch it performs a synchronized full upgrade. It adds required Docker, libvirt and Incus groups, starts their socket/service units, enables lingering and prepares the workload user's D-Bus socket before Maestro starts. No external repositories are added. Docker and Incus group membership confers broad host control. Samba/NFS publication and Incus initialization remain explicit. The helper is independently optional (`--with-helper --helper /absolute/path/maestro-admin`); root-owned grants still default to deny. Package, group and daemon changes are not rolled back after later failures.
+
+### Restore a portable router backup
+
+New router backups contain a versioned manifest for /opt and /jffs. Stop
+services and mount Entware on the destination before restoring. Restore maps
+the archived physical roots to the destination's existing logical mounts.
+When a mount moves, external archived paths must be explicitly mapped (including
+identity mappings if they should stay in the original location):
+
+```sh
+maestro restore /tmp/maestro-backup.tar.gz --test-mode \\
+  --map /mnt/old-certs=/mnt/new-certs
+maestro restore /tmp/maestro-backup.tar.gz \\
+  --map /mnt/old-certs=/mnt/new-certs
+```
+
+Mappings are absolute source and logical destination prefixes. Validate the
+archive first with test mode. Explicitly mapped symlink targets are rewritten
+relative to the restored files. Old archives retain their original restore
+semantics. Review physical paths embedded in authored YAML and native NGINX
+configuration manually before starting services; arbitrary file contents are
+not rewritten.

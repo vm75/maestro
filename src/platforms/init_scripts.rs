@@ -66,8 +66,20 @@ pub async fn collect_services(state: &AppState) -> AnyResult<Vec<ServiceInfo>> {
             } else {
                 (filename, true)
             };
-            if !entry.file_type()?.is_file()
-                || entry.metadata()?.permissions().mode() & 0o111 == 0
+            let kind = entry.file_type()?;
+            let metadata =
+                if kind.is_symlink() && state.config.platform == crate::config::Platform::Asuswrt {
+                    match fs::metadata(&path) {
+                        Ok(metadata) => metadata,
+                        Err(_) => continue,
+                    }
+                } else {
+                    entry.metadata()?
+                };
+            if !(kind.is_file()
+                || (kind.is_symlink() && state.config.platform == crate::config::Platform::Asuswrt))
+                || !metadata.is_file()
+                || metadata.permissions().mode() & 0o111 == 0
                 || name.starts_with("rc.")
                 || validate_simple_name(&name, "service name").is_err()
             {
@@ -308,6 +320,21 @@ fn service_path(
     let path = init_dir.join(filename);
     let metadata =
         fs::symlink_metadata(&path).map_err(|_| ApiError::not_found("service script not found"))?;
+    if state.config.platform == crate::config::Platform::Asuswrt && metadata.is_symlink() {
+        let resolved = crate::util::trusted_file_path(&path).map_err(ApiError::internal)?;
+        if fs::metadata(&resolved)
+            .map_err(ApiError::internal)?
+            .permissions()
+            .mode()
+            & 0o111
+            == 0
+        {
+            return Err(ApiError::not_found("service script is not executable"));
+        }
+        // Rename the directory entry, not the target. Relative links retain
+        // their meaning because enable/disable stays in the same directory.
+        return Ok(path);
+    }
     if !metadata.file_type().is_file() {
         return Err(ApiError::not_found("service script not found"));
     }
@@ -341,7 +368,7 @@ fn rename_service(
     };
     let manager = for_platform(state.config.platform);
     let target = manager.init_directory(&state.config).join(target_name);
-    if target.exists() {
+    if fs::symlink_metadata(&target).is_ok() {
         return Err(ApiError::bad_request("service target path already exists"));
     }
     fs::rename(source, &target).map_err(|error| {

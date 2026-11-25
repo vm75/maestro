@@ -100,8 +100,11 @@ export SETUP_COMMANDS="$TMP/setup-commands" SERVICE_COMMANDS="$TMP/service-comma
 MAESTRO_DEFER_START=1 sh "$TMP/setup-merlin.sh" "$TMP/examples" >/dev/null
 test ! -f "$SERVICE_COMMANDS"
 ! grep -E 'migrate-config|migrate-nginx-inputs' "$SETUP_COMMANDS" >/dev/null
+grep -F 'migrate-router-layout' "$SETUP_COMMANDS" >/dev/null
 grep -F 'init-nginx' "$SETUP_COMMANDS" >/dev/null
 grep -F 'check-config' "$SETUP_COMMANDS" >/dev/null
+test -f "$TMP/root/opt/etc/maestro/firewall-policy.json"
+test ! -e "$TMP/root/opt/var/lib/maestro/firewall-policy.json"
 test -f "$TMP/root/jffs/scripts/post-mount"
 test -f "$TMP/root/jffs/scripts/firewall-start"
 MAESTRO_DEFER_START=0 sh "$TMP/setup-merlin.sh" "$TMP/examples" >/dev/null

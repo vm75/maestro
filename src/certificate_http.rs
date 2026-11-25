@@ -38,8 +38,12 @@ pub struct Status {
 }
 
 fn path(config: &AppConfig, name: &str) -> Result<PathBuf> {
-    let path = config.nginx.inputs_dir.join(name);
-    nginx_render::ensure_managed_path(config, &path)?;
+    let path = config.http_state_dir().join(name);
+    if config.platform == crate::config::Platform::Asuswrt {
+        crate::nginx::ensure_no_symlink_ancestors(&config.paths.data_dir, &path)?;
+    } else {
+        nginx_render::ensure_managed_path(config, &path)?;
+    }
     Ok(path)
 }
 

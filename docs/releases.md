@@ -14,9 +14,20 @@ pushes. Branches named `ci/**`, such as `ci/backup-fix`, also run automatically
 on pushes, even without an open PR. Ordinary feature branches and PR events
 do not trigger CI.
 
+Opt-in `ci/**` branch runs first apply machine-applicable Clippy fixes with
+Rust 1.85.0 and run rustfmt. If tracked Rust files change, CI commits the
+corrections to that branch (never force-pushing) and explicitly dispatches a
+strict CI run on the corrected head with auto-fix disabled. The original run
+skips the full checks in that case. If nothing changes, the original run
+continues to the strict checks. Main and manual proposed-merge PR checks remain
+read-only. Non-fixable Clippy warnings and compilation errors still fail strict CI.
+Use `make fix` locally for the same baseline commands, including on dirty
+working trees; review the resulting diff before committing.
+
 To check an **open PR manually**, select **Actions → CI → Run workflow**, select
 `main`, and enter its PR number. The workflow pins the proposed merge result
-against `main` to one commit for both check jobs. Alternatively:
+against `main` to one commit for all check jobs. To run auto-fix manually,
+select a `ci/**` branch, leave the PR number at 0 and enable auto-fix. Alternatively:
 
 ```sh
 gh workflow run ci.yml --ref main -f pr_number=123

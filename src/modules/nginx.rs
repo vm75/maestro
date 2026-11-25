@@ -206,7 +206,23 @@ fn object_entry(
     path: &Path,
     nginx_running: bool,
 ) -> Result<NginxObject> {
-    let enabled = symlink_exists(&enabled_path(config, kind, domain, name)?);
+    let link = enabled_path(config, kind, domain, name)?;
+    let enabled = if config.platform == crate::config::Platform::Asuswrt {
+        let expected = if kind == NginxObjectKind::Domain {
+            path.parent()
+                .context("domain configuration has no parent")?
+        } else {
+            path
+        };
+        fs::symlink_metadata(&link).is_ok_and(|m| m.is_symlink())
+            && link
+                .canonicalize()
+                .ok()
+                .zip(expected.canonicalize().ok())
+                .is_some_and(|(a, b)| a == b)
+    } else {
+        symlink_exists(&link)
+    };
     let parent_enabled = kind == NginxObjectKind::Domain
         || symlink_exists(&config.nginx.domains_enabled_dir.join(domain));
     let metadata = path.metadata()?;
@@ -329,8 +345,9 @@ pub fn delete_object(
     domain: &str,
     name: &str,
 ) -> Result<()> {
-    set_enabled(config, kind, domain, name, false)?;
     let path = available_path(config, kind, domain, name)?;
+    ensure_no_symlink_ancestors(&config.nginx.domains_available_dir, &path)?;
+    set_enabled(config, kind, domain, name, false)?;
     if kind == NginxObjectKind::Domain {
         let domain_dir = path
             .parent()
@@ -357,10 +374,28 @@ pub fn set_enabled(
         ensure_regular_file(&available, "nginx object")?;
     }
     let link = enabled_path(config, kind, domain, name)?;
+    let base = if kind == NginxObjectKind::Domain {
+        &config.nginx.domains_enabled_dir
+    } else {
+        &config.nginx.domains_available_dir
+    };
+    ensure_no_symlink_ancestors(base, link.parent().context("enabled path has no parent")?)?;
     if enabled {
         if symlink_exists(&link) {
             let metadata = fs::symlink_metadata(&link)?;
             if metadata.file_type().is_symlink() {
+                if config.platform == crate::config::Platform::Asuswrt {
+                    let expected = if kind == NginxObjectKind::Domain {
+                        available.parent().context("domain path has no parent")?
+                    } else {
+                        &available
+                    };
+                    anyhow::ensure!(
+                        link.canonicalize()? == expected.canonicalize()?,
+                        "enabled path points to the wrong site: {}",
+                        link.display()
+                    );
+                }
                 return Ok(());
             }
             bail!("enabled path exists and is not a symlink");
@@ -376,6 +411,22 @@ pub fn set_enabled(
             NginxObjectKind::Subfolder => {
                 PathBuf::from("../subfolders-available").join(config_file_name(name)?)
             }
+        };
+        let target = if config.platform == crate::config::Platform::Asuswrt {
+            let expected = if kind == NginxObjectKind::Domain {
+                available.parent().context("domain path has no parent")?
+            } else {
+                &available
+            };
+            if link.parent().unwrap().join(&target).canonicalize().ok()
+                == Some(expected.canonicalize()?)
+            {
+                target
+            } else {
+                expected.canonicalize()?
+            }
+        } else {
+            target
         };
         unix_fs::symlink(target, link)?;
     } else if symlink_exists(&link) {
@@ -634,9 +685,7 @@ pub(crate) fn has_enabled_managed_hostname(config: &AppConfig, host: &str) -> Re
     Ok(false)
 }
 
-pub fn http_forwarder_files(
-    config: &AppConfig,
-) -> Result<std::collections::BTreeMap<PathBuf, String>> {
+pub(crate) fn server_names_fragment(config: &AppConfig) -> Result<String> {
     let mut names = BTreeSet::new();
     for object in list_objects(config, false)? {
         if !object.enabled {
@@ -692,12 +741,18 @@ pub fn http_forwarder_files(
         }
     }
 
-    let global = crate::nginx_render::load_global(config)?;
-    let servers = if names.is_empty() {
+    Ok(if names.is_empty() {
         "\"\";".into()
     } else {
         format!("{};", names.into_iter().collect::<Vec<_>>().join(" "))
-    };
+    })
+}
+
+pub fn http_forwarder_files(
+    config: &AppConfig,
+) -> Result<std::collections::BTreeMap<PathBuf, String>> {
+    let global = crate::nginx_render::load_global(config)?;
+    let servers = server_names_fragment(config)?;
     let data = [("settings/servers.conf".into(), servers.clone())]
         .into_iter()
         .collect();
@@ -715,16 +770,16 @@ pub fn http_forwarder_files(
     let rendered = env
         .get_template("conf.d/05-http-to-https.conf.jinja")?
         .render(minijinja::value::Serde(context))?;
-    let mut files: std::collections::BTreeMap<std::path::PathBuf, String> = [
+    let mut files = std::collections::BTreeMap::from([
         (
-            config.nginx.inputs_dir.join("servers.conf"),
+            config.nginx.root_dir.join("settings/servers.conf"),
             servers.clone(),
         ),
-        (config.nginx.root_dir.join("settings/servers.conf"), servers),
         (config.nginx.http_forwarder_path.clone(), rendered),
-    ]
-    .into_iter()
-    .collect();
+    ]);
+    if config.platform == crate::config::Platform::Linux {
+        files.insert(config.nginx.inputs_dir.join("servers.conf"), servers);
+    }
     files.extend(crate::nginx_ingress::runtime_files(
         config,
         &crate::nginx_render::with_path_defaults(global, config),
@@ -796,10 +851,20 @@ pub fn list_logs(config: &AppConfig) -> Result<Vec<NginxLogEntry>> {
     }
     for entry in WalkDir::new(&config.nginx.log_dir).follow_links(false) {
         let entry = entry?;
-        if !entry.file_type().is_file() {
+        let metadata = if entry.file_type().is_file() {
+            entry.metadata()?
+        } else if config.platform == crate::config::Platform::Asuswrt
+            && entry.file_type().is_symlink()
+        {
+            let mut roots = config.firewall.log_dirs.clone();
+            roots.push(config.nginx.log_dir.clone());
+            match crate::util::open_contained_log(entry.path(), &roots) {
+                Ok(file) => file.metadata()?,
+                Err(_) => continue,
+            }
+        } else {
             continue;
-        }
-        let metadata = entry.metadata()?;
+        };
         logs.push(NginxLogEntry {
             path: entry
                 .path()
@@ -818,13 +883,19 @@ pub fn read_log(config: &AppConfig, path: &str) -> Result<String> {
     let relative = safe_relative_path(path)?;
     validate_relative_characters(&relative)?;
     let target = config.nginx.log_dir.join(relative);
-    ensure_no_symlink_ancestors(&config.nginx.log_dir, &target)?;
-    let metadata = fs::symlink_metadata(&target)
-        .with_context(|| format!("failed to inspect {}", target.display()))?;
-    if !metadata.file_type().is_file() {
-        bail!("log path is not a regular file");
-    }
-    let mut file = fs::File::open(&target)?;
+    let mut file = if config.platform == crate::config::Platform::Asuswrt {
+        let mut roots = config.firewall.log_dirs.clone();
+        roots.push(config.nginx.log_dir.clone());
+        crate::util::open_contained_log(&target, &roots)?
+    } else {
+        ensure_no_symlink_ancestors(&config.nginx.log_dir, &target)?;
+        let metadata = fs::symlink_metadata(&target)?;
+        if !metadata.file_type().is_file() {
+            bail!("log path is not a regular file");
+        }
+        fs::File::open(&target)?
+    };
+    let metadata = file.metadata()?;
     let limit = config.nginx.log_read_bytes as u64;
     let start = metadata.len().saturating_sub(limit);
     file.seek(SeekFrom::Start(start))?;
@@ -925,6 +996,40 @@ fn ensure_regular_file(path: &Path, label: &str) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn router_enabled_links_validate_target_and_support_custom_layout() {
+        let temp = tempdir().unwrap();
+        let mut config = test_config(temp.path());
+        config.nginx.domains_available_dir = temp.path().join("sites");
+        config.nginx.domains_enabled_dir = temp.path().join("active");
+        let site = config.nginx.domains_available_dir.join("example.test");
+        fs::create_dir_all(&site).unwrap();
+        fs::write(site.join("root.conf"), "server {}").unwrap();
+        set_enabled(
+            &config,
+            NginxObjectKind::Domain,
+            "example.test",
+            "example.test",
+            true,
+        )
+        .unwrap();
+        let link = config.nginx.domains_enabled_dir.join("example.test");
+        assert_eq!(link.canonicalize().unwrap(), site.canonicalize().unwrap());
+        fs::remove_file(&link).unwrap();
+        unix_fs::symlink("missing", &link).unwrap();
+        assert!(
+            set_enabled(
+                &config,
+                NginxObjectKind::Domain,
+                "example.test",
+                "example.test",
+                true
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read_link(&link).unwrap(), Path::new("missing"));
+    }
 
     fn test_config(root: &Path) -> AppConfig {
         let mut config = AppConfig::default();

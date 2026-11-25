@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Separate router configuration from durable operational state, consolidate firewall policy, migrate YAML-era HTTP-01 recovery records, and stop storing derived Nginx lists in the router input directory.
+
+## 0.13.0
+
+### Fixed
+
+- Reject unknown HTTPS hosts without requiring a fallback certificate, preserving domain-specific certificate selection on router and Linux. Retire `default_certificate_dir` while accepting existing YAML, and stop creating dummy certificates during NGINX initialization.
+
 ## 0.12.2
 
 ### Added

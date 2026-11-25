@@ -453,7 +453,24 @@ impl AppState {
                 })?,
             );
         }
-        let mut transaction = crate::nginx_render::FileTransaction::apply(&self.config, files)?;
+        let mut transaction = if self.config.platform == crate::config::Platform::Asuswrt {
+            // A deployment already linked to the current dehydrated output is
+            // a no-op. Never overwrite an older immutable generation.
+            let source_root = source.canonicalize()?;
+            for path in files.keys() {
+                let resolved = crate::util::trusted_file_path(path)?;
+                let input =
+                    crate::util::trusted_file_path(&source.join(path.file_name().unwrap()))?;
+                anyhow::ensure!(
+                    !resolved.starts_with(&source_root) || resolved == input,
+                    "certificate destination refers to a different dehydrated generation: {}",
+                    path.display()
+                );
+            }
+            crate::nginx_render::FileTransaction::apply_router_certificates(files)?
+        } else {
+            crate::nginx_render::FileTransaction::apply(&self.config, files)?
+        };
         let result = async {
             let test = crate::api::nginx::nginx_test(self).await?;
             if !test.success {
@@ -539,8 +556,13 @@ impl AppState {
         if matches!(spec.method, CertificateMethod::Http) {
             fs::create_dir_all(self.config.certificates.certs_dir.join("acme-challenge")).await?;
         }
-        write_atomic(&domains_path, domains.as_bytes(), 0o600).await?;
-        write_atomic(&config_path, config.as_bytes(), 0o600).await?;
+        if self.config.platform == crate::config::Platform::Asuswrt {
+            crate::util::write_trusted_file(&domains_path, domains.as_bytes(), Some(0o600))?;
+            crate::util::write_trusted_file(&config_path, config.as_bytes(), Some(0o600))?;
+        } else {
+            write_atomic(&domains_path, domains.as_bytes(), 0o600).await?;
+            write_atomic(&config_path, config.as_bytes(), 0o600).await?;
+        }
         Ok(())
     }
 
@@ -789,7 +811,11 @@ pub async fn download_latest_dehydrated(config: &AppConfig) -> Result<Dehydrated
         bail!("GitHub response does not look like the dehydrated script");
     }
 
-    write_atomic(&path, text.as_bytes(), 0o700).await?;
+    if config.platform == crate::config::Platform::Asuswrt {
+        crate::util::write_trusted_file(&path, text.as_bytes(), Some(0o700))?;
+    } else {
+        write_atomic(&path, text.as_bytes(), 0o700).await?;
+    }
     Ok(DehydratedUpdate {
         path,
         source: DEHYDRATED_DOWNLOAD_URL.into(),
