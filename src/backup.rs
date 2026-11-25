@@ -222,8 +222,8 @@ fn write_router_archive(
             .into_iter()
             .filter_entry(|entry| {
                 let name = entry.file_name().to_string_lossy();
-                !name.starts_with(".maestro-backup-")
-                    && !(name.starts_with("maestro-backup-") && name.ends_with(".tar.gz"))
+                !(name.starts_with(".maestro-backup-")
+                    || name.starts_with("maestro-backup-") && name.ends_with(".tar.gz"))
             })
         {
             let entry = entry?;
