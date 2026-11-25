@@ -253,6 +253,7 @@
       </form>{/if}{/if}
     </section>
   {:else if wg && !wg.peers_writable}<p class="policy-note">To enable peer management, authorize wireguard_peers in the root-owned helper policy.</p>{/if}
+  {#if peerDraft && !peerConfig}<p class="form-error">The peer configuration is currently unavailable. Refresh to verify permission and revision before saving.</p><button disabled={busy} onclick={()=>{peerDraft=null;peerRevision=''}}>Cancel peer edits</button>{/if}
 {/if}
 
 <dialog bind:this={notesDialog} class="confirm-dialog" aria-label="Machine notes"><h2>{notesMachine?.name} — Notes</h2><p style="white-space:pre-wrap;overflow-wrap:anywhere">{notesMachine?.notes || 'No notes'}</p><button type="button" onclick={()=>notesDialog?.close()}>Close notes</button></dialog>

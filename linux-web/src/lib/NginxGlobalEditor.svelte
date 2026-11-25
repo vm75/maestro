@@ -50,7 +50,7 @@
       const next=clone(draft)
       next.allowed_ips=lines(allowed);next.free_subdomains=lines(suffixes)
       if (http.wan && !confirm('Remove the old firmware WAN gate from these settings? Existing router-owned rules must be released by the administrator.')) return
-      if(manageHttp) next.http_access={...http,wan:null}
+      if(manageHttp) next.http_access={...http,wan:null,externally_managed_wan:http.mode==='always'?false:http.externally_managed_wan}
       else delete next.http_access
       await onSave(next)
     } catch(e) {error=String(e)}
@@ -67,9 +67,9 @@
         <label>HTTP mode<select bind:value={http.mode}><option value="off">Off</option><option value="renewal_only">Certificate validation only</option><option value="always">Always on with redirects</option></select></label>
         <label>Challenge listener<select bind:value={http.listener_profile}>{#each listenerNames(draft) as name}<option value={name}>{name}</option>{/each}{#if !listenerNames(draft).includes(http.listener_profile)}<option value={http.listener_profile}>Missing choice: {http.listener_profile}</option>{/if}</select></label>
         <label>Maximum validation window (seconds)<input type="number" min="60" max="86400" required value={http.window_seconds} oninput={e=>http.window_seconds=number(e.currentTarget.value)}/></label>
-        <label><input type="checkbox" bind:checked={http.externally_managed_wan}/> WAN access managed externally</label>
+        <label><input type="checkbox" bind:checked={http.externally_managed_wan} disabled={http.mode!=='renewal_only'}/> WAN access managed externally (validation only)</label>
       </div>
-      {#if http.mode==='renewal_only'}<p class="muted">Validation-only mode closes managed public HTTP outside HTTP-01 batches. Normal HTTP redirects are unavailable. DNS-01 never opens a window.</p>{:else if http.mode==='off'}<p class="muted">Managed HTTP validation is off. Use DNS-01 or separately provision validation ingress.</p>{:else}<p class="muted">Normal HTTP redirects are enabled where configured; external ingress remains operator-managed.</p>{/if}
+      {#if http.mode==='renewal_only'}<p class="muted">Validation-only mode closes managed public HTTP outside HTTP-01 batches. Normal HTTP redirects are unavailable. DNS-01 never opens a window.</p>{#if !http.externally_managed_wan}<p class="form-error" role="alert">HTTP-01 issuance requires explicit external WAN management. Acknowledge this only after configuring the host firewall and upstream ingress.</p>{/if}{:else if http.mode==='off'}<p class="muted">HTTP-01 is disabled. Use DNS-01 or enable certificate validation only.</p>{:else}<p class="muted">Normal HTTP redirects are enabled where configured; external ingress remains operator-managed.</p>{/if}
     {/if}
     <details open><summary>Listener profiles</summary>
       <h4>Legacy listener</h4>
