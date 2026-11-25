@@ -998,10 +998,14 @@ struct FileBackup {
 }
 
 fn backup_file(path: &std::path::Path) -> Result<Option<FileBackup>> {
-    use std::os::unix::fs::MetadataExt;
-    match std::fs::read(path) {
-        Ok(bytes) => {
-            let metadata = std::fs::metadata(path)?;
+    use std::{io::Read, os::unix::fs::{MetadataExt, OpenOptionsExt}};
+    match std::fs::OpenOptions::new().read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path) {
+        Ok(mut file) => {
+            let metadata = file.metadata()?;
+            anyhow::ensure!(metadata.is_file(), "managed file is not regular: {}", path.display());
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
             Ok(Some(FileBackup {
                 bytes,
                 permissions: metadata.permissions(),
@@ -1090,13 +1094,13 @@ impl FileTransaction {
     ) -> Result<Self> {
         // Preflight before arming rollback: a rejected later path must not
         // rewrite earlier files that were never modified.
-        let mut previous = Vec::new();
+        let mut previous = BTreeMap::new();
         for path in files.keys().chain(removals) {
             ensure_managed_path(config, path)?;
-            previous.push((path.clone(), backup_file(path)?));
+            previous.insert(path.clone(), backup_file(path)?);
         }
-        let transaction = Self {
-            previous,
+        let mut transaction = Self {
+            previous: Vec::new(),
             committed: false,
         };
         if let Some(content) = files.get(&global_path(config)) {
@@ -1139,6 +1143,7 @@ impl FileTransaction {
         }
         for (path, content) in files {
             use std::os::unix::fs::PermissionsExt;
+            ensure_managed_path(config, &path)?;
             let private_key = path
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -1153,9 +1158,16 @@ impl FileTransaction {
             } else {
                 nginx::atomic_write(&path, content.as_bytes())?;
             }
+            if let Some(original) = previous.remove(&path) {
+                transaction.previous.push((path, original));
+            }
         }
         for path in removals {
+            ensure_managed_path(config, path)?;
             std::fs::remove_file(path)?;
+            if let Some(original) = previous.remove(path) {
+                transaction.previous.push((path.clone(), original));
+            }
         }
         Ok(transaction)
     }
@@ -1517,6 +1529,7 @@ mod tests {
         fs::create_dir_all(&inputs).unwrap();
         fs::create_dir_all(&runtime).unwrap();
         fs::create_dir_all(config.nginx.inputs_dir.parent().unwrap()).unwrap();
+        fs::remove_dir_all(&config.nginx.root_dir).unwrap();
         symlink(&inputs, &config.nginx.inputs_dir).unwrap();
         symlink(&runtime, &config.nginx.root_dir).unwrap();
         let file = config.nginx.root_dir.join("managed.conf");
