@@ -168,10 +168,9 @@ fn validate_policy(settings: &Settings, route: bool, depth: usize) -> Result<()>
                     value.as_str(),
                     Some("inherit" | "no_cache" | "immutable" | "pwa")
                 ),
-                "x_frame_options" => matches!(
-                    value.as_str(),
-                    Some("sameorigin" | "deny" | "upstream")
-                ),
+                "x_frame_options" => {
+                    matches!(value.as_str(), Some("sameorigin" | "deny" | "upstream"))
+                }
                 "forwarded_for" => matches!(value.as_str(), Some("replace" | "append")),
                 "spa_fallback" | "rewrite_to" => value.as_str().is_some_and(|s| {
                     s.is_empty()
@@ -1910,14 +1909,27 @@ mod tests {
                 "app"
             };
             let settings = json!({"disable_root": false, "cache_policy": "no_cache", "spa_fallback": "/index.html", "routes": [{"path": "/blocked", "x_frame_options": "deny", "children": [{"path": "/blocked/connector", "x_frame_options": "upstream"}]}]}).as_object().unwrap().clone();
-            let rendered = render_site(&global, &settings, kind, "example.test", name, &[]).unwrap();
-            assert!(!rendered.contains("add_header X-Frame-Options                   \"SAMEORIGIN\""));
+            let rendered =
+                render_site(&global, &settings, kind, "example.test", name, &[]).unwrap();
+            assert!(
+                !rendered.contains("add_header X-Frame-Options                   \"SAMEORIGIN\"")
+            );
             assert_eq!(rendered.matches("add_header X-Frame-Options").count(), 2);
             assert!(rendered.contains("add_header X-Frame-Options                   \"DENY\""));
             assert!(rendered.contains("add_header X-Content-Type-Options"));
             let defaults = json!({"disable_root": false}).as_object().unwrap().clone();
-            let rendered = render_site(&GlobalSettings::default(), &defaults, kind, "example.test", name, &[]).unwrap();
-            assert!(rendered.contains("add_header X-Frame-Options                   \"SAMEORIGIN\""));
+            let rendered = render_site(
+                &GlobalSettings::default(),
+                &defaults,
+                kind,
+                "example.test",
+                name,
+                &[],
+            )
+            .unwrap();
+            assert!(
+                rendered.contains("add_header X-Frame-Options                   \"SAMEORIGIN\"")
+            );
         }
     }
 
