@@ -299,8 +299,14 @@ jobs:
 
   tag:
     name: Tag new stable version
-    needs: [source, full, stable]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [source, full, stable, linux-ui, linux-native]
+    # Main intentionally skips autofix. Override the implicit success() gate
+    # and explicitly require every validation job to have succeeded.
+    if: >-
+      ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          needs.source.result == 'success' && needs.full.result == 'success' &&
+          needs.stable.result == 'success' && needs.linux-ui.result == 'success' &&
+          needs.linux-native.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     concurrency:

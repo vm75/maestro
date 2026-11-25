@@ -40,9 +40,11 @@ automatic PR checks in branch protection if ordinary PRs should remain manual.
 
 ## Automatic release tags
 
-After both Rust 1.85 CI and stable compatibility pass for a push to `main`,
-the tagging job reads the tested commit's Cargo version and verifies the lockfile
-matches. If main has advanced, that older run skips tagging and leaves the decision
+After Rust 1.85 CI, stable compatibility, Linux UI parity and native Linux
+integration all pass for a push to `main`, the tagging job reads the tested
+commit's Cargo version and verifies the lockfile matches. The skipped auto-fix
+job on `main` does not block tagging; failed, skipped or cancelled validation
+jobs do. If main has advanced, that older run skips tagging and leaves the decision
 to the newer run. A new stable version greater than existing stable tags gets an
 annotated `vX.Y.Z` tag on the exact tested commit. Existing version tags are left
 untouched, so later merges without a version bump skip publication. Prereleases
