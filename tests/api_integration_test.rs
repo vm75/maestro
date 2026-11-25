@@ -2231,7 +2231,11 @@ async fn linux_shell_assets_are_served_only_on_linux() {
             "HTTP certificate access",
         ),
         ("/linux-assets/Network.js", "text/javascript", "Wake-on-LAN"),
-        ("/linux-assets/BanShield.js", "text/javascript", "Security tuning"),
+        (
+            "/linux-assets/BanShield.js",
+            "text/javascript",
+            "Security tuning",
+        ),
         ("/linux-assets/Terminal.js", "text/javascript", "terminal"),
         ("/linux-assets/style.css", "text/css", ".app-shell"),
     ] {

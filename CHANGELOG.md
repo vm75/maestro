@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.12.2
+
+### Added
+
+- Expose shared NGINX, certificate, Ban Shield, AdGuard, Wake-on-LAN and WireGuard workflows in the native Linux Svelte workspace, with action-specific permissions.
+- Add Linux browser regression coverage and independent native Linux integration checks in CI.
+
+### Fixed
+
+- Preserve certificate drafts when permissions change, report certificate operation state and restore shared NGINX editing and policy workflows.
+- Harden opt-in Linux firewall enforcement and helper authorization while preserving router behavior.
+
 ## 0.12.1
 
 ### Fixed

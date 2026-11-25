@@ -268,11 +268,19 @@ curl --silent --show-error --fail-with-body -X PUT \
     --data-binary "@$lab/nginx-settings.json" "$api/api/nginx/settings" >/dev/null
 get /api/nginx/objects/domain/linux.test/linux.test | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["settings"]["client_max_body_size"] == "3M" and x["settings"]["enable_lanonly"] is False and "include snippets/restrict.conf;" not in x["content"], x'
 # The bundle intentionally drops scanner user agents, including curl's default.
-code=$(curl --silent --show-error --insecure --noproxy '*' \
-    --user-agent 'Maestro-Linux-Smoke/1.0' \
-    --resolve "linux.test:$nginx_tls_port:127.0.0.1" \
-    --output /dev/null --write-out '%{http_code}' "https://linux.test:$nginx_tls_port/")
-[[ "$code" == 404 ]] || { echo "Expected managed site HTTP 404, got $code" >&2; exit 1; }
+# nginx acknowledges reload before the new workers serve the managed TLS host.
+for attempt in {1..50}; do
+    if code=$(curl --silent --show-error --insecure --noproxy '*' \
+        --connect-timeout 1 --max-time 2 \
+        --user-agent 'Maestro-Linux-Smoke/1.0' \
+        --resolve "linux.test:$nginx_tls_port:127.0.0.1" \
+        --output /dev/null --write-out '%{http_code}' "https://linux.test:$nginx_tls_port/" \
+        2>"$lab/managed-tls-error.log") && [[ "$code" == 404 ]]; then
+        break
+    fi
+    sleep 0.1
+done
+[[ "$code" == 404 ]] || { cat "$lab/managed-tls-error.log" >&2; echo "Expected managed site HTTP 404, got $code" >&2; exit 1; }
 curl --silent --show-error --fail-with-body -X DELETE \
     -H "Authorization: Bearer $token" "$api/api/nginx/objects/domain/linux.test/linux.test" >/dev/null
 [[ ! -e "$lab/nginx/domains-available/linux.test/root.conf" ]]
