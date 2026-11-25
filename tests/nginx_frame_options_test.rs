@@ -109,6 +109,7 @@ pid nginx.pid;
 error_log error.log;
 events {{ worker_connections 64; }}
 http {{
+    access_log off;
     client_body_temp_path client-body;
     proxy_temp_path proxy;
     fastcgi_temp_path fastcgi;
