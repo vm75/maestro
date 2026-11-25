@@ -218,6 +218,7 @@ plus these options (also usable as site defaults unless noted):
 | `access_log` | `true` | Ordinary access records; security/error logs remain enabled |
 | `proxy_transport` | `websocket` | `websocket`, `http`, or `sse` |
 | `cache_policy` | Inherit current policy | `inherit`, `no_cache`, `immutable`, or `pwa` |
+| `x_frame_options` | `sameorigin` | `sameorigin`, `deny`, or `upstream` (no nginx injection; backend headers preserved) |
 | `backend_auth` | `false` | Delegate auth/challenges to the backend explicitly |
 | `forwarded_for` | `replace` | `replace` client forwarding chain or deliberately `append` it |
 | `hide_etag` | `false` | Hide the backend ETag response header |
@@ -492,3 +493,17 @@ successful checks are absent, failed checks and other clients remain, quiet
 children/fallbacks stay quiet, explicit opt-in restores logging, and trap/error
 records remain. An empty filter and an unchanged raw custom server are covered.
 All paths, certificates and services used by these tests are temporary/local.
+
+### Application-managed framing
+
+Set **X-Frame-Options** to `upstream` in the managed Vaultwarden site editor
+(or set `x_frame_options: upstream` in its settings). Vaultwarden handles its
+own framing policy, including authentication connector exceptions. This option
+does not remove upstream headers or alter the other nginx security headers.
+Sites inherit the global site default unless explicitly overridden; routes and
+SPA fallbacks inherit the effective application/parent route setting. Mounted
+subfolders inherit global site defaults independently of their domain. Omit the
+setting to inherit; existing configurations keep `sameorigin`. Custom sites
+that include the native `snippets/security-headers.conf` retain its original
+behavior. Downgrading to an older Maestro requires removing explicit
+`x_frame_options` settings first.

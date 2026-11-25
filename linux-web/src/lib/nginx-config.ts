@@ -31,6 +31,7 @@ const settingHelp: Record<string,string> = {
       clear_origin: 'Remove the Origin header sent to the backend. Leave No unless the application specifically requires this.',
       access_log: 'Write normal request logs. Setting No keeps ordinary requests quiet while security traps remain logged.',
       backend_auth: 'Pass Authorization and WWW-Authenticate through to the backend and disable nginx basic authentication for this app. The backend authenticates users.',
+      x_frame_options: "Add SAMEORIGIN or DENY at nginx, or choose upstream to preserve the application's own framing policy without injecting X-Frame-Options. Upstream requires the application to manage clickjacking protection.",
       hide_etag: 'Remove the backend’s ETag response header. Useful for app-shell routes that should not reuse cached versions.',
       disable_proxy_redirect: 'Pass backend redirects through without nginx rewriting them. Useful when the application already knows its public URL.',
       client_max_body_size: 'Maximum request/upload body in normal proxy mode, such as 128M. Does not limit downloads. Large uploads uses its separate limit; 0 means unlimited.',
@@ -82,6 +83,7 @@ export const policyFields: Field[] = [
   {key:'clear_origin',label:'Clear Origin header',type:'bool',fallback:false},
   {key:'access_log',label:'Ordinary access logging',type:'bool',fallback:true},
   {key:'backend_auth',label:'Backend authentication',type:'bool',fallback:false},
+  {key:'x_frame_options',label:'X-Frame-Options',type:'select',options:['sameorigin','deny','upstream'],fallback:'sameorigin'},
   {key:'hide_etag',label:'Hide ETag',type:'bool',fallback:false},
   {key:'disable_proxy_redirect',label:'Disable proxy redirects',type:'bool',fallback:false},
   {key:'client_max_body_size',label:'Body size limit',type:'text',fallback:'100M'},
@@ -119,6 +121,7 @@ export function visiblePolicyFields(kind: string, value: Settings, inherited: Se
   const routes=value.routes ?? inherited.routes, routeDefaults=Array.isArray(routes)&&routes.length>0
   return policyFields.filter(f=>{
     if(f.domainOnly)return kind==='domain'
+    if(f.key==='x_frame_options')return true
     if(!proxy)return false
     if(['large_upload_max_body_size','client_upload_timeout'].includes(f.key))return !!large||routeDefaults
     if(f.key==='client_max_body_size')return !large||routeDefaults

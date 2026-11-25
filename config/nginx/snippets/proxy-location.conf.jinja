@@ -39,9 +39,9 @@ add_header Access-Control-Allow-Origin "{{ policy.cors_origin }}" always;
 add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
 add_header Access-Control-Allow-Headers "Content-Type, Cache-Control" always;
 {% endif %}
-{% if policy.cache in ['no_cache', 'immutable', 'pwa'] or policy.cors_origin %}
-{% include 'snippets/security-headers.conf' %}
-{% endif %}
+{# Own the complete header set so upstream mode cannot inherit nginx's XFO. #}
+{% set frame_options = policy.frame_options %}
+{% include 'snippets/security-headers.conf.jinja' %}
 {% if policy.backend_auth %}
 {% include 'snippets/proxy-backend-auth.conf' %}
 {% endif %}

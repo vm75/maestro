@@ -23,6 +23,7 @@
       ['enable_restricted_sessions', 'LAN-only Sessions route', 'bool', false],
       ['clear_origin', 'Clear Origin header', 'bool', false], ['access_log', 'Ordinary access logging', 'bool', true],
       ['backend_auth', 'Backend authentication', 'bool', false], ['hide_etag', 'Hide ETag', 'bool', false],
+      ['x_frame_options', 'X-Frame-Options', ['sameorigin', 'deny', 'upstream'], 'sameorigin'],
       ['disable_proxy_redirect', 'Disable proxy redirects', 'bool', false],
       ['client_max_body_size', 'Body size limit', 'text', '100M'], ['large_upload_max_body_size', 'Large upload limit', 'text', '5G'],
       ['proxy_connect_timeout', 'Connect timeout', 'text', '10s'], ['proxy_session_timeout', 'Session timeout', 'text', '3600s'],
@@ -45,6 +46,7 @@
       clear_origin: 'Remove the Origin header sent to the backend. Leave No unless the application specifically requires this.',
       access_log: 'Write normal request logs. Setting No keeps ordinary requests quiet while security traps remain logged.',
       backend_auth: 'Pass Authorization and WWW-Authenticate through to the backend and disable nginx basic authentication for this app. The backend authenticates users.',
+      x_frame_options: "Add SAMEORIGIN or DENY at nginx, or choose upstream to preserve the application's own framing policy without injecting X-Frame-Options. Upstream requires the application to manage clickjacking protection.",
       hide_etag: 'Remove the backend’s ETag response header. Useful for app-shell routes that should not reuse cached versions.',
       disable_proxy_redirect: 'Pass backend redirects through without nginx rewriting them. Useful when the application already knows its public URL.',
       client_max_body_size: 'Maximum request/upload body in normal proxy mode, such as 128M. Does not limit downloads. Large uploads uses its separate limit; 0 means unlimited.',
@@ -119,7 +121,7 @@
       try { routeDefaults = (routeText ? JSON.parse(routeText) : inherited.routes || []).length > 0 } catch { }
       for (const field of form.querySelectorAll('[data-nginx-setting]')) {
         const key = field.dataset.nginxSetting;
-        let visible = proxy || key === 'enable_lanonly' || nginxDomainPolicyKeys.has(key);
+        let visible = proxy || key === 'enable_lanonly' || key === 'x_frame_options' || nginxDomainPolicyKeys.has(key);
         if (visible && !nginxDomainPolicyKeys.has(key) && key !== 'enable_lanonly') {
           if (['large_upload_max_body_size', 'client_upload_timeout'].includes(key)) visible = largeUpload || routeDefaults;
           if (key === 'client_max_body_size') visible = !largeUpload || routeDefaults;

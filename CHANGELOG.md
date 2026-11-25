@@ -4,6 +4,12 @@
 
 - Separate router configuration from durable operational state, consolidate firewall policy, migrate YAML-era HTTP-01 recovery records, and stop storing derived Nginx lists in the router input directory.
 
+## 0.14.0
+
+### Added
+
+- Configure nginx X-Frame-Options per managed site and route, including application-managed framing for Vaultwarden. Existing sites retain SAMEORIGIN by default, and custom configurations retain the native security header include.
+
 ## 0.13.1
 
 ### Fixed

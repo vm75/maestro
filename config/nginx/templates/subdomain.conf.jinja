@@ -12,7 +12,8 @@ server {
     {% endif %}
     {% if _rh_check_ingress is defined %}if ($rh_wrong_ingress) { return 444; }{% endif %}
     {% if _rh_host_check is defined %}{{ _rh_host_check }}{% endif %}
-    include snippets/security-headers.conf;
+    {% set frame_options = proxy.frame_options %}
+    {% include 'snippets/security-headers.conf.jinja' %}
     include snippets/acme-challenge.conf;
     {% if _rh_access_checks is defined %}
     {{ _rh_access_checks }}

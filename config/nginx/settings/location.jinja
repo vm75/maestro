@@ -18,6 +18,7 @@
 {% set backend_auth = route.backend_auth | default(parent.backend_auth) %}
 {% set forwarded_for = route.forwarded_for | default(parent.forwarded_for) %}
 {% set hide_etag = route.hide_etag | default(parent.hide_etag) %}
+{% set frame_options = route.x_frame_options | default(parent.frame_options) %}
 {% set disable_proxy_redirect = route.disable_proxy_redirect | default(parent.disable_proxy_redirect) %}
 {% set spa_fallback = route.spa_fallback | default(parent.spa_fallback) %}
 {% set rewrite_to = route.rewrite_to | default('') %}
