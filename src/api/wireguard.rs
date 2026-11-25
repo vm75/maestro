@@ -203,27 +203,20 @@ pub async fn update_config(
         .to_string_lossy()
         .to_string();
 
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-    let _ = crate::nginx::atomic_write(path, content.as_bytes());
-
-    let temp_path = std::env::temp_dir().join(format!("wg-sync-{}.conf", iface));
-    tokio::fs::write(&temp_path, content.as_bytes())
-        .await
+    let temporary = crate::util::PrivateTemp::new(&state.config.paths.runtime_dir, content.as_bytes())
+        .map_err(ApiError::internal)?;
+    crate::util::write_trusted_file(path, content.as_bytes(), Some(0o600))
         .map_err(ApiError::internal)?;
 
     let result = state
         .runner
         .run(
             &state.config.commands.wg,
-            ["syncconf", &iface, &temp_path.to_string_lossy()],
+            ["syncconf", &iface, &temporary.0.to_string_lossy()],
             Duration::from_secs(5),
         )
         .await
         .map_err(ApiError::internal)?;
-
-    let _ = tokio::fs::remove_file(&temp_path).await;
 
     if !result.success && !result.simulated {
         return Err(ApiError::conflict(format!(

@@ -341,7 +341,7 @@ fn rename_service(
     };
     let manager = for_platform(state.config.platform);
     let target = manager.init_directory(&state.config).join(target_name);
-    if target.exists() {
+    if fs::symlink_metadata(&target).is_ok() {
         return Err(ApiError::bad_request("service target path already exists"));
     }
     fs::rename(source, &target).map_err(|error| {

@@ -60,7 +60,13 @@ pub fn render_ui_file(config: &AppConfig) -> Result<std::path::PathBuf> {
     if let Some(parent) = config.asus_ui.rendered_page.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&config.asus_ui.rendered_page, render_asus_ui(config)).with_context(|| {
+    let content = render_asus_ui(config);
+    let result = if config.platform == crate::config::Platform::Asuswrt {
+        crate::util::write_trusted_file(&config.asus_ui.rendered_page, content.as_bytes(), Some(0o644))
+    } else {
+        fs::write(&config.asus_ui.rendered_page, content).map_err(Into::into)
+    };
+    result.with_context(|| {
         format!(
             "failed to render {}",
             config.asus_ui.rendered_page.display()
@@ -126,7 +132,12 @@ pub fn install_menu_entry(config: &AppConfig) -> Result<()> {
         "{{\nmenuName: \"Maestro\",\nindex: \"{menu_index}\",\ntab: [\n{{url: \"{page}\", tabName: \"__INHERIT__\"}},\n{{url: \"NULL\", tabName: \"__INHERIT__\"}}\n]\n}},\n"
     );
     menu_tree.replace_range(start..end, &entry);
-    fs::write(&config.asus_ui.menu_tree, menu_tree).with_context(|| {
+    let result = if config.platform == crate::config::Platform::Asuswrt {
+        crate::util::write_trusted_file(&config.asus_ui.menu_tree, menu_tree.as_bytes(), None)
+    } else {
+        fs::write(&config.asus_ui.menu_tree, menu_tree).map_err(Into::into)
+    };
+    result.with_context(|| {
         format!(
             "failed to update ASUS menu tree {}",
             config.asus_ui.menu_tree.display()

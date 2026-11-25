@@ -27,12 +27,17 @@ pub struct Stores {
     pub adguard: Arc<RwLock<Option<AdGuardConfig>>>,
     data_dir: Arc<std::path::PathBuf>,
     firewall_policy_path: PathBuf,
+    router: bool,
 }
 
 impl Stores {
     pub async fn load(config: &AppConfig) -> Result<Self> {
         let data_dir = Arc::new(config.paths.data_dir.clone());
-        let certificates_path = data_dir.join("certificates.json");
+        let router = config.platform == crate::config::Platform::Asuswrt;
+        let resolve = |path: PathBuf| -> Result<PathBuf> {
+            if router { crate::util::trusted_file_path(&path) } else { Ok(path) }
+        };
+        let certificates_path = resolve(data_dir.join("certificates.json"))?;
         let mut certificates: Vec<CertificateSpec> = load_json(&certificates_path).await?;
         let mut discovered =
             discover_dehydrated_certificates(&config.certificates.certs_dir).await?;
@@ -49,26 +54,39 @@ impl Stores {
             imported += 1;
         }
         if imported > 0 {
-            save_json(&certificates_path, &certificates).await?;
+            if router {
+                crate::util::write_trusted_file(&data_dir.join("certificates.json"), &serde_json::to_vec_pretty(&certificates)?, Some(0o600))?;
+            } else {
+                save_json(&certificates_path, &certificates).await?;
+            }
         }
         let firewall_policy_path = config.firewall_policy_path();
-        let firewall_policy = load_json(&firewall_policy_path).await?;
+        let firewall_policy = load_json(&resolve(firewall_policy_path.clone())?).await?;
         Ok(Self {
             certificates: Arc::new(RwLock::new(certificates)),
             wol_machines: Arc::new(RwLock::new(
-                load_json(&data_dir.join("wol-machines.json")).await?,
+                load_json(&resolve(data_dir.join("wol-machines.json"))?).await?,
             )),
             firewall_policy: Arc::new(RwLock::new(firewall_policy)),
             adguard: Arc::new(RwLock::new(
-                load_json_optional(&data_dir.join("adguard.json")).await?,
+                load_json_optional(&resolve(data_dir.join("adguard.json"))?).await?,
             )),
             data_dir,
             firewall_policy_path,
+            router,
         })
     }
 
+    async fn persist<T: Serialize + ?Sized>(&self, path: &Path, value: &T) -> Result<()> {
+        if self.router {
+            crate::util::write_trusted_file(path, &serde_json::to_vec_pretty(value)?, Some(0o600))
+        } else {
+            save_json(path, value).await
+        }
+    }
+
     pub async fn save_certificates(&self) -> Result<()> {
-        save_json(
+        self.persist(
             &self.data_dir.join("certificates.json"),
             &*self.certificates.read().await,
         )
@@ -76,7 +94,7 @@ impl Stores {
     }
 
     pub async fn save_wol_machines(&self) -> Result<()> {
-        save_json(
+        self.persist(
             &self.data_dir.join("wol-machines.json"),
             &*self.wol_machines.read().await,
         )
@@ -84,7 +102,7 @@ impl Stores {
     }
 
     pub async fn save_firewall_policy(&self) -> Result<()> {
-        save_json(
+        self.persist(
             &self.firewall_policy_path,
             &*self.firewall_policy.read().await,
         )
@@ -92,7 +110,7 @@ impl Stores {
     }
 
     pub async fn save_adguard(&self) -> Result<()> {
-        save_json(
+        self.persist(
             &self.data_dir.join("adguard.json"),
             &*self.adguard.read().await,
         )
@@ -720,6 +738,28 @@ mod tests {
         assert!(!stores.firewall_policy.read().await.enabled);
         stores.save_firewall_policy().await.unwrap();
         assert!(config.paths.data_dir.join("firewall-policy.json").is_file());
+    }
+
+    #[tokio::test]
+    async fn router_policy_preserves_a_configured_file_link() {
+        use std::os::unix::fs::symlink;
+        let temp = tempdir().unwrap();
+        let mut config = AppConfig::default();
+        config.paths.data_dir = temp.path().join("data");
+        config.certificates.certs_dir = temp.path().join("certs");
+        config.nginx.root_dir = temp.path().join("nginx");
+        std::fs::create_dir_all(&config.paths.data_dir).unwrap();
+        let target = temp.path().join("policy.json");
+        std::fs::write(&target, serde_json::to_vec(&FirewallPolicy::default()).unwrap()).unwrap();
+        let policy = config.firewall_policy_path();
+        symlink(&target, &policy).unwrap();
+        let stores = Stores::load(&config).await.unwrap();
+        stores.firewall_policy.write().await.enabled = true;
+        stores.save_firewall_policy().await.unwrap();
+        assert_eq!(std::fs::read_link(&policy).unwrap(), target);
+        assert!(load_json::<FirewallPolicy>(&target).await.unwrap().enabled);
+        std::fs::remove_file(&target).unwrap();
+        assert!(Stores::load(&config).await.is_err());
     }
 
     #[tokio::test]

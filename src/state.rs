@@ -539,8 +539,13 @@ impl AppState {
         if matches!(spec.method, CertificateMethod::Http) {
             fs::create_dir_all(self.config.certificates.certs_dir.join("acme-challenge")).await?;
         }
-        write_atomic(&domains_path, domains.as_bytes(), 0o600).await?;
-        write_atomic(&config_path, config.as_bytes(), 0o600).await?;
+        if self.config.platform == crate::config::Platform::Asuswrt {
+            crate::util::write_trusted_file(&domains_path, domains.as_bytes(), Some(0o600))?;
+            crate::util::write_trusted_file(&config_path, config.as_bytes(), Some(0o600))?;
+        } else {
+            write_atomic(&domains_path, domains.as_bytes(), 0o600).await?;
+            write_atomic(&config_path, config.as_bytes(), 0o600).await?;
+        }
         Ok(())
     }
 
@@ -789,7 +794,11 @@ pub async fn download_latest_dehydrated(config: &AppConfig) -> Result<Dehydrated
         bail!("GitHub response does not look like the dehydrated script");
     }
 
-    write_atomic(&path, text.as_bytes(), 0o700).await?;
+    if config.platform == crate::config::Platform::Asuswrt {
+        crate::util::write_trusted_file(&path, text.as_bytes(), Some(0o700))?;
+    } else {
+        write_atomic(&path, text.as_bytes(), 0o700).await?;
+    }
     Ok(DehydratedUpdate {
         path,
         source: DEHYDRATED_DOWNLOAD_URL.into(),
