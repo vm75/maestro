@@ -2224,23 +2224,20 @@ async fn linux_shell_assets_are_served_only_on_linux() {
     let linux = api::app(state).unwrap();
     for (path, mime, content) in [
         ("/", "text/html", "/linux-assets/shell.js"),
-        ("/linux-assets/shell.js", "text/javascript", "Overview.js"),
+        ("/linux-assets/shell.js", "text/javascript", "SharedWeb.js"),
         (
-            "/linux-assets/Overview.js",
+            "/linux-assets/SharedWeb.js",
             "text/javascript",
-            "Capabilities",
+            "HTTP certificate access",
         ),
-        (
-            "/linux-assets/Applications.js",
-            "text/javascript",
-            "Applications",
-        ),
-        ("/linux-assets/Shares.js", "text/javascript", "Shares"),
+        ("/linux-assets/Network.js", "text/javascript", "Wake-on-LAN"),
+        ("/linux-assets/BanShield.js", "text/javascript", "Security tuning"),
+        ("/linux-assets/Terminal.js", "text/javascript", "terminal"),
         ("/linux-assets/style.css", "text/css", ".app-shell"),
     ] {
         let request = Request::builder().uri(path).body(Body::empty()).unwrap();
         let response = linux.clone().oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK, "asset {path}");
         assert!(
             response.headers()[header::CONTENT_TYPE]
                 .to_str()
@@ -2251,7 +2248,10 @@ async fn linux_shell_assets_are_served_only_on_linux() {
         let bytes = axum::body::to_bytes(response.into_body(), 2 * 1024 * 1024)
             .await
             .unwrap();
-        assert!(std::str::from_utf8(&bytes).unwrap().contains(content));
+        assert!(
+            std::str::from_utf8(&bytes).unwrap().contains(content),
+            "asset {path} is missing expected content {content}"
+        );
     }
     let request = Request::builder()
         .uri("/linux-assets/shell.js")
