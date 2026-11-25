@@ -144,9 +144,15 @@ fn plan(
     destination: PathBuf,
     label: String,
 ) -> Result<()> {
-    if regular(&source)?.is_some() && !same_path(&source, &destination) {
+    if regular(&source)?.is_some() {
+        // Reject destination symlinks before comparing canonical paths: a
+        // symlink to the source is not a safe destination for a migration.
+        let destination_exists = regular(&destination)?.is_some();
+        if same_path(&source, &destination) {
+            return Ok(());
+        }
         // Validate existing destinations before copying anything.
-        if regular(&destination)?.is_some() {
+        if destination_exists {
             ensure!(
                 fs::read(&source)? == fs::read(&destination)?,
                 "layout migration conflict: {} differs from {}",
@@ -202,11 +208,11 @@ pub fn require_current(config: &AppConfig) -> Result<()> {
     let legacy_policy = data.join(POLICY);
     let policy = config.firewall_policy_path();
     let mut pending = data == Path::new(OLD_DATA)
-        || (!same_path(&legacy_policy, &policy) && regular(&legacy_policy)?.is_some());
+        || (regular(&legacy_policy)?.is_some() && !same_path(&legacy_policy, &policy));
     for name in HTTP_FILES {
         let source = inputs.join(name);
-        if !same_path(&source, &config.http_state_dir().join(name)) {
-            pending |= regular(&source)?.is_some();
+        if regular(&source)?.is_some() {
+            pending |= !same_path(&source, &config.http_state_dir().join(name));
         }
     }
     for name in AUTHORED.iter().chain(DERIVED) {
@@ -244,6 +250,7 @@ fn migrate_with_defaults(
     let policy = config.firewall_policy_path();
     let old_policy = old_data.join(POLICY);
     check_roots(config, data)?;
+    regular(&policy)?;
 
     let mut transfers = Vec::new();
     let mut retired = Vec::new();
@@ -260,7 +267,10 @@ fn migrate_with_defaults(
         // when the active data directory was OLD_DATA. Preserve it for audit,
         // but never let it take precedence over the effective old policy.
         let unused_policy = data.join(POLICY);
-        if !same_path(&unused_policy, &old_policy) && !same_path(&unused_policy, &policy) {
+        if regular(&unused_policy)?.is_some()
+            && !same_path(&unused_policy, &old_policy)
+            && !same_path(&unused_policy, &policy)
+        {
             retire(
                 &mut retired,
                 unused_policy,
@@ -485,6 +495,11 @@ mod tests {
         symlink(old.join("certificates.json"), new.join("certificates.json")).unwrap();
         assert!(migrate_with_defaults(&path, &config, &old, &new).is_err());
         assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(fs::read(old.join("certificates.json")).unwrap(), b"old");
+        assert_eq!(
+            fs::read_link(new.join("certificates.json")).unwrap(),
+            old.join("certificates.json")
+        );
     }
 
     #[test]
