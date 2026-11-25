@@ -554,7 +554,11 @@ mod cli_tests {
                 command: toolbox::ToolboxCommand::List { all: true },
             })
         ));
-        for expected in ["btop", "vaultwarden-1.0.0-2", "toolbox-nginx-entware-1.30.8-99_aarch64"] {
+        for expected in [
+            "btop",
+            "vaultwarden-1.0.0-2",
+            "toolbox-nginx-entware-1.30.8-99_aarch64",
+        ] {
             let cli = Cli::try_parse_from(["maestro", "toolbox", "install", expected]).unwrap();
             assert!(matches!(
                 cli.command,

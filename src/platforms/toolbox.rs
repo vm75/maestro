@@ -885,8 +885,7 @@ fn catalog_labels(catalog: &Catalog, all: bool) -> Vec<String> {
 fn select_tool<'a>(catalog: &'a Catalog, selector: &str) -> Result<&'a ToolRelease> {
     let mut matches = catalog.iter().flat_map(|group| {
         group.iter().filter(move |entry| {
-            entry.label() == selector
-                || (entry.name == selector && group.last() == Some(*entry))
+            entry.label() == selector || (entry.name == selector && group.last() == Some(*entry))
         })
     });
     let selected = matches.next().with_context(|| {
@@ -1027,7 +1026,9 @@ async fn install(
         let catalog = fetch_catalog(client).await?;
         Some(select_tool(&catalog, selector)?.clone())
     };
-    let tag = selected.as_ref().map_or(selector, |entry| entry.tag.as_str());
+    let tag = selected
+        .as_ref()
+        .map_or(selector, |entry| entry.tag.as_str());
     let opkg_available = check_opkg_architecture()?;
     let automatic = !download_only && opkg_available && unsafe { libc::geteuid() } == 0;
     let _lock = if automatic {
@@ -1109,7 +1110,10 @@ async fn install(
         .iter()
         .map(|asset| final_dir.join(&asset.name))
         .collect();
-    println!("Verified {label}. Packages saved to {}", final_dir.display());
+    println!(
+        "Verified {label}. Packages saved to {}",
+        final_dir.display()
+    );
 
     // Explicit release selection includes same-version rebuilds.
     let mut opkg_options = vec!["--force-reinstall"];
@@ -1348,12 +1352,30 @@ mod tests {
     fn friendly_catalog_and_selection() {
         let mut catalog = Vec::new();
         for (tag, package) in [
-            ("toolbox-vaultwarden-entware-aarch64-r100-a1", "vaultwarden_1.0.0-1_aarch64-3.10.ipk"),
-            ("toolbox-btop-entware-aarch64-r200-a1", "btop_1.4.10-1_aarch64-3.10.ipk"),
-            ("toolbox-btop-entware-aarch64-r199-a1", "btop_1.4.10-1_aarch64-3.10.ipk"),
-            ("toolbox-btop-entware-aarch64-r198-a1", "btop_1.4.9-10_aarch64-3.10.ipk"),
-            ("toolbox-vaultwarden-entware-aarch64-r99-a1", "vaultwarden_1.0.0-2_aarch64-3.10.ipk"),
-            ("toolbox-btop-entware-aarch64-r98-a1", "btop_1.5.0-1_armv7-3.2.ipk"),
+            (
+                "toolbox-vaultwarden-entware-aarch64-r100-a1",
+                "vaultwarden_1.0.0-1_aarch64-3.10.ipk",
+            ),
+            (
+                "toolbox-btop-entware-aarch64-r200-a1",
+                "btop_1.4.10-1_aarch64-3.10.ipk",
+            ),
+            (
+                "toolbox-btop-entware-aarch64-r199-a1",
+                "btop_1.4.10-1_aarch64-3.10.ipk",
+            ),
+            (
+                "toolbox-btop-entware-aarch64-r198-a1",
+                "btop_1.4.9-10_aarch64-3.10.ipk",
+            ),
+            (
+                "toolbox-vaultwarden-entware-aarch64-r99-a1",
+                "vaultwarden_1.0.0-2_aarch64-3.10.ipk",
+            ),
+            (
+                "toolbox-btop-entware-aarch64-r98-a1",
+                "btop_1.5.0-1_armv7-3.2.ipk",
+            ),
         ] {
             add_to_catalog(&mut catalog, &release(tag, &[package]));
         }
@@ -1385,8 +1407,16 @@ mod tests {
                 "nginx-1.30.8-99",
             ]
         );
-        assert_eq!(select_tool(&catalog, "btop").unwrap().tag, "toolbox-btop-entware-aarch64-r200-a1");
-        assert_eq!(select_tool(&catalog, "vaultwarden-1.0.0-1").unwrap().version, "1.0.0-1");
+        assert_eq!(
+            select_tool(&catalog, "btop").unwrap().tag,
+            "toolbox-btop-entware-aarch64-r200-a1"
+        );
+        assert_eq!(
+            select_tool(&catalog, "vaultwarden-1.0.0-1")
+                .unwrap()
+                .version,
+            "1.0.0-1"
+        );
         assert_eq!(select_tool(&catalog, "nginx").unwrap().tag, nginx.tag_name);
         assert!(select_tool(&catalog, "btop-1.5.0-1").is_err());
         assert!(select_tool(&catalog, "unknown").is_err());
