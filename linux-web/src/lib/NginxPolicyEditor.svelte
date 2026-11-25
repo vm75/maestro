@@ -80,6 +80,7 @@
   {#if proxy}<label>Restricted Sessions access policy<select disabled={disabled} value={String(value.restricted_sessions_policy ?? '')} onchange={e => value=setField(value,'restricted_sessions_policy',e.currentTarget.value || undefined)}>
     <option value="">Inherit ({String(inherited.restricted_sessions_policy ?? 'legacy')})</option>
     {#each accessNames(global) as name}<option value={name}>{name}</option>{/each}
+    {#if value.restricted_sessions_policy && !accessNames(global).includes(String(value.restricted_sessions_policy))}<option value={String(value.restricted_sessions_policy)}>Missing saved choice: {String(value.restricted_sessions_policy)}</option>{/if}
   </select></label>{/if}
 </div>
 <NginxFields {fields} bind:value {inherited} {disabled} />

@@ -47,6 +47,7 @@
   let ruleDraft = $state<Rule | null>(null)
   let rulePaths = $state('')
   let tuningDraft = $state<Record<string,number> | null>(null)
+  const tuningLabels:Record<string,string>={ip_failures:'IP failure threshold',subnet_failures:'Subnet score threshold',promote_after_banned_ips:'Distinct IPs for subnet promotion',reputation_repromote_after_offenses:'Prior subnet offenses before fast re-promotion',score_retention_days:'Score retention (days)',subnet_promotion_window_days:'Subnet promotion memory (days)',reputation_retention_days:'Reputation retention (days)',subnet_ban_days:'Minimum subnet ban (days)',first_ban_days:'First ban (days)',second_ban_days:'Second ban (days)',third_ban_days:'Third ban (days)',max_ban_days:'Maximum ban (days)'}
   const strict = { ip_failures: 3, subnet_failures: 6, promote_after_banned_ips: 2, reputation_repromote_after_offenses: 1, score_retention_days: 60, reputation_retention_days: 365, subnet_promotion_window_days: 60, subnet_ban_days: 30, first_ban_days: 1, second_ban_days: 7, third_ban_days: 30, max_ban_days: 180 }
   const retentionWarning = $derived(!!status && (status.tuning.score_retention_days <= status.tuning.subnet_ban_days || status.tuning.subnet_promotion_window_days <= status.tuning.subnet_ban_days || status.tuning.reputation_retention_days <= status.tuning.max_ban_days))
   function editRule(rule?: Rule) {
@@ -132,14 +133,14 @@
     {/if}
     {#if allowWrites}<details><summary>Edit policy and rules (JSON)</summary><p>Set observe_only to false to enforce bans when the helper is authorized.</p><textarea aria-label="Firewall policy JSON" bind:value={policyText} rows="12"></textarea><button disabled={busy} onclick={savePolicy}>Save policy</button></details>{/if}
   </section>
-  <section class="panel"><h2>Security tuning</h2><p>{status.policy.tuning ? 'Policy override active' : 'Using server defaults'}</p>
+  <section class="panel"><h2>Security tuning</h2><p class="form-error">Score retention and subnet promotion memory must outlast the minimum subnet ban; reputation retention must outlast the maximum ban. The strict preset is intentionally less forgiving and may block shared hosting or carrier networks when multiple clients share a subnet.</p><p>{status.policy.tuning ? 'Policy override active' : 'Using server defaults'}</p>
     {#if tuningDraft && allowWrites}
       <form onsubmit={e=>{e.preventDefault();void saveTuning()}}><fieldset disabled={busy}>
         <button type="button" onclick={()=>tuningDraft={...strict}}>Load strict preset</button>
-        {#each Object.keys(strict) as key}<label>{key.replaceAll('_',' ')}<input type="number" required min={key==='promote_after_banned_ips'?2:1} bind:value={tuningDraft[key]}/></label>{/each}
+        {#each Object.keys(strict) as key}<label>{tuningLabels[key] || key}<input type="number" required min={key==='promote_after_banned_ips'?2:1} bind:value={tuningDraft[key]}/>{#if key==='reputation_repromote_after_offenses'}<small>1 means a previously promoted subnet is re-banned when one address reaches the IP threshold.</small>{/if}</label>{/each}
         <button>Save security tuning</button><button type="button" onclick={()=>tuningDraft=null}>Cancel</button>
       </fieldset></form>
-    {:else}<dl class="shared-stats">{#each Object.entries(status.tuning) as [key,value]}<div><dt>{key.replaceAll('_',' ')}</dt><dd>{value}</dd></div>{/each}</dl>
+    {:else}<dl class="shared-stats">{#each Object.entries(status.tuning) as [key,value]}<div><dt>{tuningLabels[key] || key}</dt><dd>{value}</dd></div>{/each}</dl>
       {#if allowWrites}<button disabled={busy} onclick={()=>{if(status)tuningDraft={...status.tuning}}}>Edit security tuning</button>{/if}
     {/if}
   </section>

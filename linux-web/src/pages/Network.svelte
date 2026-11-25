@@ -21,6 +21,22 @@
   let password = $state('')
   let rewrites = $state<Rewrite[]>([])
   let rewriteDraft = $state<Rewrite[] | null>(null)
+  let rewriteLoading = $state(false)
+  let rewriteController: AbortController | undefined
+  let draftSort = $state<'domain'|'answer'>('domain')
+  let draftDirection = $state(1)
+  function sortDraft(key:typeof draftSort) {
+    if(!rewriteDraft)return
+    if(draftSort===key)draftDirection*=-1;else{draftSort=key;draftDirection=1}
+    rewriteDraft=[...rewriteDraft].sort((a,b)=>draftDirection*a[key].localeCompare(b[key],undefined,{numeric:true,sensitivity:'base'}))
+  }
+  async function openRewrites() {
+    if(!allowWrites||busy||rewriteLoading||!ad?.enabled)return
+    rewriteController?.abort();const active=new AbortController();rewriteController=active;rewriteLoading=true;delete errors['DNS rewrite editor']
+    try{const fresh=await request<Rewrite[]>('/api/shared/adguard/rewrites',{signal:active.signal});if(!active.signal.aborted&&section==='adguard'){rewrites=fresh;rewriteDraft=fresh.map(r=>({...r}));draftSort='domain';draftDirection=1;rewriteDraft.sort((a,b)=>a.domain.localeCompare(b.domain,undefined,{numeric:true,sensitivity:'base'}))}}
+    catch(e){if(!active.signal.aborted)errors['DNS rewrite editor']=String(e)}
+    finally{if(!active.signal.aborted)rewriteLoading=false}
+  }
   let rewriteSort = $state<'domain'|'answer'>('domain')
   let rewriteDirection = $state(1)
   function sortRewrites(key: typeof rewriteSort) { if (rewriteSort===key) rewriteDirection *= -1; else {rewriteSort=key; rewriteDirection=1} }
@@ -51,6 +67,16 @@
   type PeerConfig = {revision: string; peers: Peer[]; address: string; listen_port: number | null; is_running: boolean}
   let wg = $state<WireGuard | null>(null)
   let peerConfig = $state<PeerConfig | null>(null)
+  let peerDraft = $state<Peer[] | null>(null)
+  let peerRevision = $state('')
+  const canEditPeers = $derived(allowWrites && !!wg?.peers_writable && !wg.is_running && !!peerConfig && !peerConfig.is_running && !loading && !busy)
+  function openPeerBatch(){if(!canEditPeers||!peerConfig)return;peerDraft=peerConfig.peers.map(p=>({...p}));peerRevision=peerConfig.revision;resetPeer()}
+  async function savePeerBatch(){
+    if(!canEditPeers||!peerDraft||!peerConfig)return
+    if(peerRevision!==peerConfig.revision){errors['Peers']='Peer configuration changed; cancel and reopen the editor before saving.';return}
+    const peers=peerDraft.map(p=>({...p,public_key:p.public_key.trim(),allowed_ips:p.allowed_ips.trim(),endpoint:p.endpoint?.trim()||null,persistent_keepalive:p.persistent_keepalive??null}))
+    if(await mutate('wireguard/peers','PUT',{revision:peerRevision,peers})){peerDraft=null;peerRevision=''}
+  }
   const emptyPeer = (): Peer => ({public_key: '', allowed_ips: '', endpoint: null, persistent_keepalive: null})
   let peer = $state<Peer>(emptyPeer())
   let editingPeer = $state('')
@@ -59,7 +85,7 @@
   function editPeer(value: Peer) { editingPeer = value.public_key; peer = {...value}; endpoint = value.endpoint || ''; keepalive = value.persistent_keepalive ?? undefined }
   function resetPeer() { editingPeer = ''; peer = emptyPeer(); endpoint = ''; keepalive = undefined }
   async function savePeers(peers: Peer[]) {
-    if (!peerConfig || wg?.is_running || peerConfig.is_running) return
+    if (!canEditPeers || !peerConfig || peerDraft) return
     if (await mutate('wireguard/peers', 'PUT', {revision: peerConfig.revision, peers})) resetPeer()
   }
   async function savePeer() {
@@ -117,8 +143,8 @@
     finally { password = '' }
   }
   async function saveRewrites() { if (rewriteDraft && await mutate('adguard/rewrites', 'PUT', rewriteDraft)) rewriteDraft = null }
-  function switchTab(id: string) { if (rewriteDraft && !confirm('Discard unsaved DNS rewrite edits?')) return; rewriteDraft = null; section = id; message = ''; password = ''; pollError = ''; void refresh() }
-  onMount(() => { section = availableTabs[0]?.id || 'wol'; void refresh(); const timer = setInterval(pollStatus, 3000); return () => { clearInterval(timer); controller?.abort(); pollController?.abort() } })
+  function switchTab(id: string) { if ((rewriteDraft || peerDraft) && !confirm('Discard unsaved edits?')) return; rewriteController?.abort();rewriteLoading=false;rewriteDraft = null;peerDraft=null;peerRevision=''; section = id; message = ''; password = ''; pollError = ''; void refresh() }
+  onMount(() => { section = availableTabs[0]?.id || 'wol'; void refresh(); const timer = setInterval(pollStatus, 3000); return () => { clearInterval(timer); controller?.abort(); pollController?.abort(); rewriteController?.abort() } })
 </script>
 
 <div class="connection-tabs">
@@ -151,7 +177,7 @@
   </section>
 {:else if section === 'adguard'}
   <section class="panel"><h2>AdGuard Home connection</h2><p>Connect to an existing AdGuard Home instance; Maestro does not install the daemon.</p>
-    {#if ad}<form onsubmit={e => { e.preventDefault(); void saveAdGuard() }}>
+    {#if ad}<button type="button" onclick={launchAdGuard}>Launch Web UI</button><form onsubmit={e => { e.preventDefault(); void saveAdGuard() }}>
       <fieldset disabled={!allowWrites || busy}>
         <label><input type="checkbox" bind:checked={ad.enabled} /> Enable integration</label>
         <label>API endpoint <input type="url" bind:value={ad.api_endpoint} placeholder="http://127.0.0.1:3000" required={ad.enabled} /></label>
@@ -164,7 +190,6 @@
     </form>{/if}
   </section>
   {#if adStatus?.enabled}<section class="panel"><h2>Protection and filtering</h2>
-    <button type="button" onclick={launchAdGuard}>Launch Web UI</button>
     {#each ['protection', 'filtering'] as kind}
       {@const enabled = kind === 'protection' ? adStatus.protection_enabled : adStatus.filtering_enabled}
       {@const seconds = kind === 'protection' ? adStatus.protection_remaining_seconds : adStatus.filtering_remaining_seconds}
@@ -183,18 +208,19 @@
     {#if allowWrites}
       {#if rewriteDraft}
         <form onsubmit={e => { e.preventDefault(); void saveRewrites() }}><fieldset disabled={busy}>
+          <div class="shared-table"><table><thead><tr>{#each ['domain','answer'] as key}<th aria-sort={draftSort===key?(draftDirection===1?'ascending':'descending'):'none'}><button type="button" onclick={()=>sortDraft(key as typeof draftSort)}>Sort {key} {draftSort===key?(draftDirection===1?'↑':'↓'):'↕'}</button></th>{/each}<th>Action</th></tr></thead><tbody>
           {#each rewriteDraft as rewrite, index}
-            <div class="editor-grid"><label>Domain <input bind:value={rewrite.domain} required /></label><label>Answer <input bind:value={rewrite.answer} required /></label><button type="button" disabled={busy} onclick={() => { if (rewriteDraft) rewriteDraft = rewriteDraft.filter((_, i) => i !== index) }}>Delete</button></div>
-          {/each}
+            <tr><td><label>Domain <input bind:value={rewrite.domain} required /></label></td><td><label>Answer <input bind:value={rewrite.answer} required /></label></td><td><button type="button" disabled={busy} onclick={() => { if (rewriteDraft) rewriteDraft = rewriteDraft.filter((_, i) => i !== index) }}>Delete</button></td></tr>
+          {/each}</tbody></table></div>
           <button type="button" disabled={busy} onclick={() => { if (rewriteDraft) rewriteDraft = [...rewriteDraft, {domain: '', answer: ''}] }}>Add rewrite</button><button disabled={busy}>Save rewrites</button><button type="button" disabled={busy} onclick={() => rewriteDraft = null}>Cancel</button></fieldset>
         </form>
-      {:else}<button disabled={busy} onclick={() => rewriteDraft = rewrites.map(r => ({...r}))}>Manage DNS rewrites</button>{/if}
+      {:else}<button disabled={busy || rewriteLoading || !ad.enabled} onclick={openRewrites}>{rewriteLoading?'Loading rewrites…':'Manage DNS rewrites'}</button>{/if}
     {/if}
   </section>{/if}
 {:else}
   <section class="panel"><h2>WireGuard</h2><p>Manage the native wg-quick@wg0.service using the optional restricted admin helper. Peer editing requires the separate wireguard_peers grant. Interface private keys, hooks and addresses remain administrator-owned.</p>
     {#if wg}<p><strong>{wg.interface}</strong> · {wg.is_running ? 'Present' : 'Not present'}</p><p class="muted">{wg.reason}</p>
-      <button disabled={!allowWrites || busy || !wg.writable || wg.is_running} onclick={() => mutate('wireguard/toggle', 'POST', {enable: true}, 1_600_000)}>Start</button>
+      <button disabled={!allowWrites || busy || !wg.writable || wg.is_running || !!peerDraft} onclick={() => mutate('wireguard/toggle', 'POST', {enable: true}, 1_600_000)}>Start</button>
       <button disabled={!allowWrites || busy || !wg.writable || !wg.is_running} onclick={() => { if (confirm('Stop WireGuard? This may disconnect remote clients.')) void mutate('wireguard/toggle', 'POST', {enable: false}, 1_600_000) }}>Stop</button>
     {:else if !loading}<p class="muted">Status unavailable.</p>{/if}
   </section>
@@ -205,13 +231,18 @@
       <div class="shared-table"><table><thead><tr><th>Public key</th><th>Allowed IPs</th><th>Endpoint</th><th>Keepalive</th><th>Actions</th></tr></thead><tbody>
         {#each peerConfig.peers as item (item.public_key)}
           <tr><td class="mono">{item.public_key}</td><td>{item.allowed_ips}</td><td>{item.endpoint || '—'}</td><td>{item.persistent_keepalive ?? '—'}</td><td>
-            <button disabled={!allowWrites || busy || wg?.is_running || peerConfig.is_running} onclick={() => editPeer(item)}>Edit</button>
-            <button disabled={!allowWrites || busy || wg?.is_running || peerConfig.is_running} onclick={() => { if (peerConfig && confirm('Remove this WireGuard peer?')) void savePeers(peerConfig.peers.filter(p => p.public_key !== item.public_key)) }}>Remove</button>
+            <button disabled={!canEditPeers || !!peerDraft} onclick={() => editPeer(item)}>Edit</button>
+            <button disabled={!canEditPeers || !!peerDraft} onclick={() => { if (peerConfig && confirm('Remove this WireGuard peer?')) void savePeers(peerConfig.peers.filter(p => p.public_key !== item.public_key)) }}>Remove</button>
           </td></tr>
         {/each}
       </tbody></table></div>
-      {#if allowWrites}<form onsubmit={event => { event.preventDefault(); void savePeer() }}>
-        <fieldset disabled={busy || wg?.is_running || peerConfig.is_running}>
+      {#if allowWrites}<button disabled={!canEditPeers || !!peerDraft} onclick={openPeerBatch}>Manage peers</button>
+      {#if peerDraft}<form onsubmit={e=>{e.preventDefault();void savePeerBatch()}}><fieldset disabled={!canEditPeers}>
+        <h3>Edit peer list</h3><p class="muted">Save all changes together. Existing preshared keys are retained only for unchanged public keys.</p>
+        {#each peerDraft as item,index}<div class="editor-grid"><label>Batch public key <input bind:value={item.public_key} required /></label><label>Batch allowed IP networks <input bind:value={item.allowed_ips} required /></label><label>Batch endpoint <input value={item.endpoint??''} oninput={e=>item.endpoint=e.currentTarget.value||null}/></label><label>Batch keepalive <input type="number" min="0" max="65535" value={item.persistent_keepalive??''} oninput={e=>item.persistent_keepalive=e.currentTarget.value===''?null:Number(e.currentTarget.value)}/></label><button type="button" onclick={()=>{if(peerDraft)peerDraft=peerDraft.filter((_,i)=>i!==index)}}>Remove draft peer</button></div>{/each}
+        <button type="button" onclick={()=>{if(peerDraft)peerDraft=[...peerDraft,emptyPeer()]}}>Add draft peer</button><button type="submit">Save peers</button></fieldset><button type="button" disabled={busy} onclick={()=>{peerDraft=null;peerRevision=''}}>Cancel peer edits</button></form>
+      {:else}<form onsubmit={event => { event.preventDefault(); void savePeer() }}>
+        <fieldset disabled={!canEditPeers}>
           <h3>{editingPeer ? 'Edit peer' : 'Add peer'}</h3>
           <label>Public key <input bind:value={peer.public_key} required disabled={!!editingPeer} /></label>
           <label>Allowed IP networks (comma separated) <input bind:value={peer.allowed_ips} required /></label>
@@ -219,7 +250,7 @@
           <label>Persistent keepalive (seconds) <input type="number" min="0" max="65535" bind:value={keepalive} /></label>
           <button>Save peer</button><button type="button" onclick={resetPeer}>Reset</button>
         </fieldset>
-      </form>{/if}
+      </form>{/if}{/if}
     </section>
   {:else if wg && !wg.peers_writable}<p class="policy-note">To enable peer management, authorize wireguard_peers in the root-owned helper policy.</p>{/if}
 {/if}

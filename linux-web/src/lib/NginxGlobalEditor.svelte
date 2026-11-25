@@ -32,6 +32,16 @@
     else if(kind==='access') delete draft.access_policies[name]
     else delete draft.limit_policies[name]
   }
+  function rename(kind:'listener'|'access',old:string,input:HTMLInputElement) {
+    const name=input.value.trim()
+    const entries=kind==='listener'?draft.listener_profiles:draft.access_policies
+    error=''
+    if(name===old){input.value=old;return}
+    if(!/^[A-Za-z0-9_]{1,32}$/.test(name)||['legacy','public','deny','default','__proto__','constructor','prototype'].includes(name.toLowerCase())||Object.hasOwn(entries,name)){error='Choose a unique, non-reserved policy name (letters, numbers or underscore, up to 32 characters).';input.value=old;return}
+    if(used(kind,old).length&&!confirm('Rename '+old+'? Update all references before saving. Existing sites are not rewritten.')){input.value=old;return}
+    if(kind==='listener'){draft.listener_profiles[name]=clone(draft.listener_profiles[old]);delete draft.listener_profiles[old]}
+    else{draft.access_policies[name]=clone(draft.access_policies[old]);delete draft.access_policies[old]}
+  }
   function endpoints(profile: Listener, protocol: 'http'|'https', values: Endpoint[]) {profile[protocol]=values}
   function number(value:string) {return value.trim() ? Number(value) : 0}
   async function save() {
@@ -55,10 +65,11 @@
     {#if manageHttp}
       <div class="editor-grid">
         <label>HTTP mode<select bind:value={http.mode}><option value="off">Off</option><option value="renewal_only">Certificate validation only</option><option value="always">Always on with redirects</option></select></label>
-        <label>Challenge listener<select bind:value={http.listener_profile}>{#each listenerNames(draft) as name}<option value={name}>{name}</option>{/each}</select></label>
+        <label>Challenge listener<select bind:value={http.listener_profile}>{#each listenerNames(draft) as name}<option value={name}>{name}</option>{/each}{#if !listenerNames(draft).includes(http.listener_profile)}<option value={http.listener_profile}>Missing choice: {http.listener_profile}</option>{/if}</select></label>
         <label>Maximum validation window (seconds)<input type="number" min="60" max="86400" required value={http.window_seconds} oninput={e=>http.window_seconds=number(e.currentTarget.value)}/></label>
         <label><input type="checkbox" bind:checked={http.externally_managed_wan}/> WAN access managed externally</label>
       </div>
+      {#if http.mode==='renewal_only'}<p class="muted">Validation-only mode closes managed public HTTP outside HTTP-01 batches. Normal HTTP redirects are unavailable. DNS-01 never opens a window.</p>{:else if http.mode==='off'}<p class="muted">Managed HTTP validation is off. Use DNS-01 or separately provision validation ingress.</p>{:else}<p class="muted">Normal HTTP redirects are enabled where configured; external ingress remains operator-managed.</p>{/if}
     {/if}
     <details open><summary>Listener profiles</summary>
       <h4>Legacy listener</h4>
@@ -66,7 +77,7 @@
       <p class="muted">Used by: {used('listener','legacy').join(', ') || 'No saved references'}</p>
       {#each Object.entries(draft.listener_profiles) as [name,profile] (name)}
         <div class="editor-card">
-          <h4>{name}</h4><p class="muted">Used by: {used('listener',name).join(', ') || 'No saved references'}</p>
+          <h4>{name}</h4><label>Listener name<input value={name} required pattern="[A-Za-z0-9_]{1,32}" onchange={e=>rename('listener',name,e.currentTarget)}/></label><p class="muted">Used by: {used('listener',name).join(', ') || 'No saved references'}</p>
           {#each ['https','http'] as protocol}
             {@const p = protocol as 'http'|'https'}
             <h5>{protocol.toUpperCase()} endpoints</h5>
@@ -85,7 +96,7 @@
       <label>Legacy allowed IPs/networks (one per line)<textarea bind:value={allowed} rows="4"></textarea></label>
       <p class="muted">Used by: {used('access','legacy').join(', ') || 'No saved references'}</p>
       {#each Object.entries(draft.access_policies) as [name,policy] (name)}
-        <div class="editor-card"><h4>{name}</h4><p class="muted">Used by: {used('access',name).join(', ') || 'No saved references'}</p>
+        <div class="editor-card"><h4>{name}</h4><label>Access rule name<input value={name} required pattern="[A-Za-z0-9_]{1,32}" onchange={e=>rename('access',name,e.currentTarget)}/></label><p class="muted">Used by: {used('access',name).join(', ') || 'No saved references'}</p>
           <label>Allowed IPs/networks<textarea rows="4" value={policy.allow.join('\n')} onchange={e=>policy.allow=lines(e.currentTarget.value)}></textarea></label>
           <button type="button" onclick={()=>remove('access',name)}>Remove access rule</button>
         </div>
@@ -111,6 +122,7 @@
     </details>
     <details><summary>Advanced global settings</summary>
       <NginxFields fields={sharedFields.slice(3)} bind:value={draft.shared} {disabled}/>
+      {#if draft.shared.nginx_daemon===false}<p class="form-error" role="alert">Warning: foreground Nginx prevents startup scripts from continuing. Disable background mode only for a foreground supervisor.</p>{/if}
       <label>Shared domain suffixes (one per line)<textarea bind:value={suffixes} rows="4"></textarea></label>
     </details>
     <p class="muted">Save validates the full configuration, regenerates managed sites, tests Nginx and reloads if running. Invalid changes are rolled back by the server.</p>

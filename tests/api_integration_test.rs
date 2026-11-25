@@ -2247,7 +2247,8 @@ async fn linux_shell_assets_are_served_only_on_linux() {
                 .unwrap()
                 .starts_with(mime)
         );
-        let bytes = axum::body::to_bytes(response.into_body(), 128 * 1024)
+        // The production Svelte bundle can exceed 128 KiB; retain a bounded test read.
+        let bytes = axum::body::to_bytes(response.into_body(), 2 * 1024 * 1024)
             .await
             .unwrap();
         assert!(std::str::from_utf8(&bytes).unwrap().contains(content));

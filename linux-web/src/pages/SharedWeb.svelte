@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import Icon from '../lib/Icon.svelte'
   import { request } from '../lib/api'
   import type { SharedDiscovery } from '../lib/shared'
@@ -35,6 +35,12 @@
   let filter = $state('')
   let selectedLog = $state('')
   let logText = $state('')
+  let logOutput = $state<HTMLPreElement>()
+  const httpLabels: Record<string,string> = {closed:'HTTP closed',active:'Certificate validation in progress',always_on:'Always-on HTTP configured',cleanup_failed:'Cleanup failed / exposure unknown',expired_cleanup_pending:'Window expired; local cleanup pending',unknown:'HTTP state not yet verified'}
+  const wanLabels: Record<string,string> = {external:'Externally managed',unsupported:'Automatic control unavailable',unconfigured:'Not configured',managed_ipv4_kernel_expiry_ipv6_blocked:'Router-managed IPv4 (IPv6 blocked)'}
+  const httpWarning = $derived(!!httpAccess && ['cleanup_failed','expired_cleanup_pending','unknown'].includes(httpAccess.state))
+  let certOperation = $state<{certificate:string;action:string} | null>(null)
+  let certPollTimer: ReturnType<typeof setTimeout> | undefined
   let logError = $state('')
   let logLoading = $state(false)
   let controller: AbortController | undefined
@@ -101,7 +107,7 @@
     try {
       const path = selectedLog.split('/').map(encodeURIComponent).join('/')
       const result = await request<{content: string}>('/api/shared/nginx/logs/' + path, { signal: active.signal })
-      if (!active.signal.aborted) logText = result.content
+      if (!active.signal.aborted) {logText = result.content;await tick();if(logOutput && !active.signal.aborted)logOutput.scrollTop=logOutput.scrollHeight}
     } catch (failure) { if (!active.signal.aborted) logError = failure instanceof Error ? failure.message : 'Could not read log' }
     finally { if (!active.signal.aborted) logLoading = false }
   }
@@ -188,6 +194,15 @@
     if (!host || !/^[A-Za-z0-9.-]+$/.test(host)) return
     window.open('https://'+host+(port && port!==443 ? ':'+port : '')+(parts.length ? '/'+parts.map(encodeURIComponent).join('/') : ''),'_blank','noopener,noreferrer')
   }
+  async function certificateAction(cert: Certificate) {
+    if (!allowWrites || busy || lock?.locked || lock?.status==='running') return
+    const action=cert.exists?'renew':'issue'
+    if (!confirm((cert.exists?'Renew ':'Issue ')+cert.name+'?')) return
+    certOperation={certificate:cert.name,action}
+    certPollTimer=setTimeout(()=>void pollLock(),500)
+    try {await mutate('certificates/'+cert.id+'/'+action,'POST',undefined,3_660_000)}
+    finally {clearTimeout(certPollTimer);certOperation=null;void pollLock()}
+  }
   function editCertificate(cert: Certificate) {
     certificateId = cert.id; certificateName = cert.name; certificateDomains = cert.domains.join(', ')
     certificateMethod = cert.method; certificateStaging = cert.staging; certificateRenew = cert.auto_renew
@@ -203,7 +218,7 @@
     if (!hasNginx && hasCertificates) section = 'certificates'; else if (!hasCertificates && hasNginx) section = 'nginx'
     void refresh()
     const timer=setInterval(pollLock,15000)
-    return () => { clearInterval(timer); controller?.abort(); logController?.abort(); previewController?.abort(); lockController?.abort() }
+    return () => { clearInterval(timer); clearTimeout(certPollTimer); controller?.abort(); logController?.abort(); previewController?.abort(); lockController?.abort() }
   })
 </script>
 
@@ -288,15 +303,16 @@
       <label for="nginx-log">Log file</label><select id="nginx-log" bind:value={selectedLog} disabled={logLoading}>{#each logs as log}<option value={log.path}>{log.path} ({log.size} bytes)</option>{/each}</select>
       <button disabled={!selectedLog || logLoading} onclick={readLog}>{logLoading ? 'Reading…' : 'Read log'}</button>
       {#if logError}<p class="form-error" role="alert">{logError}</p>{/if}
-      {#if logText}<pre>{logText}</pre>{/if}
+      {#if logText}<pre bind:this={logOutput}>{logText}</pre>{/if}
     </section>
   {/if}
 {:else}
   {#if !hasCertificates}<section class="panel"><h2>Certificates unavailable</h2></section>{:else}
     <section class="panel"><h2>HTTP certificate access</h2><button disabled={!allowWrites || busy || !httpAccess} onclick={() => { if (confirm('Close the managed HTTP validation window?')) void mutate('certificates/http-access', 'DELETE') }}>Close validation window</button>
-      {#if httpAccess}<dl class="shared-stats"><div><dt>State</dt><dd>{httpAccess.state}</dd></div><div><dt>WAN control</dt><dd>{httpAccess.wan_control}</dd></div><div><dt>Names</dt><dd>{httpAccess.names.join(', ') || '—'}</dd></div><div><dt>Expires</dt><dd>{httpAccess.expires_at ? new Date(httpAccess.expires_at).toLocaleString() : '—'}</dd></div></dl>{#if httpAccess.error}<p class="form-error" role="alert">{httpAccess.error}</p>{/if}{:else}<p class="muted">No validation status available.</p>{/if}
+      {#if httpAccess}<dl class="shared-stats"><div><dt>State</dt><dd class:form-error={httpWarning}>{httpLabels[httpAccess.state] || httpAccess.state}</dd></div><div><dt>WAN control</dt><dd>{wanLabels[httpAccess.wan_control] || httpAccess.wan_control}</dd></div><div><dt>Names</dt><dd>{httpAccess.names.join(', ') || '—'}</dd></div><div><dt>Expires</dt><dd>{httpAccess.expires_at ? new Date(httpAccess.expires_at).toLocaleString() : '—'}</dd></div></dl>{#if httpWarning || httpAccess.error}<p class="form-error" role="alert">{httpLabels[httpAccess.state] || 'HTTP validation warning'}{httpAccess.error ? ' · '+httpAccess.error : ''}. Verify local listeners and externally managed ingress; close the validation window if needed.</p>{/if}{:else}<p class="muted">No validation status available.</p>{/if}
     </section>
     <section class="panel"><h2>Dehydrated</h2><p>{lock ? (lock.locked ? 'Locked' : 'Unlocked') + ' · ' + lock.status : 'Status unavailable'}</p>
+      {#if certOperation}<p role="status">Certificate {certOperation.action==='issue'?'issuance':'renewal'} in progress for {certOperation.certificate}. Issue and renewal are temporarily unavailable.</p>{:else if lock?.status==='locked'}<p class="form-error" role="alert">A lock remains without an active process. Clear it only after confirming no certificate hook is running.</p>{/if}
       {#if lock?.operation}<p>Certificate {lock.operation.action}: {lock.operation.certificate} · {lock.operation.status}{#if lock.operation.status==='failed'} — inspect server logs for details.{/if}</p>{/if}
       {#if lock?.locked && lock.path}<p class="mono">{lock.path}</p>{/if}
       <button disabled={!allowWrites || busy || !!lock?.locked || lock?.status==='running'} onclick={() => { if (confirm('Download/update Dehydrated?')) void mutate('certificates/dehydrated/update') }}>Update Dehydrated</button>
@@ -306,7 +322,7 @@
       <div class="shared-table"><table><thead><tr><th>Certificate / domains</th><th>Method</th><th>Status</th><th>Expiry</th><th>Auto renew</th><th>Actions</th></tr></thead><tbody>
         {#each certificates as cert (cert.id)}<tr><td><strong>{cert.name}</strong><small>{cert.domains.join(', ')}</small></td><td>{cert.method}{cert.staging ? ' · staging' : ''}</td><td><span class="project-state" class:attention={cert.renewal_due || !cert.exists}>{!cert.exists ? 'Missing' : cert.renewal_due ? 'Renewal due' : 'Issued'}</span></td><td>{cert.expires_at ? new Date(cert.expires_at).toLocaleDateString() : '—'}{#if cert.days_remaining!=null}<small>{cert.days_remaining} days remaining</small>{/if}</td><td>{cert.auto_renew ? 'Enabled' : 'Disabled'}</td><td>
           <button disabled={!allowWrites || busy} onclick={() => editCertificate(cert)}>Edit</button>
-          <button disabled={!allowWrites || busy || !!lock?.locked || lock?.status === 'running'} onclick={() => { if (confirm((cert.exists ? 'Renew ' : 'Issue ') + cert.name + '?')) void mutate('certificates/' + cert.id + (cert.exists ? '/renew' : '/issue'), 'POST', undefined, 3_660_000) }}>{cert.exists ? 'Renew' : 'Issue'}</button>
+          <button disabled={!allowWrites || busy || !!lock?.locked || lock?.status === 'running'} onclick={() => certificateAction(cert)}>{cert.exists ? 'Renew' : 'Issue'}</button>
           <button disabled={!allowWrites || busy} onclick={() => { if (confirm('Remove definition for ' + cert.name + '? Files are retained.')) void mutate('certificates/' + cert.id, 'DELETE') }}>Delete</button>
         </td></tr>{/each}
       </tbody></table></div>{#if !certificates.length && !loading}<p class="muted">No certificates found.</p>{/if}
