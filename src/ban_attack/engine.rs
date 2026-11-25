@@ -92,16 +92,9 @@ pub struct EngineStatus {
 }
 
 impl BanEngine {
+    /// Start the native router backend with contained log-link support.
+    /// Linux uses the separately selected backend and strict log policy.
     pub fn start(config: Config) -> Result<Self, Error> {
-        let backend = Arc::new(CommandIpSet::new_with_options(
-            config.ipset.clone(),
-            config.firewall.clone(),
-            config.test_mode,
-        ));
-        Self::start_with_backend(config, backend)
-    }
-
-    pub(crate) fn start_router(config: Config) -> Result<Self, Error> {
         let backend = Arc::new(CommandIpSet::new_with_options(
             config.ipset.clone(),
             config.firewall.clone(),

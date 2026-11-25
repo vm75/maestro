@@ -411,7 +411,7 @@ impl FirewallManager {
                 "Linux helper unavailable".into(),
             ));
         } else {
-            BanEngine::start_router(config)
+            BanEngine::start(config)
         }
     }
 

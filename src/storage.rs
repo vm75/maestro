@@ -192,8 +192,8 @@ async fn discover_deployed_certificates(config: &AppConfig) -> Result<Vec<Certif
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         let kind = entry.file_type().await?;
-        if !kind.is_dir()
-            && !(config.platform == crate::config::Platform::Asuswrt
+        if !(kind.is_dir()
+            || config.platform == crate::config::Platform::Asuswrt
                 && kind.is_symlink()
                 && fs::metadata(&path).await.is_ok_and(|m| m.is_dir()))
         {

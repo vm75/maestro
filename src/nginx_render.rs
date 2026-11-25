@@ -1199,7 +1199,11 @@ impl FileTransaction {
         }
         for path in removals {
             ensure_managed_path(config, path)?;
-            std::fs::remove_file(path)?;
+            if config.platform == crate::config::Platform::Asuswrt {
+                crate::util::unlink_trusted_entry(path)?;
+            } else {
+                std::fs::remove_file(path)?;
+            }
             if let Some(original) = previous.remove(path) {
                 transaction.previous.push((path.clone(), original));
             }
