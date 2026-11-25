@@ -16,6 +16,7 @@ mod nginx_mutation;
 mod nginx_render;
 pub mod platforms;
 mod restore;
+mod router_layout;
 mod state;
 mod storage;
 mod system;
@@ -76,6 +77,8 @@ enum Command {
     InitLinuxConfig,
     Serve,
     CheckConfig,
+    /// Migrate persistent router YAML state to the current layout while stopped.
+    MigrateRouterLayout,
     /// Install the bundled nginx configuration, backing up a different nginx.conf.
     InitNginx,
     /// Download or update the official dehydrated executable.
@@ -162,7 +165,26 @@ fn main() -> Result<()> {
         );
     }
 
+    if config.platform == Platform::Asuswrt
+        && !config.test_mode
+        && matches!(
+            &cli.command,
+            None | Some(Command::Serve | Command::InitNginx | Command::CheckConfig)
+        )
+    {
+        router_layout::require_current(&config)?;
+    }
+
     match cli.command.unwrap_or(Command::Serve) {
+        Command::MigrateRouterLayout => {
+            anyhow::ensure!(
+                config.platform == Platform::Asuswrt && !config.test_mode,
+                "router layout migration requires a real router YAML configuration"
+            );
+            router_layout::migrate(&cli.config, &config)?;
+            println!("router configuration layout is current");
+            Ok(())
+        }
         #[cfg(feature = "linux")]
         Command::InitLinuxConfig => unreachable!("initialization precedes configuration loading"),
         Command::Restore { .. } => unreachable!("restore is handled before configuration loading"),

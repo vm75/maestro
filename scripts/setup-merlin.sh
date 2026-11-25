@@ -33,6 +33,9 @@ if [ ! -e "$CONFIG_DIR/maestro.yaml" ] && [ ! -L "$CONFIG_DIR/maestro.yaml" ]; t
     echo "Created $CONFIG_DIR/maestro.yaml. Review rendered_page and menu_tree before starting."
 fi
 
+# Move persistent YAML-era state while the daemon is stopped.
+/opt/bin/maestro --config "$CONFIG_DIR/maestro.yaml" migrate-router-layout
+
 # Validate authored YAML before changing the live nginx configuration.
 /opt/bin/maestro --config "$CONFIG_DIR/maestro.yaml" check-config
 
@@ -74,10 +77,7 @@ fi
 if [ ! -f "$CONFIG_DIR/firewall-policy.json" ] && [ -f "$EXAMPLES_DIR/firewall-policy.example.json" ]; then
     cp "$EXAMPLES_DIR/firewall-policy.example.json" "$CONFIG_DIR/firewall-policy.json"
 fi
-if [ ! -f "$DATA_DIR/firewall-policy.json" ] && [ -f "$EXAMPLES_DIR/firewall-policy.example.json" ]; then
-    cp "$EXAMPLES_DIR/firewall-policy.example.json" "$DATA_DIR/firewall-policy.json"
-fi
-chmod 0600 "$CONFIG_DIR/firewall-policy.json" "$DATA_DIR/firewall-policy.json" 2>/dev/null || true
+chmod 0600 "$CONFIG_DIR/firewall-policy.json" 2>/dev/null || true
 
 POST_MOUNT=/jffs/scripts/post-mount
 if [ ! -f "$POST_MOUNT" ]; then

@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::{
     command::CommandRunner,
-    config::{AdGuardConfig, AppConfig, Platform},
+    config::{AdGuardConfig, AppConfig},
     models::{CertificateMethod, CertificateSpec, FirewallPolicy, WolMachine},
     util::validate_simple_name,
 };
@@ -26,7 +26,7 @@ pub struct Stores {
     pub firewall_policy: Arc<RwLock<FirewallPolicy>>,
     pub adguard: Arc<RwLock<Option<AdGuardConfig>>>,
     data_dir: Arc<std::path::PathBuf>,
-    platform: Platform,
+    firewall_policy_path: PathBuf,
 }
 
 impl Stores {
@@ -51,14 +51,8 @@ impl Stores {
         if imported > 0 {
             save_json(&certificates_path, &certificates).await?;
         }
-        let firewall_policy_path = data_dir.join("firewall-policy.json");
-        let policy_config_path = firewall_policy_config_path(&data_dir);
-        let firewall_policy = if config.platform == Platform::Asuswrt {
-            load_json_with_fallback(&firewall_policy_path, policy_config_path).await?
-        } else {
-            // Linux integration must not read the host's Entware/router policy.
-            load_json(&firewall_policy_path).await?
-        };
+        let firewall_policy_path = config.firewall_policy_path();
+        let firewall_policy = load_json(&firewall_policy_path).await?;
         Ok(Self {
             certificates: Arc::new(RwLock::new(certificates)),
             wol_machines: Arc::new(RwLock::new(
@@ -69,7 +63,7 @@ impl Stores {
                 load_json_optional(&data_dir.join("adguard.json")).await?,
             )),
             data_dir,
-            platform: config.platform,
+            firewall_policy_path,
         })
     }
 
@@ -90,16 +84,11 @@ impl Stores {
     }
 
     pub async fn save_firewall_policy(&self) -> Result<()> {
-        let policy_data = &*self.firewall_policy.read().await;
-        save_json(&self.data_dir.join("firewall-policy.json"), policy_data).await?;
-        let config_dir_policy = firewall_policy_config_path(&self.data_dir);
-        if self.platform == Platform::Asuswrt
-            && config_dir_policy.exists()
-            && config_dir_policy != self.data_dir.join("firewall-policy.json").as_path()
-        {
-            let _ = save_json(config_dir_policy, policy_data).await;
-        }
-        Ok(())
+        save_json(
+            &self.firewall_policy_path,
+            &*self.firewall_policy.read().await,
+        )
+        .await
     }
 
     pub async fn save_adguard(&self) -> Result<()> {
@@ -109,11 +98,6 @@ impl Stores {
         )
         .await
     }
-}
-
-/// Router configuration policy is stored in the Maestro configuration root.
-fn firewall_policy_config_path(_data_dir: &Path) -> &'static Path {
-    Path::new("/opt/etc/maestro/firewall-policy.json")
 }
 
 #[derive(Default)]
@@ -494,19 +478,6 @@ where
     }
 }
 
-async fn load_json_with_fallback<T>(primary: &Path, fallback: &Path) -> Result<T>
-where
-    T: DeserializeOwned + Default,
-{
-    if primary.exists() {
-        load_json(primary).await
-    } else if fallback.exists() {
-        load_json(fallback).await
-    } else {
-        load_json(primary).await
-    }
-}
-
 async fn save_json<T>(path: &Path, value: &T) -> Result<()>
 where
     T: Serialize + ?Sized,
@@ -527,16 +498,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn policy_config_follows_existing_state_root() {
-        use std::path::Path;
-        assert_eq!(
-            super::firewall_policy_config_path(Path::new("/opt/var/lib/maestro")),
-            Path::new("/opt/etc/maestro/firewall-policy.json")
-        );
-    }
-
     use super::*;
+    use crate::config::Platform;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -760,25 +723,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_firewall_policy_fallback_load() {
-        let primary_temp = tempdir().unwrap();
-        let fallback_temp = tempdir().unwrap();
-
-        let primary_path = primary_temp.path().join("firewall-policy.json");
-        let fallback_path = fallback_temp.path().join("firewall-policy.json");
-
-        let policy = FirewallPolicy {
-            enabled: true,
-            observe_only: false,
-            rules: vec![],
-            allowlist: vec![],
-            tuning: None,
-        };
-        save_json(&fallback_path, &policy).await.unwrap();
-
-        let loaded: FirewallPolicy = load_json_with_fallback(&primary_path, &fallback_path)
-            .await
-            .unwrap();
-        assert!(loaded.enabled);
+    async fn router_policy_has_one_authoritative_path() {
+        let temp = tempdir().unwrap();
+        let mut config = AppConfig::default();
+        config.paths.data_dir = temp.path().join("data");
+        config.router_config_dir = Some(temp.path().join("config"));
+        config.certificates.certs_dir = temp.path().join("certs");
+        config.nginx.root_dir = temp.path().join("nginx");
+        let stores = Stores::load(&config).await.unwrap();
+        stores.firewall_policy.write().await.enabled = true;
+        stores.save_firewall_policy().await.unwrap();
+        assert!(config.firewall_policy_path().is_file());
+        assert!(!config.paths.data_dir.join("firewall-policy.json").exists());
+        let reopened = Stores::load(&config).await.unwrap();
+        assert!(reopened.firewall_policy.read().await.enabled);
     }
 }

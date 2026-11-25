@@ -22,6 +22,9 @@ pub struct AppConfig {
     #[cfg(feature = "linux")]
     #[serde(skip)]
     pub linux_authority: Option<crate::core::linux_config::Authority>,
+    /// Router configuration directory, derived from the selected YAML file.
+    #[serde(skip)]
+    pub router_config_dir: Option<PathBuf>,
     pub test_mode: bool,
     pub platform: Platform,
     pub server: ServerConfig,
@@ -42,6 +45,7 @@ impl Default for AppConfig {
         Self {
             #[cfg(feature = "linux")]
             linux_authority: None,
+            router_config_dir: None,
             test_mode: false,
             platform: Platform::Asuswrt,
             server: ServerConfig::default(),
@@ -81,6 +85,12 @@ impl AppConfig {
             "Linux requires the native version: 1 YAML authority"
         );
         config.resolve_relative_paths(path);
+        config.router_config_dir = Some(
+            path.parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf(),
+        );
         Ok(config)
     }
 
@@ -92,6 +102,7 @@ impl AppConfig {
             .canonicalize()
             .unwrap_or_else(|_| PathBuf::from("."));
         self.test_mode = true;
+        self.router_config_dir = None;
         self.server.bind = "127.0.0.1".into();
         self.server.port = 3030;
         self.server.auth_token = "maestro-test-token".into();
@@ -370,6 +381,23 @@ impl AppConfig {
             bail!("firewall.log_dirs must contain at least one allowed root");
         }
         Ok(())
+    }
+
+    /// Router policy is configuration; Linux and isolated tests retain their store.
+    pub fn firewall_policy_path(&self) -> PathBuf {
+        match (&self.router_config_dir, self.platform, self.test_mode) {
+            (Some(directory), Platform::Asuswrt, false) => directory.join("firewall-policy.json"),
+            _ => self.paths.data_dir.join("firewall-policy.json"),
+        }
+    }
+
+    /// HTTP-01 ownership and recovery must outlive process and router restarts.
+    pub fn http_state_dir(&self) -> PathBuf {
+        if self.platform == Platform::Asuswrt {
+            self.paths.data_dir.join("nginx")
+        } else {
+            self.nginx.inputs_dir.clone()
+        }
     }
 
     pub fn ensure_directories(&self) -> Result<()> {
